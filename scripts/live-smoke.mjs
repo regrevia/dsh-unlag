@@ -172,6 +172,13 @@ const rehearsalOk = rehearsal.threw === undefined && rehearsal.missing !== undef
 
 const running = { version: stated.version, code: stated.code, shim: stated.shim }
 const verdict = await probe.startupLooksServable()
+// The whole decision a press makes before it swaps anything, run against the running app: the
+// startup list it would re-enter on, the page surfaces a press consults, and the other plugins'
+// own saves. `ready` here means a press now would go ahead; the reload route is still never called.
+const pressGate = await probe.prepareInterface().catch((error) => String(error?.message ?? error))
+const pressPath = pressGate === null
+  ? { ready: true }
+  : { ready: false, held: pressGate === 'blocked' ? `blocked:${probe.startupHoldReason() ?? 'unknown'}` : pressGate }
 console.log(JSON.stringify({
   host: HOST,
   version: running.version,
@@ -180,6 +187,7 @@ console.log(JSON.stringify({
   rows: rows.length,
   verdict,
   holdReason: verdict ? null : probe.startupHoldReason(),
+  pressPath,
   rehearsal: { ok: rehearsalOk, ...rehearsal },
   asked: requests,
   contract: Object.fromEntries(contract.map(([label, got, want]) => [label, `${got}${got === want ? '' : ` (wanted ${want})`}`])),

@@ -59,6 +59,13 @@ const checked =
 console.log(`${checked ? 'PASS' : 'FAIL'}  against a host the smoke prints the route contract and passes (${JSON.stringify(printed?.contract ?? null)} ${live.status})`)
 if (!checked) process.exitCode = 1
 
+// The smoke also runs the decision a press would make before it swaps anything, so a reader learns
+// whether the button would go ahead right now instead of only whether the app answers.
+const pressPath = printed?.pressPath ?? null
+const pressPathRight = pressPath?.ready === false && pressPath?.held === 'blocked:list'
+console.log(`${pressPathRight ? 'PASS' : 'FAIL'}  the smoke prints what a press would decide (${JSON.stringify(pressPath)})`)
+if (!pressPathRight) process.exitCode = 1
+
 // The README tells a reader to run this script, so the published package has to contain it: a
 // files list that forgot it is a broken instruction the repo tests would not otherwise notice.
 const { readFileSync } = await import('node:fs')
