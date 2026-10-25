@@ -34,7 +34,7 @@ function show(tree) {
   return pill === undefined ? null : String(Array.isArray(pill.children) ? pill.children.join('') : pill.children)
 }
 
-function harness({ settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, href } = {}) {
+function harness({ settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, href } = {}) {
   const requests = []
   const navigations = []
   const current = { rev: graph.rev, code: 'c1' }
@@ -75,7 +75,10 @@ function harness({ settings = { plugins: true, page: true }, reload = { status: 
     return new Response(body, { status: 200, headers: { 'content-type': 'text/javascript' } })
   }
   const document = {
-    activeElement: null,
+    get activeElement() {
+      if (activeThrows) throw new Error('the focused field cannot be read')
+      return null
+    },
     querySelector: () => {
       if (brokenSelector) throw new Error('selector blew up')
       return openWindow ? {} : null
@@ -90,6 +93,9 @@ function harness({ settings = { plugins: true, page: true }, reload = { status: 
     sessionStorage: { getItem: (key) => (store.has(key) ? store.get(key) : stamp), setItem: (key, value) => store.set(key, value), removeItem: (key) => store.delete(key) },
     location,
     dispatchEvent: (event) => {
+      // A page whose event hub is broken throws where a listener would have run. That must hold the
+      // rebuild with the page named as the reason, not end the press with no notice on screen.
+      if (dispatchThrows) throw new Error('event hub blew up')
       listeners.push(event.type)
       /**
        * The browser runs `window.onbeforeunload` for a dispatched beforeunload and, when it returns
@@ -390,6 +396,24 @@ check('and the pressed page still rebuilt', swapped.navigations.length === 1, sw
   const heldLog = page.requests.filter((request) => request.path.includes('event=held')).map((request) => request.path)
   check('a failing page check is logged as a hold', heldLog.some((path) => path.includes('screen')), JSON.stringify(heldLog))
   check('a failing page check leaves the button usable', view.button !== null && view.button.props.disabled !== true)
+}
+
+// --- a page whose surfaces throw: the rebuild is held, named, and the button stays usable -------
+// The check that reads the page runs in its own guard, so an event hub or a focus field that throws
+// must come back as one honest hold with the button re-enabled. A press that threw here would leave
+// the button grey with nothing said, which is the complaint this plugin exists to end.
+for (const [label, options] of [
+  ['an event hub that throws', { dispatchThrows: true }],
+  ['a focus field that cannot be read', { activeThrows: true }],
+]) {
+  const page = harness(options)
+  const view = await page.press()
+  check(`${label} does not navigate`, page.navigations.length === 0, String(page.navigations.length))
+  check(`${label} names the page as unreadable`, /page state cannot be read/.test(String(page.notice())), String(page.notice()))
+  const gates = page.requests.filter((request) => request.path.includes('event=held')).map((request) => request.path)
+  check(`${label} is logged as a screen hold`, gates.some((path) => path.includes('screen')), JSON.stringify(gates))
+  check(`${label} leaves the button usable`, view.button !== null && view.button.props.disabled !== true)
+  check(`${label} records no answered press`, page.stamp() === 0, String(page.stamp()))
 }
 
 // --- the list a booting document really gets: one inline queue script, inline global, both kinds ---
