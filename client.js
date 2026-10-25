@@ -118,7 +118,15 @@ window.__ModuleLoader__.load({
      * the time anyone reads it.
      */
     function report(event, gate, attempt = 0) {
-      const page = String(window?.__DSH_BOOT__?.rev ?? '').replace(/[^a-z0-9]/gu, '').slice(0, 24);
+      // The page description is the app's value, not this plugin's: a boot object whose revision
+      // cannot be read must not stop a press from being written down, and this call is the one
+      // place a press is recorded at all.
+      let page = '';
+      try {
+        page = String(window?.__DSH_BOOT__?.rev ?? '').replace(/[^a-z0-9]/gu, '').slice(0, 24);
+      } catch {
+        page = '';
+      }
       const named = gate === undefined ? `event=${event}` : `event=${event}&gate=${encodeURIComponent(gate)}`;
       const query = page === '' ? named : `${named}&rev=${page}`;
       /**

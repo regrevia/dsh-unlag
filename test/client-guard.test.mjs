@@ -20,7 +20,7 @@ const gone = () => new Response('', { status: 404 })
 const asPath = (url) => String(url).replace(/^https?:\/\/[^/]+/u, '')
 const registered = (id) => `window.__ModuleLoader__.load({ id: "${id}", factory() {} })`
 
-function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge, frozen, live, scripts = {}, probe = true, prepare, verifyAnswer, verifyReply, shimWrapped, dom, noCustomEvent } = {}) {
+function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge, boot, frozen, live, scripts = {}, probe = true, prepare, verifyAnswer, verifyReply, shimWrapped, dom, noCustomEvent } = {}) {
   let registration
   const navigations = []
   const requests = []
@@ -59,7 +59,7 @@ function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge
   const window = {
     __ModuleLoader__: { load: (value) => { registration = value } },
     __DSH_UNLAG_PROBE__: probe,
-    __DSH_BOOT__: frozen,
+    __DSH_BOOT__: boot ?? frozen,
     dshDesktopBoot: bridge,
     sessionStorage: { getItem: () => '0', setItem() {} },
     location,
@@ -357,6 +357,31 @@ const slowCheck = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, sc
 check('a slow startup check holds the rebuild', (await slowCheck.probe.prepareInterface()) === 'blocked')
 check('the hold is named for what happened', slowCheck.probe.startupHoldReason() === 'slow', String(slowCheck.probe.startupHoldReason()))
 check('and the notice says the list answered too slowly', String(slowCheck.probe.noticeFor('blocked')).includes('too slowly'), String(slowCheck.probe.noticeFor('blocked')))
+
+// Recording a press is the one step every outcome depends on, and the page description it stamps is
+// the app's object, not this plugin's: a boot value whose revision cannot be read must leave the
+// line unstamped, not throw out of the press (or out of the plugin's own start-up).
+{
+  const hostileBoot = Object.defineProperty({ entries: [], batches: [] }, 'rev', { get() { throw new Error('rev') }, enumerable: true })
+  let loaded = null
+  let threw = null
+  try {
+    loaded = harness({ boot: hostileBoot })
+  } catch (error) {
+    threw = error
+  }
+  check('a page whose revision cannot be read still loads', threw === null && loaded !== null, String(threw?.message))
+  const started = []
+  try {
+    loaded?.plugin.apply({ slots: { inject: (target) => started.push(target), register: () => () => {} } })
+  } catch (error) {
+    threw = error
+  }
+  check('and its start-up still runs', threw === null && started.length === 1, String(threw?.message ?? started.length))
+  const reports = loaded === null ? [] : loaded.requests.filter((row) => row.path.startsWith('/dsh-unlag/report'))
+  check('and its start-up is still written down', reports.length >= 1, `${reports.length} reports`)
+  check('the line it writes still names what happened', reports.some((row) => row.path.includes('event=mounted')), reports.map((row) => row.path).join(' | '))
+}
 
 console.log(out.join('\n'))
 if (out.some((line) => line.startsWith('FAIL'))) process.exitCode = 1
