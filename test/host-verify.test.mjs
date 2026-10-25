@@ -170,6 +170,33 @@ check('a list with one unreadably long address refuses the whole list', mixed.st
 const junk = await verifyStartup(table(), [''])
 check('an empty address refuses instead of throwing', junk.status === 'blocked' && junk.reason === 'list', JSON.stringify(junk))
 
+// A response that cannot answer a read is not a response this check can approve: the script it
+// stands for would fail to load in the next document, and the reason has to name it rather than
+// leaving the whole list unexplained.
+{
+  const oneRow = [frozenRow]
+  const row = () => [frozenRow]
+  const table = { rev: 'new', entries: [{ id: '@local/a', url: 'plugins/??@local/a/client.js&rev=new' }], batches: [] }
+  const cases = [
+    ['a status that cannot be read', () => ({ get status() { throw new Error('status') } })],
+    ['a body that cannot be read', () => ({ status: 200, arrayBuffer: async () => { throw new Error('body') } })],
+    ['a body that is not bytes', () => ({ status: 200, arrayBuffer: async () => 42 })],
+    ['a body reader that is missing', () => ({ status: 200 })],
+  ]
+  for (const [label, make] of cases) {
+    let threw = null
+    let verdict = null
+    try {
+      verdict = await verifyStartupRows(table, async () => make(), row())
+    } catch (error) {
+      threw = error
+    }
+    check(`${label} refuses instead of throwing`, threw === null && verdict.status === 'blocked', String(threw?.message ?? JSON.stringify(verdict)))
+    check(`${label} names the script it could not read`, verdict?.reason === 'missing' && String(verdict?.detail ?? '').includes('@local/a'), String(verdict?.detail))
+  }
+  void oneRow
+}
+
 const failed = checks.filter((row) => !row.pass)
 console.log(`\n${checks.length - failed.length}/${checks.length} passed`)
 if (failed.length > 0) process.exitCode = 1

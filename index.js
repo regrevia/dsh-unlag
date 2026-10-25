@@ -1668,10 +1668,25 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
     } catch (error) {
       return { status: 'blocked', reason: 'network', detail: `${item.url}: ${String(error?.message ?? error)}` }
     }
-    if (response === null || response === undefined || response.status !== 200) {
-      return { status: 'blocked', reason: 'missing', detail: `${item.url} answers ${String(response?.status ?? 'nothing')}` }
+    // Reading the answer is the same kind of step as fetching it: a response whose status or body
+    // cannot be read is one this check cannot approve, and saying which script failed beats
+    // abandoning the whole list without a name in the reason.
+    let status = null
+    let readable = true
+    try {
+      status = response?.status ?? null
+    } catch {
+      readable = false
     }
-    const bytes = Buffer.from(await response.arrayBuffer())
+    if (!readable || response === null || response === undefined || status !== 200) {
+      return { status: 'blocked', reason: 'missing', detail: `${item.url} answers ${readable ? String(status ?? 'nothing') : 'nothing readable'}` }
+    }
+    let bytes = null
+    try {
+      bytes = Buffer.from(await response.arrayBuffer())
+    } catch (error) {
+      return { status: 'blocked', reason: 'missing', detail: `${item.url} cannot be read: ${String(error?.message ?? error)}` }
+    }
     if (bytes.length === 0) return { status: 'blocked', reason: 'empty', detail: `${item.url} answers an empty body` }
     totalBytes += bytes.length
     if (bytes.length > MAX_SCRIPT_BYTES || totalBytes > MAX_TOTAL_SCRIPT_BYTES) {
