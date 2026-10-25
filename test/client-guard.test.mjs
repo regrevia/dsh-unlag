@@ -20,7 +20,7 @@ const gone = () => new Response('', { status: 404 })
 const asPath = (url) => String(url).replace(/^https?:\/\/[^/]+/u, '')
 const registered = (id) => `window.__ModuleLoader__.load({ id: "${id}", factory() {} })`
 
-function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge, frozen, live, scripts = {}, probe = true, prepare, verifyAnswer, shimWrapped } = {}) {
+function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge, frozen, live, scripts = {}, probe = true, prepare, verifyAnswer, verifyReply, shimWrapped } = {}) {
   let registration
   const navigations = []
   const requests = []
@@ -33,6 +33,11 @@ function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge
     }
     if (path.startsWith('/dsh-unlag/state') && shimWrapped !== undefined) {
       return new Response(JSON.stringify({ version: 'test', code: 'test', plugins: true, page: true, shim: { wrapped: shimWrapped } }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    // A page shares one fetch with every plugin, so the answer to a check is data this page did not
+    // make: it may be missing, or refuse to say whether it is ok at all.
+    if (path.startsWith('/dsh-unlag/verify') && verifyReply !== undefined) {
+      return verifyReply()
     }
     if (path.startsWith('/dsh-unlag/verify') && verifyAnswer !== undefined) {
       return new Response(JSON.stringify(verifyAnswer), { status: 200, headers: { 'content-type': 'application/json' } })
@@ -135,6 +140,25 @@ const switchedOff = harness({
 })
 check('a plugin switched off does not hold the rebuild when the host stands in for it', (await switchedOff.probe.startupLooksServable()) === true, String(switchedOff.probe.startupHoldReason()))
 check('and the press asks the host check rather than deciding alone', switchedOff.requests.some((r) => r.path === '/dsh-unlag/verify'))
+
+// The check's answer is read outside the try that guards the request itself; an answer that cannot
+// even say whether it is ok must hold the rebuild, not reject the press.
+for (const [label, reply] of [
+  ['a check that answers nothing', () => undefined],
+  ['a check whose answer cannot be read', () => ({ get ok() { throw new Error('ok') } })],
+]) {
+  const answerless = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok(body) }, verifyReply: reply })
+  let threw = null
+  let servable = null
+  try {
+    servable = await answerless.probe.startupLooksServable()
+  } catch (error) {
+    threw = error
+  }
+  check(`${label} holds the rebuild instead of rejecting the press`, threw === null && servable === false, String(threw?.message ?? servable))
+  check(`${label} names the check as the reason`, answerless.probe.startupHoldReason() === 'verify', String(answerless.probe.startupHoldReason()))
+  check(`${label} does not navigate`, answerless.navigations.length === 0)
+}
 
 const noStandIn = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live: { rev: 'new', entries: [], batches: [] }, shimWrapped: false })
 check('without a stand-in the switched-off plugin still holds the rebuild', (await noStandIn.probe.startupLooksServable()) === false)

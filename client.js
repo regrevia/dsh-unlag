@@ -219,7 +219,15 @@ window.__ModuleLoader__.load({
         held('verify');
         return 'blocked';
       }
-      if (!response.ok) {
+      // The answer is read outside the try above, and a page shares one `fetch` with every plugin:
+      // an answer that cannot say whether it is ok is treated as no answer, never as a throw.
+      let served = false;
+      try {
+        served = response?.ok === true;
+      } catch {
+        served = false;
+      }
+      if (served === false) {
         held('verify');
         return 'blocked';
       }
