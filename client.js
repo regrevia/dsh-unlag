@@ -6,8 +6,8 @@ window.__ModuleLoader__.load({
 
     const zh = /^zh/i.test(navigator.language || '');
     const COPY = zh
-      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '已排队：任务跑完自动重载' } // ui-copy-ignore
-      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Queued; it reloads once the turn ends' };
+      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '已排队：任务跑完自动重载', failed: '插件更新没完成，稍后再按一次' } // ui-copy-ignore
+      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Queued; it reloads once the turn ends', failed: 'The plugin update did not finish; press again later' };
 
     // Desktop shell only: the macOS and Windows desktop build owns the page and the running
     // app, so this is where the button belongs. A browser tab can reload freely on its own.
@@ -71,10 +71,25 @@ window.__ModuleLoader__.load({
         });
         if (!response.ok) return 'failed';
         const data = await response.json();
-        return typeof data?.status === 'string' ? data.status : 'failed';
+        return reloadVerdict(data);
       } catch {
         return 'failed';
       }
+    }
+
+    /**
+     * What the app's answer to a plugin replacement really means for the rebuild that follows.
+     * Only a set the app has finished starting can be rebuilt against: one still starting would
+     * boot a document over plugins that are not ready, and one the app says cannot be applied to a
+     * running page would boot the old code behind a fresh interface.
+     * @returns 'done' | 'off' | 'queued' | 'unavailable' | 'failed'
+     */
+    function reloadVerdict(data) {
+      if (data === null || typeof data !== 'object') return 'failed';
+      const status = typeof data.status === 'string' ? data.status : 'failed';
+      if (Array.isArray(data.pending) && data.pending.length > 0) return 'queued';
+      if (typeof data.restartReason === 'string' && data.restartReason !== '') return 'failed';
+      return status;
     }
 
     /** The plugin ids one startup bundle covers, read from its `??<id>/client.js,…` list. */
@@ -151,6 +166,12 @@ window.__ModuleLoader__.load({
      * after that, so this is the only way to see what a rebuild would really boot from.
      * @returns the list rows, or null when this page is not running inside the desktop shell.
      */
+    /** Whether this document is owned by the desktop shell, whose saved list decides a boot. */
+    function desktopShellPresent() {
+      const bridge = window.dshDesktopBoot;
+      return bridge !== undefined && bridge !== null && typeof bridge.ready === 'function';
+    }
+
     async function desktopStartupPayload() {
       const bridge = window.dshDesktopBoot;
       if (bridge === undefined || bridge === null || typeof bridge.ready !== 'function') return null;
@@ -301,6 +322,9 @@ window.__ModuleLoader__.load({
     async function startupLooksServable() {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const saved = await desktopStartupPayload();
+        // The desktop shell replays one startup list for every document. If it is running but its
+        // copy cannot be read, nothing here proves a new document would boot, so the page stays.
+        if (saved === null && desktopShellPresent()) return false;
         const servable =
           saved === null
             ? await bundlesCoverStartup((await servedBootGraph()) ?? window.__DSH_BOOT__)
@@ -322,10 +346,15 @@ window.__ModuleLoader__.load({
       if (event.defaultPrevented) return false;
       const pending = Array.isArray(detail.pending) ? detail.pending.filter((item) => item !== null && typeof item?.then === 'function') : [];
       if (pending.length === 0) return true;
-      await Promise.race([
+      const slow = Symbol('slow'); // ui-copy-ignore
+      const settled = await Promise.race([
         Promise.allSettled(pending),
-        new Promise((resolve) => setTimeout(resolve, 1200)), // ui-copy-ignore
+        new Promise((resolve) => setTimeout(() => resolve(slow), 1200)), // ui-copy-ignore
       ]);
+      // A save that never settled in time is as uncommitted as one that rejected: the rebuild
+      // would drop the work it still holds, so the page stays.
+      if (settled === slow) return false;
+      if (settled.some((entry) => entry.status === 'rejected')) return false;
       return event.defaultPrevented === false;
     }
 
@@ -446,15 +475,18 @@ window.__ModuleLoader__.load({
           return;
         }
         // Replace first: a plugin that only changed the interface is then covered by the rebuild.
-        let pluginNote = null;
+        // A replacement that did not finish stops the press here: rebuilding the page anyway would
+        // start a document against a plugin set the app has not finished applying.
         if (replace) {
           const status = await replacePlugins();
-          if (status === 'queued') pluginNote = 'queued';
-          else if (status !== 'done' && status !== 'off') pluginNote = 'blocked';
+          if (status !== 'done' && status !== 'off') {
+            const key = status === 'queued' ? 'queued' : status === 'unavailable' ? 'blocked' : 'failed';
+            report('plugin-held', key);
+            return stop(key);
+          }
         }
         if (!rebuild) {
           setPending(false);
-          if (pluginNote !== null) setNotice(COPY[pluginNote]);
           return;
         }
         window.sessionStorage.setItem(STAMP_KEY, String(Date.now()));
@@ -498,7 +530,15 @@ window.__ModuleLoader__.load({
      * must never cause is a navigation the saved startup list cannot survive, and that question is
      * worth asking without starting a desktop app.
      */
-    const PROBE = { prepareInterface, startupLooksServable, frozenStartupLooksServable, desktopStartupPayload, reloadFreshPage };
+    const PROBE = {
+      prepareInterface,
+      startupLooksServable,
+      frozenStartupLooksServable,
+      desktopStartupPayload,
+      desktopShellPresent,
+      reloadVerdict,
+      reloadFreshPage,
+    };
 
     return {
       inject: ['slots'], // ui-copy-ignore

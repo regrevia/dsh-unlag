@@ -6,6 +6,14 @@ import { Config, apply, name, inject } from '../index.js'
 // Keep the live log readable: this run writes its own.
 process.env.DSH_UNLAG_LOG = join(tmpdir(), 'dsh-unlag-test.log')
 
+const verdict = (body) => {
+  try {
+    return JSON.parse(body).status
+  } catch {
+    return 'unparseable'
+  }
+}
+
 const out = []
 const check = (label, ok, extra = '') => {
   out.push(`${ok ? 'PASS' : 'FAIL'}  ${label}${extra === '' ? '' : `  (${extra})`}`)
@@ -109,7 +117,7 @@ check('reload rejects a cross-site post', noHeader.status === 403)
 
 const ok = fakeRes()
 await both.routes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, ok)
-check('reload runs and reports done', ok.body === '{"status":"done"}', ok.body)
+check('reload runs and reports done', verdict(ok.body) === 'done', ok.body)
 check('the hmr service really ran', both.handlers.reloads === 1, String(both.handlers.reloads))
 
 // --- the startup list the next document gets --------------------------------------------------
@@ -173,7 +181,7 @@ const busyMount = (() => {
 })()
 const busyRes = fakeRes()
 await busyMount.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, busyRes)
-check('a running turn does not hold the press back', busyRes.body === '{"status":"done"}' && busyRan === 1, `ran=${busyRan}`)
+check('a running turn does not hold the press back', verdict(busyRes.body) === 'done' && busyRan === 1, `ran=${busyRan}`)
 
 // A machine whose turns never all go idle still gets the reload once the grace is spent.
 let graceRan = 0
@@ -201,7 +209,7 @@ const graceRoutes = (() => {
 const graceRes = fakeRes()
 await graceRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, graceRes)
 await new Promise((resolve) => setTimeout(resolve, 2500))
-check('opt-in quiet mode still reloads after the grace', graceRes.body === '{"status":"queued"}' && graceRan === 1, `ran=${graceRan}`)
+check('opt-in quiet mode still reloads after the grace', verdict(graceRes.body) === 'queued' && graceRan === 1, `ran=${graceRan}`)
 
 
 // A swap that collides with another transaction is retried, not reported as a failure.
@@ -232,7 +240,36 @@ const nestedRoutes = (() => {
 })()
 const nestedRes = fakeRes()
 await nestedRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, nestedRes)
-check('a stale transaction refusal still reloads', nestedRes.body === '{"status":"done"}' && nestedTries === 2, `tries=${nestedTries}`)
+check('a stale transaction refusal still reloads', verdict(nestedRes.body) === 'done' && nestedTries === 2, `tries=${nestedTries}`)
+// --- an update the app did not finish applying ------------------------------------------------
+// The press must not rebuild the page over a plugin set the app has not finished starting: the
+// fresh document would boot plugins that are not ready, and the app ends the document over it.
+const outcomeRoutes = (result) => {
+  const routes = new Map()
+  const ctx = {
+    get: (key) => {
+      if (key === 'webServer') return { register: (r) => (routes.set(r.path, r.handler), () => routes.delete(r.path)) }
+      if (key === 'hmr') return { baseDir: '/tmp/x', runExclusive: async (op) => op(), reconcileProfile: async () => result }
+      return undefined
+    },
+    on: () => {},
+  }
+  apply(ctx, {})
+  return routes
+}
+
+const unfinished = fakeRes()
+const unfinishedRoutes = outcomeRoutes({ pending: ['@local/a'] })
+await unfinishedRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, unfinished)
+const unfinishedBody = JSON.parse(unfinished.body)
+check('an update still starting is not reported done', unfinishedBody.status === 'failed', unfinished.body)
+check('an update still starting names what is pending', Array.isArray(unfinishedBody.pending) && unfinishedBody.pending.length === 1, unfinished.body)
+
+const needsRestart = fakeRes()
+const restartRoutes = outcomeRoutes({ restartReason: 'native' })
+await restartRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, needsRestart)
+check('an update the page cannot take is not reported done', JSON.parse(needsRestart.body).status === 'failed', needsRestart.body)
+
 // --- hostile surroundings --------------------------------------------------------------------
 let survived = true
 try {

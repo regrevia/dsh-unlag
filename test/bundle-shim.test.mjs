@@ -53,15 +53,20 @@ function fakeRes() {
 }
 
 /** Mount the plugin over a stand-in module table and hand back the wrapped route. */
-function mount({ graph = CURRENT, serve = (path) => bodies.get(path), late = false } = {}) {
+function mount({ graph = CURRENT, serve = (path) => bodies.get(path), late = false, shape = 'handler' } = {}) {
   const original = (req, res) => {
     res.writeHead(404, { 'content-type': 'text/plain' })
     res.end('original')
   }
-  const route = { kind: 'prefix', path: '/plugins', handler: original }
+  // A newer app registers this route as a request-in/response-out resource instead of a handler.
+  const route =
+    shape === 'resource'
+      ? { kind: 'prefix', path: '/plugins', resource: async () => new Response('original', { status: 404 }) }
+      : { kind: 'prefix', path: '/plugins', handler: original }
   const prefixes = new Map(late ? [] : [['/plugins', route]])
   const routes = new Map()
   const handled = []
+  const seen = []
   const ctx = {
     get: (key) =>
       key === 'webServer'
@@ -76,7 +81,9 @@ function mount({ graph = CURRENT, serve = (path) => bodies.get(path), late = fal
         : key === 'clientModules'
           ? {
               graph: () => graph,
-              fetchBundle: async ({ method, url }) => {
+              fetchBundle: async (asked) => {
+                seen.push(asked)
+                const { method, url } = asked
                 const path = asPath(url)
                 const body = serve(path, method)
                 if (body === undefined) return new Response('', { status: 404 })
@@ -90,7 +97,7 @@ function mount({ graph = CURRENT, serve = (path) => bodies.get(path), late = fal
     },
   }
   apply(ctx, {})
-  return { route, original, ctx, handled, prefixes, routes }
+  return { route, original, ctx, handled, seen, prefixes, routes }
 }
 
 const call = (handler, req) => {
@@ -170,6 +177,29 @@ await call(replaced.routes.get('/dsh-unlag/graph'), { method: 'GET', url: '/dsh-
 check('a route replaced since the wrap is wrapped again', replaced.route.handler !== foreign)
 const replacedStale = await call(replaced.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js&rev=old' })
 check('the wrapped route answers a stale entry again', replacedStale.status === 200 && replacedStale.body === '/* one entry */ @local/a', `${replacedStale.status} ${replacedStale.body}`)
+
+// --- a route registered as a resource, not a handler (newer app) ------------------------------
+// Dispatch prefers the resource branch, so wrapping the handler of a route that has one would
+// leave the guard installed but never asked: every stale script would still 404.
+const resourceOnly = mount({ shape: 'resource' })
+check('a resource-shaped route is wrapped too', typeof resourceOnly.route.resource === 'function' && resourceOnly.route.handler === undefined)
+check('a resource-shaped route gets no handler added', 'handler' in resourceOnly.route === false)
+const resourceStale = await resourceOnly.route.resource(
+  new Request('http://127.0.0.1:58672/plugins/??@local/a/client.js,@local/b/client.js&rev=old'),
+)
+check(
+  'a resource-shaped route answers a stale batch',
+  resourceStale.status === 200 && (await resourceStale.text()).includes('@local/b'),
+  String(resourceStale.status),
+)
+const resourceCurrent = await resourceOnly.route.resource(new Request('http://127.0.0.1:58672/plugins/index.js'))
+check('an unplaceable resource request goes back to the table', (await resourceCurrent.text()) === 'original')
+check('the table is asked with a standard request object', resourceOnly.seen[0] instanceof Request, String(resourceOnly.seen[0]?.constructor?.name))
+
+const shapeRes = fakeRes()
+resourceOnly.routes.get('/dsh-unlag/state')({ method: 'GET', url: '/dsh-unlag/state' }, shapeRes)
+const shapeBody = JSON.parse(shapeRes.body)
+check('the state names the route shape in use', shapeBody.shim?.kind === 'resource' && shapeBody.shim?.wrapped === true, shapeRes.body)
 
 // --- the log tells a reader what happened -----------------------------------------------------
 const log = readFileSync(process.env.DSH_UNLAG_LOG, 'utf8')

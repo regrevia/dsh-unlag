@@ -162,19 +162,6 @@ function pluginReloader(ctx, config) {
   let deferrals = 0
   let lastRun = 0
 
-  /** Resolve true when the HMR queue is empty, i.e. no transaction is really running right now. */
-  const queueIsIdle = async (hmr) => {
-    const queue = hmr?.operations
-    if (typeof queue?.then !== 'function') return true
-    let settled = false
-    Promise.resolve(queue).then(
-      () => (settled = true),
-      () => (settled = true),
-    )
-    await new Promise((resolve) => setTimeout(resolve, 40))
-    return settled
-  }
-
   const turnsRunning = () => {
     try {
       const agents = ctx.get('agents')
@@ -187,9 +174,12 @@ function pluginReloader(ctx, config) {
   const busy = () => idleOnly && turnsRunning()
 
   /**
-   * Ask the HMR service to recompose; it throws rather than half-applying, so a catch is enough.
-   * Another reload may already hold the transaction (a save landing next to a session's own swap),
-   * so a nested refusal is retried instead of being reported as a reload that failed.
+   * Ask the HMR service to recompose through its own queue. The service throws instead of
+   * half-applying, so a catch is enough. Another reload may already hold the transaction (a save
+   * landing next to a session's own swap), so a nested refusal waits and asks again through the
+   * same queue. It never recomposes outside the queue: two recompositions at once can leave half
+   * the plugin set stopped, and a document started in that state does not boot.
+   * @returns what the service reported, so the caller can tell done from partly done.
    */
   const reload = async (hmr) => {
     let result = null
@@ -200,22 +190,17 @@ function pluginReloader(ctx, config) {
       } catch (error) {
         const message = String(error?.message ?? error)
         if (message.includes('nested') === false) throw error
-        if (await queueIsIdle(hmr)) {
-          // The refusal came from a finished transaction whose context this callback inherited
-          // (a watcher created while a reload was restarting this plugin). With the queue empty
-          // there is nothing to serialize against, so recompose directly.
-          log('reload ran outside the queue: the caller inherited a finished transaction')
-          result = await hmr.reconcileProfile([])
-          break
-        }
         if (attempt >= 9) throw error
         await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)))
       }
     }
-    const warnings = Array.isArray(result?.warnings) ? result.warnings.length : 0
-    const pending = Array.isArray(result?.pending) ? result.pending.length : 0
-    const suffix = typeof result?.restartReason === 'string' ? ` restart=${result.restartReason}` : ''
-    log(`plugins reloaded (warnings=${warnings} pending=${pending}${suffix})`)
+    const warnings = Array.isArray(result?.warnings) ? result.warnings : []
+    const pending = Array.isArray(result?.pending) ? result.pending : []
+    const restartReason = typeof result?.restartReason === 'string' ? result.restartReason : null
+    log(
+      `plugins reloaded (warnings=${warnings.length} pending=${pending.length}${restartReason === null ? '' : ` restart=${restartReason}`})`,
+    )
+    return { status: 'done', warnings, pending, restartReason }
   }
 
   const flush = async () => {
@@ -247,7 +232,7 @@ function pluginReloader(ctx, config) {
       running = true
       await reload(hmr)
     } catch (error) {
-      log(`reload failed, the previous code keeps running: ${error?.message ?? error}`)
+      log(`reload did not finish; the plugin set may be partly applied: ${error?.message ?? error}`)
     } finally {
       running = false
       if (again) {
@@ -293,19 +278,27 @@ function pluginReloader(ctx, config) {
     return 'queued'
   }
 
+  /** The answer shape a press always gets, whether or not a reload was started. */
+  const queuedAnswer = (answer) => ({
+    status: answer === 'unavailable' ? 'unavailable' : 'queued',
+    warnings: [],
+    pending: [],
+    restartReason: null,
+  })
+
   /**
    * The button path: run now and report what happened, so the page can tell the user why the
    * press did not replace anything instead of looking broken.
-   * @returns 'done' | 'queued' | 'unavailable' | 'failed'
+   * @returns {{status: string, warnings: string[], pending: string[], restartReason: string|null}}
    */
   const reloadNow = async (force = false) => {
     const hmr = hmrService()
-    if (hmr === null) return 'unavailable'
+    if (hmr === null) return { status: 'unavailable', warnings: [], pending: [], restartReason: null }
     if (turnsRunning()) log('reloading while turns are still running; they keep running')
-    if (running || (force === false && busy())) return queueReload()
+    if (running || (force === false && busy())) return queuedAnswer(queueReload())
     const wait = lastRun + MIN_INTERVAL_MS - Date.now()
     if (wait > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(wait, 2000)))
-    if (running || (force === false && busy())) return queueReload()
+    if (running || (force === false && busy())) return queuedAnswer(queueReload())
     if (timer !== null) {
       clearTimeout(timer)
       timer = null
@@ -314,11 +307,16 @@ function pluginReloader(ctx, config) {
     deferrals = 0
     lastRun = Date.now()
     try {
-      await reload(hmr)
-      return 'done'
+      const outcome = await reload(hmr)
+      if (outcome.pending.length > 0 || outcome.restartReason !== null) {
+        // The app accepted the update but has not finished starting the new plugin set. Rebuilding
+        // the page now would start a document against a set that is still settling.
+        return { status: 'failed', warnings: outcome.warnings, pending: outcome.pending, restartReason: outcome.restartReason }
+      }
+      return outcome
     } catch (error) {
-      log(`reload failed, the previous code keeps running: ${error?.message ?? error}`)
-      return 'failed'
+      log(`reload did not finish; the plugin set may be partly applied: ${error?.message ?? error}`)
+      return { status: 'failed', warnings: [], pending: [], restartReason: null }
     } finally {
       running = false
       again = false
@@ -459,48 +457,98 @@ function currentBundleUrls(graph, request) {
 }
 
 /**
- * Answer one request the running app cannot serve because the revision it names is gone. The
- * bundle module table is asked for the same set at its current revision, and only a body that
- * really contains every plugin it claims is handed back; anything else falls through to the
- * route as before, so an unknown id still ends as a plain 404.
+ * Ask the module table for one bundle at one URL. The newest app takes a standard request object;
+ * older ones take the method and address on their own, so both shapes are offered instead of one
+ * silently failing on the other.
  */
+async function fetchBundleAt(clientModules, url, method) {
+  const address = `http://unlag.invalid${url}`
+  if (typeof Request === 'function') {
+    try {
+      return await clientModules.fetchBundle(new Request(address, { method, headers: {} }))
+    } catch (error) {
+      if (error?.name !== 'TypeError') throw error
+    }
+  }
+  return clientModules.fetchBundle({ method, url: address })
+}
+
+/**
+ * The plugin set one stale request names, answered at the revision the app serves now. Only a body
+ * that really contains every plugin it claims is handed back; anything unsure answers null, so the
+ * route then behaves exactly as before and an unknown id still ends as a plain 404.
+ */
+async function currentBundleAnswer(clientModules, method, url) {
+  const request = bundleRequest(url)
+  if (request === null) return null
+  const urls = currentBundleUrls(clientModules.graph(), request)
+  if (urls.length === 0) return null
+  if (request.rev !== '' && urls.some((target) => target.endsWith(`&rev=${request.rev}`))) return null
+  for (const target of urls) {
+    const response = await fetchBundleAt(clientModules, target, 'GET')
+    if (response.status !== 200) continue
+    const body = Buffer.from(await response.arrayBuffer())
+    if (body.length === 0) continue
+    if (!request.sourceMap && !request.ids.every((id) => body.includes(id))) continue
+    return {
+      body,
+      contentType: String(response.headers.get('content-type') ?? 'text/javascript; charset=utf-8'),
+      ids: request.ids,
+    }
+  }
+  return null
+}
+
+/** Answer one stale request over the plain request/response route an app registers. */
 async function serveCurrentBundle(clientModules, req, res) {
   try {
     const method = String(req?.method ?? 'GET').toUpperCase()
     if (method !== 'GET' && method !== 'HEAD') return false
-    const request = bundleRequest(req?.url)
-    if (request === null) return false
-    const urls = currentBundleUrls(clientModules.graph(), request)
-    if (urls.length === 0) return false
-    if (request.rev !== '' && urls.some((url) => url.endsWith(`&rev=${request.rev}`))) return false
-    for (const url of urls) {
-      const response = await clientModules.fetchBundle({ method: 'GET', url: `http://unlag.invalid${url}` })
-      if (response.status !== 200) continue
-      const body = Buffer.from(await response.arrayBuffer())
-      if (body.length === 0) continue
-      if (!request.sourceMap && !request.ids.every((id) => body.includes(id))) continue
-      if (res.writableEnded === true || res.destroyed === true) return true
-      res.writeHead(200, {
-        'content-type': String(response.headers.get('content-type') ?? 'text/javascript; charset=utf-8'),
-        'cache-control': 'no-store',
-        'content-length': String(body.length),
-      })
-      res.end(method === 'HEAD' ? undefined : body)
-      log(`served ${request.ids.join(', ')} at the current revision: a page asked for an older one`)
-      return true
-    }
-    return false
+    const answer = await currentBundleAnswer(clientModules, method, req?.url)
+    if (answer === null) return false
+    if (res.writableEnded === true || res.destroyed === true) return true
+    res.writeHead(200, {
+      'content-type': answer.contentType,
+      'cache-control': 'no-store',
+      'content-length': String(answer.body.length),
+    })
+    res.end(method === 'HEAD' ? undefined : answer.body)
+    log(`served ${answer.ids.join(', ')} at the current revision: a page asked for an older one`)
+    return true
   } catch (error) {
     log(`cannot serve a bundle from an older revision: ${error?.message ?? error}`)
     return false
   }
 }
 
+/** The same answer over the request-in/response-out route a newer app registers. */
+async function serveCurrentBundleResource(clientModules, request) {
+  try {
+    const method = String(request?.method ?? 'GET').toUpperCase()
+    if (method !== 'GET' && method !== 'HEAD') return null
+    const answer = await currentBundleAnswer(clientModules, method, request?.url)
+    if (answer === null) return null
+    log(`served ${answer.ids.join(', ')} at the current revision: a page asked for an older one`)
+    return new Response(method === 'HEAD' ? null : answer.body, {
+      status: 200,
+      headers: {
+        'content-type': answer.contentType,
+        'cache-control': 'no-store',
+        'content-length': String(answer.body.length),
+      },
+    })
+  } catch (error) {
+    log(`cannot serve a bundle from an older revision: ${error?.message ?? error}`)
+    return null
+  }
+}
+
 /**
  * Wrap the bundle route so a document booting from an older startup list still runs. The route
- * belongs to the module table, and a second registration of the same prefix is refused, so the
- * handler already there is wrapped in place and put back on dispose. Every path through the
- * wrapper falls back to that handler: a bundle it cannot place is answered exactly as before.
+ * belongs to the module table, and a second registration of the same prefix is refused, so what is
+ * already there is wrapped in place and put back on dispose. A newer app registers the route as a
+ * request-in/response-out resource instead of a handler, and the dispatch prefers that one, so the
+ * shape the app actually registers is the shape wrapped — otherwise the guard would be a no-op.
  */
 function serveBundlesAtCurrentRevision(ctx) {
   const server = ctx.get('webServer')
@@ -508,8 +556,24 @@ function serveBundlesAtCurrentRevision(ctx) {
   if (server?.prefixes?.get === undefined) return null
   if (typeof clientModules?.fetchBundle !== 'function' || typeof clientModules?.graph !== 'function') return null
   const route = server.prefixes.get(BUNDLE_ROUTE)
-  if (route === null || route === undefined || typeof route.handler !== 'function') return null
-  if (route[SHIM_MARK] === true) return null
+  if (route === null || route === undefined || route[SHIM_MARK] === true) return null
+  if (typeof route.resource === 'function') {
+    const original = route.resource
+    const wrapped = async (request) => {
+      try {
+        const served = await serveCurrentBundleResource(clientModules, request)
+        if (served !== null) return served
+      } catch (error) {
+        log(`cannot answer a bundle request: ${error?.message ?? error}`)
+      }
+      return original(request)
+    }
+    route[SHIM_MARK] = true
+    route.resource = wrapped
+    log('bundles asked for under an older revision are answered at the current one')
+    return { route, slot: 'resource', original, wrapped }
+  }
+  if (typeof route.handler !== 'function') return null
   const original = route.handler
   const wrapped = (req, res) => {
     const fallback = () => original(req, res)
@@ -523,14 +587,16 @@ function serveBundlesAtCurrentRevision(ctx) {
   route[SHIM_MARK] = true
   route.handler = wrapped
   log('bundles asked for under an older revision are answered at the current one')
-  return { route, original, wrapped }
+  return { route, slot: 'handler', original, wrapped }
 }
 
 /** Put the bundle route back the way it was found; a route replaced since then is left alone. */
 function releaseBundleShim(shim) {
   try {
     if (shim === null || shim === undefined) return
-    if (shim.route.handler === shim.wrapped) shim.route.handler = shim.original
+    if (shim.slot === 'resource') {
+      if (shim.route.resource === shim.wrapped) shim.route.resource = shim.original
+    } else if (shim.route.handler === shim.wrapped) shim.route.handler = shim.original
     if (shim.route[SHIM_MARK] === true) delete shim.route[SHIM_MARK]
   } catch {}
 }
@@ -544,7 +610,7 @@ function ensureBundleShim(ctx) {
   const shim = globalThis[SHIM_KEY]
   if (shim !== null && shim !== undefined) {
     const route = ctx.get('webServer')?.prefixes?.get?.(BUNDLE_ROUTE)
-    if (route === shim.route && route.handler === shim.wrapped && route[SHIM_MARK] === true) return shim
+    if (route === shim.route && route[shim.slot] === shim.wrapped && route[SHIM_MARK] === true) return shim
     releaseBundleShim(shim)
     globalThis[SHIM_KEY] = null
   }
@@ -556,10 +622,12 @@ function ensureBundleShim(ctx) {
 function bundleShimStatus(ctx) {
   const route = ctx.get('webServer')?.prefixes?.get?.(BUNDLE_ROUTE)
   const clientModules = ctx.get('clientModules')
+  const shape =
+    typeof route?.resource === 'function' ? 'resource' : typeof route?.handler === 'function' ? 'handler' : 'none'
   return {
     route: route !== null && route !== undefined,
-    handler: typeof route?.handler === 'function',
-    wrapped: route?.[SHIM_MARK] === true,
+    kind: shape,
+    wrapped: route?.[SHIM_MARK] === true && typeof route?.[shape === 'none' ? 'handler' : shape] === 'function',
     fetch: typeof clientModules?.fetchBundle === 'function',
     graph: typeof clientModules?.graph === 'function',
   }
@@ -618,8 +686,8 @@ function serveButton(ctx, controller, config) {
         const header = req?.headers?.[BUTTON_HEADER]
         if (typeof header !== 'string' || header === '') return sendJson(res, 403, { status: 'forbidden' })
         if (!settings.reloadPlugins) return sendJson(res, 200, { status: 'off' })
-        const status = await controller.reloadNow()
-        sendJson(res, 200, { status })
+        const outcome = await controller.reloadNow()
+        sendJson(res, 200, outcome)
       },
     ],
   ]

@@ -11,7 +11,7 @@ const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
 const ok = (body) => new Response(body, { status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8' } })
 const gone = () => new Response('', { status: 404 })
 
-function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge, frozen, live, scripts = {}, probe = true } = {}) {
+function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge, frozen, live, scripts = {}, probe = true, prepare } = {}) {
   let registration
   const navigations = []
   const requests = []
@@ -34,7 +34,12 @@ function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge
     dshDesktopBoot: bridge,
     sessionStorage: { getItem: () => '0', setItem() {} },
     location,
-    dispatchEvent: () => true,
+    dispatchEvent: (event) => {
+      // The rebuild announcement is the one event this page raises itself; a stand-in can answer
+      // it the way a plugin holding work would.
+      if (event?.type === 'dsh-unlag:before' && prepare !== undefined) return prepare(event)
+      return true
+    },
   }
   const sandbox = {
     window,
@@ -132,6 +137,36 @@ const stamp = harness({ frozen: boot, live })
 stamp.probe.reloadFreshPage()
 check('a rebuild re-enters the same address', stamp.navigations.length === 1 && stamp.navigations[0].startsWith('http://127.0.0.1:62542/'), stamp.navigations[0])
 check('a rebuild asks for a fresh interface', new URL(stamp.navigations[0]).searchParams.get('interface') === 'stale')
+
+// --- the app is there but will not say what the next document boots ---------------------------
+// Reading nothing is not evidence the saved list is fine: the shell replays that list for every
+// document, so a page that cannot see it must not navigate.
+const muteShell = harness({ bridge: { ready: async () => { throw new Error('not ready') } }, frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=new': () => ok('const id = "@local/a"') } })
+check('a shell that cannot hand over its list holds the rebuild', (await muteShell.probe.startupLooksServable()) === false)
+check('a held rebuild does not navigate', muteShell.navigations.length === 0)
+check('a shell that cannot hand over its list reports as blocked', (await muteShell.probe.prepareInterface()) === 'blocked')
+
+// --- work another plugin has not saved yet stops the rebuild ---------------------------------
+const vetoed = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('const id = "@local/a"') }, prepare: (event) => { event.detail.pending = [Promise.resolve(true)]; event.preventDefault(); return false } })
+check('a plugin that refuses the rebuild stops it', (await vetoed.probe.prepareInterface()) === 'unsaved')
+check('a refused rebuild does not navigate', vetoed.navigations.length === 0)
+
+const rejected = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('const id = "@local/a"') }, prepare: (event) => { event.detail.pending = [Promise.reject(new Error('could not save'))]; return true } })
+check('a save that failed stops the rebuild', (await rejected.probe.prepareInterface()) === 'unsaved')
+
+const slowSave = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('const id = "@local/a"') }, prepare: (event) => { event.detail.pending = [new Promise(() => {})]; return true } })
+check('a save that never settles stops the rebuild', (await slowSave.probe.prepareInterface()) === 'unsaved')
+
+const saved = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('const id = "@local/a"') }, prepare: (event) => { event.detail.pending = [Promise.resolve(true)]; return true } })
+check('a save that landed lets the rebuild through', (await saved.probe.prepareInterface()) === null)
+
+// --- what the app's answer to a replacement means for the rebuild that follows ----------------
+const verdict = (value) => saved.probe.reloadVerdict(value)
+check('a finished replacement is an update', verdict({ status: 'done' }) === 'done')
+check('a replacement the app refused is not an update', verdict({ status: 'failed' }) === 'failed')
+check('a replacement still starting is not an update', verdict({ status: 'done', pending: ['@local/a'] }) === 'queued')
+check('a replacement the running page cannot take is not an update', verdict({ status: 'done', restartReason: 'native' }) === 'failed')
+check('no answer at all is not an update', verdict(null) === 'failed')
 
 console.log(out.join('\n'))
 if (out.some((line) => line.startsWith('FAIL'))) process.exitCode = 1
