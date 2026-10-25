@@ -20,7 +20,7 @@ const gone = () => new Response('', { status: 404 })
 const asPath = (url) => String(url).replace(/^https?:\/\/[^/]+/u, '')
 const registered = (id) => `window.__ModuleLoader__.load({ id: "${id}", factory() {} })`
 
-function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge, frozen, live, scripts = {}, probe = true, prepare, verifyAnswer } = {}) {
+function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge, frozen, live, scripts = {}, probe = true, prepare, verifyAnswer, shimWrapped } = {}) {
   let registration
   const navigations = []
   const requests = []
@@ -30,6 +30,9 @@ function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge
     if (path.startsWith('/dsh-unlag/graph')) {
       if (live === undefined || live === null) return gone()
       return new Response(JSON.stringify({ graph: live }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    if (path.startsWith('/dsh-unlag/state') && shimWrapped !== undefined) {
+      return new Response(JSON.stringify({ version: 'test', code: 'test', plugins: true, page: true, shim: { wrapped: shimWrapped } }), { status: 200, headers: { 'content-type': 'application/json' } })
     }
     if (path.startsWith('/dsh-unlag/verify') && verifyAnswer !== undefined) {
       return new Response(JSON.stringify(verifyAnswer), { status: 200, headers: { 'content-type': 'application/json' } })
@@ -120,6 +123,21 @@ check('the guard asks the host half rather than reading bodies itself', served.r
 // A plugin removed since the app started leaves a saved entry with nowhere to load from.
 const removed = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live: { rev: 'new', entries: [], batches: [] }, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok(body) } })
 check('a plugin gone from the running app holds the rebuild', (await removed.probe.startupLooksServable()) === false)
+
+// The host stands in for a row whose plugin is gone; the check below reads that row back the same
+// way, so a switch-off between the app starting and the press does not disable the button.
+const switchedOff = harness({
+  bridge: bridgeOf(rows(boot)),
+  frozen: boot,
+  live: { rev: 'new', entries: [], batches: [] },
+  shimWrapped: true,
+  scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('/* @local/a is not part of the plugin set served now */') },
+})
+check('a plugin switched off does not hold the rebuild when the host stands in for it', (await switchedOff.probe.startupLooksServable()) === true, String(switchedOff.probe.startupHoldReason()))
+check('and the press asks the host check rather than deciding alone', switchedOff.requests.some((r) => r.path === '/dsh-unlag/verify'))
+
+const noStandIn = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live: { rev: 'new', entries: [], batches: [] }, shimWrapped: false })
+check('without a stand-in the switched-off plugin still holds the rebuild', (await noStandIn.probe.startupLooksServable()) === false)
 
 // A saved body that no longer carries the plugin it lists is broken exactly as a 404 is.
 const foreign = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('/* somebody else */') } })

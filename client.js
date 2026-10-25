@@ -360,10 +360,15 @@ window.__ModuleLoader__.load({
         if (live === null) return held('graph');
         const kept = Array.isArray(frozen.entries) ? frozen.entries : [];
         const liveIds = new Set((Array.isArray(live.entries) ? live.entries : []).map((entry) => (typeof entry === 'string' ? entry : entry?.id)));
+        let vanished = false;
         for (const entry of kept) {
           const id = typeof entry === 'string' ? entry : entry?.id;
-          if (typeof id === 'string' && id !== '' && !liveIds.has(id)) return held('plugin');
+          if (typeof id === 'string' && id !== '' && !liveIds.has(id)) vanished = true;
         }
+        // A plugin switched off since this page booted is only fatal if nothing stands in for its
+        // script. Such a row is answered with an empty body and the check below reads it back the
+        // same way, so the press may ask instead of being refused here for good.
+        if (vanished && (await hostShimAnswersGone())) return held('plugin');
       }
       const verdict = await hostVerifyStartup(scripts);
       if (verdict !== 'ok') return false;
@@ -423,6 +428,18 @@ window.__ModuleLoader__.load({
         return graph !== null && typeof graph === 'object' ? graph : null;
       } catch {
         return null;
+      }
+    }
+
+    /** Whether a plugin no longer in the running set still has its script answered. */
+    async function hostShimAnswersGone() {
+      try {
+        const response = await withTimeout(fetch(`${HOST_BASE}/state`, { cache: 'no-store', credentials: 'same-origin' }));
+        if (!response.ok) return true;
+        const data = await withTimeout(response.json());
+        return data?.shim?.wrapped !== true;
+      } catch {
+        return true;
       }
     }
 
