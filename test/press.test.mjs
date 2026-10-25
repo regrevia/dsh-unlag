@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import { harness, graph, rows } from './support/press-harness.mjs'
 
 // A press is the one action this plugin exists for, and it runs in a page that can go away at any
@@ -199,6 +200,32 @@ for (const [label, options] of [
   check(`${label} is logged as a screen hold`, gates.some((path) => path.includes('screen')), JSON.stringify(gates))
   check(`${label} leaves the button usable`, view.button !== null && view.button.props.disabled !== true)
   check(`${label} records no answered press`, page.stamp() === 0, String(page.stamp()))
+}
+
+// --- one bad attempt does not cost the next one -------------------------------------------
+// The complaint this plugin exists to answer is a button that greys out after a failed try. The
+// pacing stamp is written only when the document is about to leave, so a press that failed has to
+// leave the next click answered for real rather than turned away as if the first one had worked.
+{
+  const page = harness({ reload: new Error('the app refused') })
+  const first = await page.press()
+  check('a failed press says the update did not finish', /did not finish|没完成/.test(String(page.notice())), String(page.notice()))
+  check('a failed press leaves the page alone', page.navigations.length === 0, String(page.navigations.length))
+  check('a failed press records no answered press', page.stamp() === 0, String(page.stamp()))
+  check('a failed press leaves the button usable', first.button !== null && first.button.props.disabled !== true)
+  page.setReload({ status: 'done', warnings: [], pending: [], restartReason: null, failedEntries: [] })
+  const before = count(page.requests, '/dsh-unlag/reload')
+  await page.press()
+  check('the press after a failure reaches the app', count(page.requests, '/dsh-unlag/reload') === before + 1, String(count(page.requests, '/dsh-unlag/reload')))
+  check('and it rebuilds the page', page.navigations.length === 1, String(page.navigations.length))
+  check('and only then is the press recorded', page.stamp() > 0, String(page.stamp()))
+}
+
+// The button is never switched off: every state it can be in is words and a press that answers,
+// because a person facing a grey button has no way to find out what the real blocker is.
+{
+  const text = await readFile(new URL('../client.js', import.meta.url), 'utf8')
+  check('the button never carries a disabled state', !/disabled/u.test(text), String(/disabled/u.exec(text)?.index ?? ''))
 }
 
 // --- the same press on a Chinese page: every stopping point has words, not a missing key -------
