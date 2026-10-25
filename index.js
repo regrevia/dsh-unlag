@@ -1849,6 +1849,9 @@ function serveButton(ctx, controller, config) {
           ensureBundleShim(ctx)
           sendJson(res, 200, { graph: liveBootGraph(ctx) })
         } catch (error) {
+          // A press that cannot read the plugin list has to say so somewhere: the page only learns
+          // that the answer was empty, and this line is what explains it afterwards.
+          log(`cannot describe the plugin list: ${error?.message ?? error}`)
           sendJson(res, 500, { status: 'error', detail: String(error?.message ?? error) })
         }
       },
