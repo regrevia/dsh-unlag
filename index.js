@@ -386,6 +386,12 @@ function pluginReloader(ctx, config) {
     log(
       `plugins reloaded (warnings=${warnings.length} pending=${pending.length}${restartReason === null ? '' : ` restart=${restartReason}`})`,
     )
+    /**
+     * The count alone cannot say which plugin is not serving now, and that is what a person sees
+     * afterwards. The app's own sentence is passed on, cut short so one entry cannot fill the log.
+     */
+    for (const entry of failedEntries.slice(0, 5)) log(`a plugin did not come back: ${entry.slice(0, 200)}`)
+    if (failedEntries.length > 5) log(`and ${failedEntries.length - 5} more did not come back`)
     return { status: 'done', warnings, pending, restartReason, failedEntries }
   }
 

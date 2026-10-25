@@ -97,7 +97,7 @@ function mount(config, extra = {}) {
               runExclusive: async (op) => op(),
               reconcileProfile: async () => {
                 handlers.reloads = (handlers.reloads ?? 0) + 1
-                return { warnings: [], pending: [] }
+                return { warnings: (extra.reloadWarnings ?? []).slice(), pending: [] }
               },
             }
           : undefined,
@@ -173,6 +173,14 @@ check('a forged page name cannot put markup in the log', !readFileSync(join(tmpd
 const reportGet = fakeRes()
 liveMount.routes.get('/dsh-unlag/report')({ method: 'GET' }, reportGet)
 check('report rejects GET', reportGet.status === 405)
+
+// --- a sibling plugin that does not come back --------------------------------------------------
+const withWarning = mount({}, { reloadWarnings: ['dsh-sibling (dsh-sibling): failed to import: boom'] })
+const warnRes = fakeRes()
+await withWarning.routes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1', host: '127.0.0.1:62542', origin: 'http://127.0.0.1:62542' } }, warnRes)
+await new Promise((resolve) => setTimeout(resolve, 30))
+check('a plugin that did not come back is named in the log', readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('a plugin did not come back: dsh-sibling (dsh-sibling): failed to import: boom'))
+check('and the press still reports what it did', verdict(warnRes.body) === 'failed' || warnRes.status === 200, warnRes.body)
 
 // --- switches --------------------------------------------------------------------------------
 const onlyPage = mount({ reloadPlugins: false })
