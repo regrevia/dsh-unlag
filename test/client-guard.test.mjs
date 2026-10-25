@@ -408,5 +408,19 @@ check('and the notice says the list answered too slowly', String(slowCheck.probe
   check('and names the list as what stopped it', loaded.plugin.probe.startupHoldReason() === 'graph', String(loaded.plugin.probe.startupHoldReason()))
 }
 
+// The app's refusal reason is read as a key into a table of gates. A word the table does not own
+// must fall back to naming the list, not to whatever that name resolves to on the prototype.
+{
+  const rows = [
+    { kind: 'script', src: '/plugins/a/client.js' },
+    { kind: 'global', name: '__DSH_BOOT__', value: JSON.stringify({ rev: 'r1', entries: [{ id: '@local/a' }], batches: [{ url: '/plugins/??@local/a/client.js', entries: ['@local/a'] }] }) },
+  ]
+  const live = { rev: 'r1', entries: [{ id: '@local/a' }], batches: [{ url: '/plugins/??@local/a/client.js', entries: ['@local/a'] }] }
+  const loaded = harness({ frozen: undefined, bridge: { ready: async () => ({ injections: rows }), request: async () => true }, live, scripts: { '/plugins/a/client.js': () => ok(registered('@local/a')) }, verifyAnswer: { status: 'blocked', reason: 'toString' } })
+  const verdict = await loaded.plugin.probe.prepareInterface()
+  check('a refusal word the table does not own still holds the press', verdict === 'blocked', String(verdict))
+  check('and falls back to naming the list', loaded.plugin.probe.startupHoldReason() === 'list', String(loaded.plugin.probe.startupHoldReason()))
+}
+
 console.log(out.join('\n'))
 if (out.some((line) => line.startsWith('FAIL'))) process.exitCode = 1

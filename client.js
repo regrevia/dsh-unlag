@@ -249,8 +249,11 @@ window.__ModuleLoader__.load({
         holdReason = null;
         return 'ok';
       }
+      // The refusal's wording is the app's, read as a key into a table of gates: a key the table does
+      // not own (a prototype name, a word from a newer app) falls back to the list rather than to
+      // whatever that name happens to resolve to.
       const reason = data !== null && typeof data === 'object' && typeof data.reason === 'string' ? data.reason : 'list';
-      held(VERIFY_GATES[reason] ?? 'list');
+      held(Object.hasOwn(VERIFY_GATES, reason) ? VERIFY_GATES[reason] : 'list');
       return 'blocked';
     }
 
