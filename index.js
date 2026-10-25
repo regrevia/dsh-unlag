@@ -238,8 +238,8 @@ function settingsOf(config) {
 export function oneLine(value, limit = 2000) {
   // A line break is not the only thing that forges a log line: an escape sequence can move the
   // cursor and paint over earlier lines when a person reads the file, and a bare control byte can
-  // make a terminal misbehave. Page-supplied text reaches this function, so every control character
-  // that is not a plain space goes, not just the newlines.
+  // make a terminal misbehave. Page-supplied text reaches this function, so every control byte
+  // becomes a space, not only the line breaks.
   const text = String(value ?? '')
     .replace(/[\r\n\u2028\u2029]+/gu, ' ')
     .replace(/[\u0000-\u001f\u007f-\u009f]+/gu, ' ')
