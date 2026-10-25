@@ -31,6 +31,12 @@ export const inject = ['webServer']
 
 /** A transaction that has not finished in this long is stuck; the press reports it instead of hanging. */
 const RELOAD_TIMEOUT_MS = 20_000
+/**
+ * How long a press waits for an answer before it is told the update is still applying. The page
+ * gives up on its own request sooner than the update may take, and a press that ends in "did not
+ * finish" while the plugin set is still being replaced is a lie the person cannot check.
+ */
+const RELOAD_ANSWER_MS = 10_000
 
 
 const LOG_PATH = join(homedir(), '.dsh', 'unlag-reload.log')
@@ -1667,8 +1673,18 @@ function serveButton(ctx, controller, config) {
           if (method !== 'POST') return sendJson(res, 405, { status: 'method' })
           if (buttonAllowed(req) === false) return sendJson(res, 403, { status: 'forbidden' })
           if (!settings.reloadPlugins) return sendJson(res, 200, { status: 'off' })
-          const outcome = await controller.reloadNow()
-          sendJson(res, 200, outcome)
+          const limit = Number(process.env.DSH_UNLAG_ANSWER_MS ?? '') || RELOAD_ANSWER_MS
+          let timer = null
+          const stillApplying = new Promise((resolve) => {
+            timer = setTimeout(() => resolve({ status: 'applying', warnings: [], pending: [], restartReason: null, failedEntries: [] }), limit)
+          })
+          try {
+            const outcome = await Promise.race([controller.reloadNow(), stillApplying])
+            if (outcome?.status === 'applying') log('the update outlasted the answer the page waits for: the press is told it is still applying')
+            sendJson(res, 200, outcome)
+          } finally {
+            if (timer !== null) clearTimeout(timer)
+          }
         } catch (error) {
           log(`cannot apply a plugin reload: ${error?.message ?? error}`)
           sendJson(res, 500, { status: 'failed', detail: String(error?.message ?? error) })

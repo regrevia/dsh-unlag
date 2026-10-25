@@ -97,6 +97,7 @@ function mount(config, extra = {}) {
               runExclusive: async (op) => op(),
               reconcileProfile: async () => {
                 handlers.reloads = (handlers.reloads ?? 0) + 1
+                if (extra.reloadDelay) await new Promise((resolve) => setTimeout(resolve, extra.reloadDelay))
                 return { warnings: (extra.reloadWarnings ?? []).slice(), pending: [] }
               },
             }
@@ -592,6 +593,19 @@ setImmediate(() => {
 await blockedRows.routes.get('/dsh-unlag/verify')(blockedReq, blockedRes)
 check('a refused startup check answers blocked', verdict(blockedRes.body) === 'blocked', blockedRes.body)
 check('and the reason it refused is written down', readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('a startup check refused the page: register'))
+
+// A slow update must not hold the page's request past the moment it stops waiting, or the press
+// would end in "did not finish" while the plugin set is still being replaced.
+process.env.DSH_UNLAG_ANSWER_MS = '20'
+const slowMount = mount({}, { reloadDelay: 120 })
+const slowRes = fakeRes()
+const slowBegan = Date.now()
+await slowMount.routes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, slowRes)
+const slowTook = Date.now() - slowBegan
+check('a slow update answers applying instead of holding the request', verdict(slowRes.body) === 'applying' && slowTook < 100, `${slowRes.body} after ${slowTook}ms`)
+await new Promise((resolve) => setTimeout(resolve, 200))
+check('and the update it started still runs to the end', slowMount.handlers.reloads === 1, String(slowMount.handlers.reloads))
+delete process.env.DSH_UNLAG_ANSWER_MS
 
 console.log(out.join('\n'))
 process.exit(process.exitCode ?? 0)
