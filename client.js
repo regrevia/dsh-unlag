@@ -570,8 +570,16 @@ window.__ModuleLoader__.load({
 
     /** Re-enter the interface on a fresh document, keeping the current view in the address. */
     function reloadFreshPage() {
-      const graph = window.__DSH_BOOT__;
-      const stamp = typeof graph?.rev === 'string' && graph.rev !== '' ? graph.rev : String(Date.now());
+      // The document's own description decides the address it comes back on. A value that cannot be
+      // read must cost a readable address, not the rebuild: this runs after the code is already
+      // replaced, so throwing here would leave the page on the old document and report a failure.
+      let stamp = String(Date.now());
+      try {
+        const graph = window.__DSH_BOOT__;
+        if (typeof graph?.rev === 'string' && graph.rev !== '') stamp = graph.rev;
+      } catch {
+        stamp = String(Date.now());
+      }
       // The address is the page's own; a document whose address cannot be parsed still has to come
       // back as a fresh one, because the code behind it has already been replaced.
       let target = null;

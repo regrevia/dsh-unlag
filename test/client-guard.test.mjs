@@ -383,5 +383,20 @@ check('and the notice says the list answered too slowly', String(slowCheck.probe
   check('the line it writes still names what happened', reports.some((row) => row.path.includes('event=mounted')), reports.map((row) => row.path).join(' | '))
 }
 
+// The rebuild runs after the code is already replaced: a page description it cannot read must cost
+// a generated address, never the rebuild itself.
+{
+  const hostileBoot = Object.defineProperty({ entries: [], batches: [] }, 'rev', { get() { throw new Error('rev') }, enumerable: true })
+  const loaded = harness({ boot: hostileBoot })
+  let threw = null
+  try {
+    loaded.plugin.probe.reloadFreshPage()
+  } catch (error) {
+    threw = error
+  }
+  check('a rebuild still goes through when the page revision cannot be read', threw === null, String(threw?.message))
+  check('and it comes back on an address of its own', loaded.navigations.length === 1 && String(loaded.navigations[0]).includes('interface='), loaded.navigations.join(' | '))
+}
+
 console.log(out.join('\n'))
 if (out.some((line) => line.startsWith('FAIL'))) process.exitCode = 1

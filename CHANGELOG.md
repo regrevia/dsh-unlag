@@ -1,3 +1,8 @@
+## 1.9.71
+
+- 修复：重建这一步在插件已经换好之后才走，地址上的版本号取自页面自己的 `__DSH_BOOT__.rev`。这个值读不出来时整步抛错：代码已经换了、页面却停在旧文档，界面还报「失败」。现在改为读不到就自己生成一个版本号，重建照常完成（`client.js` `reloadFreshPage`）。
+- 新增 `test/client-guard.test.mjs` 2 条：版本号读不出来时重建仍会走、并且仍带着 `interface=` 回到新文档。全套 505 PASS / 0 FAIL。
+
 ## 1.9.70
 
 - 修复：按下按钮时若插件已经替换成功、随后在重建那一步被拦下，页面写的是 `gate=applied:blocked`；日志清洗把冒号一并去掉，于是那行变成 `rebuild held back: appliedblocked`——既读不出是两件事，也说错了原因。现在两半分开写：`rebuild held back: applied then blocked`（`index.js` `/report`）。
