@@ -288,6 +288,14 @@ const resourceAnswer = await resourceChunk.route.resource(new Request('http://x/
 check('a chunk asked over the resource route is answered', resourceAnswer.status === 200 && (await resourceAnswer.text()) === '/* lazy resource */', String(resourceAnswer.status))
 check('the resource route asks at the entry revision', resourceAsks.includes('/plugins/@local/a/client.lazy.js?rev=ar2'), resourceAsks.join(' '))
 
+const brokenResource = mount({ shape: 'resource', graphThrows: true })
+const brokenResourceAnswer = await brokenResource.route.resource(new Request('http://127.0.0.1:58672/plugins/??@local/a/client.js&rev=old'))
+check(
+  'a resource-shaped route survives a table that throws',
+  brokenResourceAnswer instanceof Response && brokenResourceAnswer.status === 404,
+  String(brokenResourceAnswer?.status),
+)
+
 // --- a table that throws while it is being swapped --------------------------------------------
 // A rejection from inside an async route handler is an unhandled one, and Node ends the process
 // on that; the request is answered instead.

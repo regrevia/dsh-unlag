@@ -1049,7 +1049,13 @@ function serveBundlesAtCurrentRevision(ctx) {
        * names, because a chunk is served at its entry's revision and nowhere else.
        */
       const url = String(request?.url ?? '')
-      const retargeted = retargetRevision(url, entryRevisionFor(clientModules.graph(), url))
+      // Same reason as the handler shape below: a rejection here is unhandled and ends the process.
+      let retargeted = null
+      try {
+        retargeted = retargetRevision(url, entryRevisionFor(clientModules.graph(), url))
+      } catch (error) {
+        log(`cannot read the plugin table for a bundle request: ${error?.message ?? error}`)
+      }
       const method = String(request?.method ?? 'GET').toUpperCase()
       let answer = null
       try {
