@@ -1672,9 +1672,13 @@ function serveButton(ctx, controller, config) {
   const handlers = [
     [
       `${BASE_PATH}/state`,
-      (_req, res) => {
+      (req, res) => {
         // A disposed context answers with a status instead of a throw the server has to guess at.
         try {
+          // These two are reads. Any other method is told so, the way the app's own bundle route
+          // answers a method it does not serve.
+          const method = String(req?.method ?? 'GET').toUpperCase()
+          if (method !== 'GET' && method !== 'HEAD') return sendJson(res, 405, { status: 'method' })
           sendJson(res, 200, { version: VERSION, code: CODE_STAMP, plugins: settings.reloadPlugins, page: settings.reloadInterface, shim: bundleShimStatus(ctx) })
         } catch (error) {
           log(`cannot describe this copy of the plugin: ${error?.message ?? error}`)
@@ -1684,10 +1688,12 @@ function serveButton(ctx, controller, config) {
     ],
     [
       `${BASE_PATH}/graph`,
-      (_req, res) => {
+      (req, res) => {
         // The page reads this before a rebuild; an answer that throws would leave the press with
         // no verdict at all, so the whole body is bounded and answers either way.
         try {
+          const method = String(req?.method ?? 'GET').toUpperCase()
+          if (method !== 'GET' && method !== 'HEAD') return sendJson(res, 405, { status: 'method' })
           ensureBundleShim(ctx)
           sendJson(res, 200, { graph: liveBootGraph(ctx) })
         } catch (error) {

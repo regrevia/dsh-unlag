@@ -1,3 +1,9 @@
+## 1.9.49
+
+- `/dsh-unlag/state` 与 `/dsh-unlag/graph` 现在只回答 `GET`（和 `HEAD`），其余方法回 405 `{"status":"method"}`，与官方 bundle 路由「不支持的方法回 405」一致。此前 `PUT`/`DELETE`/`PATCH` 也会拿到 200，读接口却对写方法答话，契约含糊。
+- `test/button.test.mjs` 增加 5 项：两个读接口各拒 `POST`/`DELETE`/`PUT`/`PATCH`，`HEAD` 仍按读取回答。
+- 与官方文档核对：`docs/subsystems/client-modules.md` 仍为 204 行、sha256 前缀 `c7a3dfd256e195d1`。
+
 ## 1.9.48
 
 - 日志现在分得清两种「仍在应用」：更新本身慢到超出页面等待（「outlasted the answer the page waits for」），和按按钮时另一次更新已在跑（「a press arrived while an update is already applying」）。此前第二种也被记成第一种，读日志的人会误判成慢更新。

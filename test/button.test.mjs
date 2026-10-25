@@ -120,6 +120,15 @@ both.routes.get('/dsh-unlag/state')({ method: 'GET' }, stateRes)
 check('state GET 200', stateRes.status === 200)
 check('state says both on', switches(stateRes.body) === 'true|true', stateRes.body)
 
+for (const [route, method] of [['/dsh-unlag/state', 'POST'], ['/dsh-unlag/state', 'DELETE'], ['/dsh-unlag/graph', 'PUT'], ['/dsh-unlag/graph', 'PATCH']]) {
+  const res = fakeRes()
+  both.routes.get(route)({ method }, res)
+  check(`${route} refuses ${method}`, res.status === 405, `${res.status} ${res.body}`)
+}
+const stateHead = fakeRes()
+both.routes.get('/dsh-unlag/state')({ method: 'HEAD' }, stateHead)
+check('state answers HEAD the way a read is asked for', stateHead.status === 200, `${stateHead.status}`)
+
 const verifyGet = fakeRes()
 await both.routes.get('/dsh-unlag/verify')({ method: 'GET' }, verifyGet)
 check('verify rejects GET', verifyGet.status === 405)
