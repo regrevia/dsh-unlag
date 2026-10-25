@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { appendFileSync, existsSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, statSync, watch } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -30,12 +30,6 @@ export const inject = ['webServer']
 /** A transaction that has not finished in this long is stuck; the press reports it instead of hanging. */
 const RELOAD_TIMEOUT_MS = 20_000
 
-/**
- * A saved file reaches the app through the reload service's transaction context. If a later version
- * of the app stops exposing that context, the queue cannot be entered from a save; the profile's
- * patch file is used instead, because the loader watches it and re-imports the modules that changed.
- */
-const PROFILE_MARKER = '# dsh-unlag: apply saved plugin code'
 
 const LOG_PATH = join(homedir(), '.dsh', 'unlag-reload.log')
 /** Tests point this at a scratch file, so a test run leaves the live log readable. */
@@ -167,54 +161,6 @@ function transactionContext(service) {
   return null
 }
 
-/** The patch file of the profile this plugin runs in, when the loader exposes the profile. */
-function profilePatch(ctx) {
-  try {
-    const dir = ctx.get('profileContext')?.dir
-    if (typeof dir !== 'string' || dir === '') return null
-    const file = join(dir, 'cordis.patch.yml')
-    return existsSync(file) ? file : null
-  } catch {
-    return null
-  }
-}
-
-/** Drop the marker line again without touching anything else the file holds. */
-function clearProfileMarker(file) {
-  try {
-    const text = readFileSync(file, 'utf8')
-    if (!text.includes(PROFILE_MARKER)) return
-    const withoutBlankLine = text.replace(`\n\n${PROFILE_MARKER}\n`, '\n')
-    writeFileSync(file, withoutBlankLine.replace(`\n${PROFILE_MARKER}\n`, '').replace(PROFILE_MARKER, ''))
-  } catch (error) {
-    log(`a reload marker is still in the profile: ${error?.message ?? error}`)
-  }
-}
-
-/**
- * Last resort when a save cannot be queued: one comment line in the profile's patch file makes the
- * loader re-import the modules that changed, the same outcome a queued reload gives. The line is
- * taken back out as soon as the loader has read it, and a line a crash leaves behind is removed at
- * the next start, so the profile is left as the user wrote it.
- * @returns whether the profile was asked, so the caller can say why the save did not apply.
- */
-function markProfileForReload(ctx) {
-  const file = profilePatch(ctx)
-  if (file === null) return false
-  try {
-    const text = readFileSync(file, 'utf8')
-    if (text.includes(PROFILE_MARKER)) return false
-    appendFileSync(file, `\n${PROFILE_MARKER}\n`)
-  } catch (error) {
-    log(`the profile could not be asked for a reload: ${error?.message ?? error}`)
-    return false
-  }
-  log('the saved plugin code is applied by a profile reload instead')
-  const timer = setTimeout(() => clearProfileMarker(file), 3000)
-  timer.unref?.()
-  return true
-}
-
 function pluginReloader(ctx, config) {
   /** HMR can start after this half, so ask per use instead of once at load. */
   const hmrService = () => {
@@ -223,15 +169,14 @@ function pluginReloader(ctx, config) {
     return hmr
   }
   const available = () => hmrService() !== null
-  /** A marker line this plugin left in the profile is not the user's; take it back out at start. */
-  const leftover = profilePatch(ctx)
-  if (leftover !== null) clearProfileMarker(leftover)
   /** Opt-in: wait for a quiet moment instead of swapping at once. Off by default. */
   const idleOnly = config?.idleOnly === true
   const debounce = Number.isFinite(config?.debounce) ? config.debounce : 300
 
   let timer = null
   let running = false
+  /** The queue request this plugin is still waiting on, so a timeout is not reported as a cancel. */
+  let work = null
   let again = false
   let deferrals = 0
   let lastRun = 0
@@ -274,30 +219,53 @@ function pluginReloader(ctx, config) {
         const timer = setTimeout(() => reject(new Error('the plugin update did not finish in time')), limit)
         timer.unref?.()
       })
+    /**
+     * The queue request itself keeps running after this plugin stops waiting for it. It is tracked
+     * so a timeout is reported as still applying, never as a failed update that later fires anyway.
+     */
+    const tracked = (request) => {
+      work = request
+      const settle = () => {
+        if (work === request) work = null
+      }
+      request.then(settle, settle)
+      return request
+    }
     let result = null
     for (let attempt = 0; ; attempt += 1) {
       try {
-        result = await Promise.race([ask(hmr), abandoned()])
+        result = await Promise.race([tracked(ask(hmr)), abandoned()])
         break
       } catch (error) {
         const message = String(error?.message ?? error)
-        if (message.includes('nested') === false) throw error
-        if (attempt >= 9) {
-          /** No context to leave means a save cannot be queued at all: hand the file to the loader. */
-          if (context === null) markProfileForReload(ctx)
+        if (message.includes('nested')) {
+          if (attempt >= 9) throw error
+          const step = Number(process.env.DSH_UNLAG_RETRY_MS ?? '') || 250
+          await new Promise((resolve) => setTimeout(resolve, step * (attempt + 1)))
+          continue
+        }
+        if (message.includes('did not finish in time')) {
+          error.stillRunning = work !== null
           throw error
         }
-        const step = Number(process.env.DSH_UNLAG_RETRY_MS ?? '') || 250
-        await new Promise((resolve) => setTimeout(resolve, step * (attempt + 1)))
+        throw error
       }
     }
     const warnings = Array.isArray(result?.warnings) ? result.warnings : []
     const pending = Array.isArray(result?.pending) ? result.pending : []
     const restartReason = typeof result?.restartReason === 'string' ? result.restartReason : null
+    /**
+     * A reconciliation that returns without throwing can still have left a plugin unloaded: the app
+     * reports that as a warning. A set with an entry that did not start is not a set the page can be
+     * rebuilt against, so the press is reported as failed and names what did not start.
+     */
+    const failedEntries = warnings
+      .map((warning) => (typeof warning === 'string' ? warning : String(warning?.message ?? '')))
+      .filter((warning) => /fail|cannot|missing|invalid|error/iu.test(warning))
     log(
       `plugins reloaded (warnings=${warnings.length} pending=${pending.length}${restartReason === null ? '' : ` restart=${restartReason}`})`,
     )
-    return { status: 'done', warnings, pending, restartReason }
+    return { status: 'done', warnings, pending, restartReason, failedEntries }
   }
 
   const flush = async () => {
@@ -381,7 +349,11 @@ function pluginReloader(ctx, config) {
     warnings: [],
     pending: [],
     restartReason: null,
+    failedEntries: [],
   })
+
+  /** A press made while an update is still running joins that update instead of queueing another. */
+  const busyAnswer = () => (work !== null ? { status: 'applying', warnings: [], pending: [], restartReason: null, failedEntries: [] } : queuedAnswer(queueReload()))
 
   /**
    * The button path: run now and report what happened, so the page can tell the user why the
@@ -390,12 +362,12 @@ function pluginReloader(ctx, config) {
    */
   const reloadNow = async (force = false) => {
     const hmr = hmrService()
-    if (hmr === null) return { status: 'unavailable', warnings: [], pending: [], restartReason: null }
+    if (hmr === null) return { status: 'unavailable', warnings: [], pending: [], restartReason: null, failedEntries: [] }
     if (turnsRunning()) log('reloading while turns are still running; they keep running')
-    if (running || (force === false && busy())) return queuedAnswer(queueReload())
+    if (running || (force === false && busy())) return busyAnswer()
     const wait = lastRun + MIN_INTERVAL_MS - Date.now()
     if (wait > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(wait, 2000)))
-    if (running || (force === false && busy())) return queuedAnswer(queueReload())
+    if (running || (force === false && busy())) return busyAnswer()
     if (timer !== null) {
       clearTimeout(timer)
       timer = null
@@ -405,18 +377,53 @@ function pluginReloader(ctx, config) {
     lastRun = Date.now()
     try {
       const outcome = await reload(hmr)
+      /**
+       * `pending` means the changed modules are not loaded yet and need a restart this plugin does
+       * not perform; it is not a queued update that finishes on its own.
+       */
       if (outcome.pending.length > 0 || outcome.restartReason !== null) {
         // The app accepted the update but has not finished starting the new plugin set. Rebuilding
         // the page now would start a document against a set that is still settling.
-        return { status: 'failed', warnings: outcome.warnings, pending: outcome.pending, restartReason: outcome.restartReason }
+        return {
+          status: 'failed',
+          warnings: outcome.warnings,
+          pending: outcome.pending,
+          restartReason: outcome.restartReason,
+          failedEntries: outcome.failedEntries,
+        }
+      }
+      if (outcome.failedEntries.length > 0) {
+        return {
+          status: 'failed',
+          warnings: outcome.warnings,
+          pending: [],
+          restartReason: null,
+          failedEntries: outcome.failedEntries,
+        }
       }
       return outcome
     } catch (error) {
+      if (error?.stillRunning === true) {
+        // The queue still holds the request: it may yet apply, so the press is not called failed.
+        return { status: 'applying', warnings: [], pending: [], restartReason: null, failedEntries: [] }
+      }
       log(`reload did not finish; the plugin set may be partly applied: ${error?.message ?? error}`)
-      return { status: 'failed', warnings: [], pending: [], restartReason: null }
+      return { status: 'failed', warnings: [], pending: [], restartReason: null, failedEntries: [] }
     } finally {
-      running = false
-      again = false
+      if (work === null) {
+        running = false
+        again = false
+      } else {
+        // Stay busy until the queue request really settles, so a second press joins it.
+        const release = () => {
+          running = false
+          if (again) {
+            again = false
+            if (timer === null) timer = setTimeout(() => void flush(), debounce)
+          }
+        }
+        work.then(release, release)
+      }
     }
   }
 
@@ -475,10 +482,22 @@ function sendJson(res, status, payload) {
  * leaves it naming a module graph that no longer resolves, which is exactly the list a rebuild
  * must not trust.
  */
-function liveBootGraph(server) {
+function liveBootGraph(ctx) {
   try {
-    if (typeof server.collectIndexInjections !== 'function') return null
-    const rows = server.collectIndexInjections()
+    /**
+     * The module table's own graph is the list the next document is built from, and reading it has
+     * no side effects. The injection table needs a peer for anything page-scoped, so it is not a
+     * substitute: a graph that cannot be read stays null and the page holds instead of guessing.
+     */
+    const modules = ctx.get('clientModules')
+    if (typeof modules?.graph === 'function') {
+      const graph = modules.graph()
+      if (graph !== null && typeof graph === 'object' && Array.isArray(graph.entries)) return graph
+      return null
+    }
+    const server = ctx.get('webServer')
+    if (typeof server?.collectIndexInjections !== 'function') return null
+    const rows = server.collectIndexInjections({})
     if (!Array.isArray(rows)) return null
     for (const row of rows) {
       if (row?.kind !== 'global') continue
@@ -578,8 +597,11 @@ async function fetchBundleAt(clientModules, url, method) {
 async function currentBundleAnswer(clientModules, method, url) {
   const request = bundleRequest(url)
   if (request === null) return null
-  const urls = currentBundleUrls(clientModules.graph(), request)
+  const graph = clientModules.graph()
+  const urls = currentBundleUrls(graph, request)
   if (urls.length === 0) return null
+  // A request already at the generation the table serves is the table's to answer.
+  if (typeof graph?.rev === 'string' && graph.rev !== '' && request.rev === graph.rev) return null
   if (request.rev !== '' && urls.some((target) => target.endsWith(`&rev=${request.rev}`))) return null
   for (const target of urls) {
     const response = await fetchBundleAt(clientModules, target, 'GET')
@@ -616,6 +638,29 @@ async function serveCurrentBundle(clientModules, req, res) {
     log(`cannot serve a bundle from an older revision: ${error?.message ?? error}`)
     return false
   }
+}
+
+/** The revision the module table serves now, or null when it cannot be read. */
+function currentRevision(clientModules) {
+  try {
+    const graph = clientModules.graph()
+    return typeof graph?.rev === 'string' && graph.rev !== '' ? graph.rev : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Point a bundle request at the current revision while keeping the plugin set it names. The table
+ * only keeps the previous generation of whole documents, and dynamic chunks are served at the
+ * current revision alone; a page that kept an old revision would get a main bundle it cannot load
+ * chunks for. Rewriting the revision keeps one generation in the whole answer.
+ */
+function retargetRevision(url, current) {
+  if (current === null || typeof url !== 'string') return null
+  const match = /([?&])rev=([^&#]*)/u.exec(url)
+  if (match === null || match[2] === current) return null
+  return `${url.slice(0, match.index)}${match[1]}rev=${current}${url.slice(match.index + match[0].length)}`
 }
 
 /** The same answer over the request-in/response-out route a newer app registers. */
@@ -657,13 +702,36 @@ function serveBundlesAtCurrentRevision(ctx) {
   if (typeof route.resource === 'function') {
     const original = route.resource
     const wrapped = async (request) => {
+      /**
+       * The table's own answer comes first: it still holds the document generation this page booted
+       * from. Only when it has nothing is the current one served, and the request is retargeted at
+       * the current revision so the answer and its chunks belong to the same generation.
+       */
+      const retargeted = retargetRevision(String(request?.url ?? ''), currentRevision(clientModules))
+      const method = String(request?.method ?? 'GET').toUpperCase()
+      let answer = null
+      try {
+        answer = await original(request)
+      } catch (error) {
+        log(`cannot answer a bundle request: ${error?.message ?? error}`)
+      }
+      if (retargeted !== null && (answer === null || answer === undefined || answer.status === 404)) {
+        try {
+          const next = method === 'GET' || method === 'HEAD' ? new Request(retargeted, { method, headers: request.headers }) : request
+          const second = await original(next)
+          if (second !== null && second !== undefined) answer = second
+        } catch (error) {
+          log(`cannot answer a bundle request: ${error?.message ?? error}`)
+        }
+      }
+      if (answer !== null && answer !== undefined && answer.status !== 404) return answer
       try {
         const served = await serveCurrentBundleResource(clientModules, request)
         if (served !== null) return served
       } catch (error) {
         log(`cannot answer a bundle request: ${error?.message ?? error}`)
       }
-      return original(request)
+      return answer
     }
     route[SHIM_MARK] = true
     route.resource = wrapped
@@ -672,14 +740,82 @@ function serveBundlesAtCurrentRevision(ctx) {
   }
   if (typeof route.handler !== 'function') return null
   const original = route.handler
-  const wrapped = (req, res) => {
-    const fallback = () => original(req, res)
-    const answered = serveCurrentBundle(clientModules, req, res).catch((error) => {
+  /**
+   * The table's own answer is kept, and only a 404 is held back long enough to ask whether the
+   * current generation can answer instead; the plugin set is retargeted at the current revision
+   * first, so the served document and the chunks it later asks for are one generation.
+   */
+  const wrapped = async (req, res) => {
+    const originalUrl = String(req?.url ?? '')
+    const retargeted = retargetRevision(originalUrl, currentRevision(clientModules))
+    const realWriteHead = res.writeHead
+    const realEnd = res.end
+    const ask = async (url) => {
+      let held = null
+      let body
+      if (url !== originalUrl) {
+        try {
+          req.url = url
+        } catch {
+          /* a frozen request keeps its own address */
+        }
+      }
+      if (typeof realWriteHead === 'function') {
+        res.writeHead = (status, ...rest) => {
+          if (status === 404) {
+            held = { status, headers: rest[0] }
+            return res
+          }
+          return realWriteHead.call(res, status, ...rest)
+        }
+      }
+      if (typeof realEnd === 'function') {
+        res.end = (...args) => {
+          if (held !== null) {
+            body = typeof args[0] === 'string' || Buffer.isBuffer(args[0]) ? args[0] : ''
+            return res
+          }
+          return realEnd.apply(res, args)
+        }
+      }
+      try {
+        await Promise.resolve(original(req, res))
+      } catch (error) {
+        log(`cannot answer a bundle request: ${error?.message ?? error}`)
+      } finally {
+        try {
+          res.writeHead = realWriteHead
+          res.end = realEnd
+        } catch {
+          /* the response object owns its own shape */
+        }
+      }
+      return { held, body }
+    }
+    // The table's own answer first: it still holds the generation this page booted from.
+    let outcome = await ask(originalUrl)
+    if (outcome.held !== null && retargeted !== null) outcome = await ask(retargeted)
+    if (outcome.held === null) return undefined
+    // The shim resolves the set from the address the page asked for, not the retried one.
+    try {
+      req.url = originalUrl
+    } catch {
+      /* a frozen request keeps its own address */
+    }
+    let served = false
+    try {
+      served = await serveCurrentBundle(clientModules, req, res)
+    } catch (error) {
       log(`cannot answer a bundle request: ${error?.message ?? error}`)
-      return false
-    })
-    if (typeof answered?.then !== 'function') return fallback()
-    return answered.then((served) => (served === true ? undefined : fallback()))
+    }
+    if (served === true) return undefined
+    try {
+      realWriteHead.call(res, outcome.held.status, outcome.held.headers)
+      realEnd.call(res, outcome.body)
+    } catch {
+      /* the response is gone; nothing left to answer */
+    }
+    return undefined
   }
   route[SHIM_MARK] = true
   route.handler = wrapped
@@ -754,7 +890,7 @@ function serveButton(ctx, controller, config) {
       `${BASE_PATH}/graph`,
       (_req, res) => {
         ensureBundleShim(ctx)
-        sendJson(res, 200, { graph: liveBootGraph(server) })
+        sendJson(res, 200, { graph: liveBootGraph(ctx) })
       },
     ],
     [

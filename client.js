@@ -6,8 +6,8 @@ window.__ModuleLoader__.load({
 
     const zh = /^zh/i.test(navigator.language || '');
     const COPY = zh
-      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '已排队：任务跑完自动重载', failed: '插件更新没完成，稍后再按一次' } // ui-copy-ignore
-      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Queued; it reloads once the turn ends', failed: 'The plugin update did not finish; press again later' };
+      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次' } // ui-copy-ignore
+      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later' };
 
     // Desktop shell only: the macOS and Windows desktop build owns the page and the running
     // app, so this is where the button belongs. A browser tab can reload freely on its own.
@@ -87,7 +87,10 @@ window.__ModuleLoader__.load({
     function reloadVerdict(data) {
       if (data === null || typeof data !== 'object') return 'failed';
       const status = typeof data.status === 'string' ? data.status : 'failed';
-      if (Array.isArray(data.pending) && data.pending.length > 0) return 'queued';
+      // A plugin that did not start makes the set unusable for a rebuild, whatever the status says.
+      if (Array.isArray(data.failedEntries) && data.failedEntries.length > 0) return 'failed';
+      // `pending` is not a queued update: the changed modules need a restart to load at all.
+      if (Array.isArray(data.pending) && data.pending.length > 0) return 'restart';
       if (typeof data.restartReason === 'string' && data.restartReason !== '') return 'failed';
       return status;
     }
@@ -149,8 +152,44 @@ window.__ModuleLoader__.load({
      * @param body - the served script.
      * @returns true when the body parses, or when this page cannot compile one at all.
      */
+    /** The source with comments and string contents blanked out, so a keyword scan sees code only. */
+    function codeOnly(source) {
+      let out = '';
+      let index = 0;
+      while (index < source.length) {
+        const here = source[index];
+        const next = source[index + 1];
+        if (here === '/' && next === '*') {
+          const end = source.indexOf('*/', index + 2);
+          index = end < 0 ? source.length : end + 2;
+          out += ' ';
+          continue;
+        }
+        if (here === '/' && next === '/') {
+          const end = source.indexOf('\n', index + 2);
+          index = end < 0 ? source.length : end;
+          continue;
+        }
+        if (here === '"' || here === "'" || here === '`') {
+          index += 1;
+          while (index < source.length && source[index] !== here) {
+            if (source[index] === '\\') index += 1;
+            index += 1;
+          }
+          index += 1;
+          out += '""';
+          continue;
+        }
+        out += here;
+        index += 1;
+      }
+      return out;
+    }
+
     function parsesAsClassicScript(body) {
       try {
+        // A top-level return parses in a function body but not as a classic script.
+        if (/(?:^|[;{}])\s*return\b/u.test(codeOnly(body))) return false;
         new Function(body); // eslint-disable-line no-new-func
         return true;
       } catch (error) {
@@ -213,7 +252,10 @@ window.__ModuleLoader__.load({
       }
       if (scripts.length === 0) return false;
       const live = await hostBootGraph();
-      if (live !== null && frozen !== null) {
+      if (frozen !== null) {
+        // The frozen list decides what this document boots. Without the current graph there is
+        // nothing to prove that list still resolves, so the page is not rebuilt.
+        if (live === null) return false;
         const liveIds = new Set((Array.isArray(live.entries) ? live.entries : []).map((entry) => (typeof entry === 'string' ? entry : entry?.id)));
         const kept = Array.isArray(frozen.entries) ? frozen.entries : [];
         for (const entry of kept) {
@@ -480,7 +522,16 @@ window.__ModuleLoader__.load({
         if (replace) {
           const status = await replacePlugins();
           if (status !== 'done' && status !== 'off') {
-            const key = status === 'queued' ? 'queued' : status === 'unavailable' ? 'blocked' : 'failed';
+            const key =
+              status === 'queued'
+                ? 'queued'
+                : status === 'applying'
+                  ? 'applying'
+                  : status === 'restart'
+                    ? 'restart'
+                    : status === 'unavailable'
+                      ? 'blocked'
+                      : 'failed';
             report('plugin-held', key);
             return stop(key);
           }

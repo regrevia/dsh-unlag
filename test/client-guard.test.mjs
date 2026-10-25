@@ -113,6 +113,14 @@ check('a saved script written as a module holds the rebuild', (await moduleBody.
 const compiles = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('(function () { const id = "@local/a" })()') } })
 check('a saved script that parses lets the rebuild through', (await compiles.probe.startupLooksServable()) === true)
 
+// A top-level return only parses as a function body, never as a classic script.
+const returned = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('return;\n/* @local/a */') } })
+check('a saved script with a top-level return holds the rebuild', (await returned.probe.startupLooksServable()) === false)
+
+// Without the running list there is nothing to compare a saved one against, so it is not trusted.
+const noLive = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live: null, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('const id = "@local/a"') } })
+check('a saved list without a served one holds the rebuild', (await noLive.probe.startupLooksServable()) === false)
+
 // --- a page not running inside the desktop shell: the served list is the one it asks -----------
 const web = harness({ userAgent: 'Mozilla/5.0 (Macintosh) Firefox/140.0', frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=new': () => ok('const id = "@local/a"') } })
 check('a page outside the desktop shell asks the served list', (await web.probe.startupLooksServable()) === true)
@@ -164,7 +172,10 @@ check('a save that landed lets the rebuild through', (await saved.probe.prepareI
 const verdict = (value) => saved.probe.reloadVerdict(value)
 check('a finished replacement is an update', verdict({ status: 'done' }) === 'done')
 check('a replacement the app refused is not an update', verdict({ status: 'failed' }) === 'failed')
-check('a replacement still starting is not an update', verdict({ status: 'done', pending: ['@local/a'] }) === 'queued')
+check('changed code that needs a restart is not an update', verdict({ status: 'done', pending: ['@local/a'] }) === 'restart')
+check('an update in flight is not an update yet', verdict({ status: 'applying' }) === 'applying')
+check('an update the app put on hold is not an update', verdict({ status: 'queued' }) === 'queued')
+check('an entry the app could not replace is not an update', verdict({ status: 'done', warnings: ['cannot load @local/a'], failedEntries: ['@local/a'] }) === 'failed')
 check('a replacement the running page cannot take is not an update', verdict({ status: 'done', restartReason: 'native' }) === 'failed')
 check('no answer at all is not an update', verdict(null) === 'failed')
 

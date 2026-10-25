@@ -53,8 +53,14 @@ function fakeRes() {
 }
 
 /** Mount the plugin over a stand-in module table and hand back the wrapped route. */
-function mount({ graph = CURRENT, serve = (path) => bodies.get(path), late = false, shape = 'handler' } = {}) {
+function mount({ graph = CURRENT, serve = (path) => bodies.get(path), keep = null, late = false, shape = 'handler' } = {}) {
   const original = (req, res) => {
+    const kept = keep === null ? undefined : keep(asPath(req.url))
+    if (kept !== undefined) {
+      res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' })
+      res.end(kept)
+      return
+    }
     res.writeHead(404, { 'content-type': 'text/plain' })
     res.end('original')
   }
@@ -111,7 +117,7 @@ check('the bundle route is wrapped in place', first.route.handler !== first.orig
 check('the wrapped route keeps its path', first.route.path === '/plugins')
 check('wrapping does not answer for the table', first.prefixes.get('/plugins') === first.route)
 
-const current = await call(first.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js,@local/b/client.js&rev=abrev' })
+const current = await call(first.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js,@local/b/client.js&rev=newrev' })
 check('a current revision is left to the table', current.status === 404 && current.body === 'original', `${current.status} ${current.body}`)
 
 // --- a stale revision of the same plugin set is answered at the current one --------------------
@@ -205,6 +211,14 @@ check('the state names the route shape in use', shapeBody.shim?.kind === 'resour
 const log = readFileSync(process.env.DSH_UNLAG_LOG, 'utf8')
 check('the log names the served plugin set', log.includes('served @local/a, @local/b at the current revision'), log.split('\n').filter((line) => line.includes('current revision')).join(' | '))
 check('the log names the wrap', log.includes('older revision are answered at the current one'))
+
+// --- the table's own old generation, when it still has one, is used untouched ----------------
+// Replacing an answer the table still holds with current code would hand the page a document
+// whose later chunks belong to another generation; the table's own answer is kept instead.
+const kept = mount({ keep: (path) => (path.includes('rev=old') && path.includes('@local/b') ? '/* old generation */ @local/a @local/b' : undefined) })
+const keptAnswer = await call(kept.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js,@local/b/client.js&rev=old' })
+check('an old-generation answer is used as it is', keptAnswer.status === 200 && keptAnswer.body.includes('old generation'), `${keptAnswer.status} ${keptAnswer.body}`)
+check('an old-generation answer is not replaced', kept.seen.length === 0, String(kept.seen.length))
 
 console.log(out.join('\n'))
 if (log.includes('plugin reload did not start')) {

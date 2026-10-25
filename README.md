@@ -32,15 +32,14 @@ dsh plugin install dsh-unlag
 
 ## 不会丢什么
 
-- 轮次、子代理、终端进程：在宿主侧，一路继续。
+- 轮次、子代理、终端进程：照常继续。
 - 排队消息、输入草稿、附件：重建前先提交焦点里的内容；有人没存完就拦下，不硬刷。
 - 有未保存改动、开着弹窗、或下个页面要用的模块读不全：拦下并提示，宁可不刷。
 - 从不自己重启或退出 App。
 
 管不到（它会拦下并说明，不会硬来）：
 
-- 改动落在宿主侧的插件：新增原生能力、改服务声明、改权限。
-- 更新时正被某个任务使用的插件：那个任务可能随之结束。
+- 改动替插件加原生能力、改服务声明或权限：这类改动不在一次点击的范围里。
 - 独立进程和进程级的东西：宠物窗口自己的配置、DSH 自身升级、原生依赖变化。
 
 ## 排错
@@ -51,8 +50,5 @@ dsh plugin install dsh-unlag
 ## 测试
 
 ```sh
-node test/button.test.mjs
-node test/bundle-shim.test.mjs
-node test/client-guard.test.mjs
-node test/safety.test.mjs
+node --test test/*.test.mjs
 ```

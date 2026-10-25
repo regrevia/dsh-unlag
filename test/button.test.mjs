@@ -312,15 +312,25 @@ await inheritedRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-d
 check('a save from a context an earlier reload left behind still applies', verdict(inherited.body) === 'done', inherited.body)
 
 // --- a reload that never finishes ---------------------------------------------------------------
-// The page must not wait forever for an answer, and must not rebuild over a set the app has not
-// confirmed, so a stuck update is reported as failed instead of hanging the press.
+// The page must not wait forever, and must not rebuild over a set the app has not confirmed. A
+// stuck update stays in flight: it is reported as still applying, and another press joins the same
+// update instead of starting a second one.
 process.env.DSH_UNLAG_TIMEOUT_MS = '60'
+let stuckRuns = 0
 const stuckRoutes = (() => {
   const routes = new Map()
   const ctx = {
     get: (key) => {
       if (key === 'webServer') return { register: (r) => (routes.set(r.path, r.handler), () => routes.delete(r.path)) }
-      if (key === 'hmr') return { baseDir: '/tmp/x', runExclusive: () => new Promise(() => {}), reconcileProfile: async () => ({}) }
+      if (key === 'hmr')
+        return {
+          baseDir: '/tmp/x',
+          runExclusive: () => {
+            stuckRuns += 1
+            return new Promise(() => {})
+          },
+          reconcileProfile: async () => ({}),
+        }
       return undefined
     },
     on: () => {},
@@ -330,9 +340,12 @@ const stuckRoutes = (() => {
 })()
 const stuck = fakeRes()
 await stuckRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, stuck)
+check('an update that never finishes is still applying', verdict(stuck.body) === 'applying', stuck.body)
+const stuckAgain = fakeRes()
+await stuckRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, stuckAgain)
+check('another press joins the same update', verdict(stuckAgain.body) === 'applying', stuckAgain.body)
+check('an update in flight is started once', stuckRuns === 1, String(stuckRuns))
 delete process.env.DSH_UNLAG_TIMEOUT_MS
-check('an update that never finishes is reported failed', verdict(stuck.body) === 'failed', stuck.body)
-
 
 // --- the app stops exposing the transaction context by name -------------------------------------
 // A later version may move the instance or rename the field. The reload resolves it by type, so a
@@ -362,9 +375,9 @@ const renamed = fakeRes()
 await renamedStore.run(true, () => renamedRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, renamed))
 check('a renamed transaction field still queues the reload', verdict(renamed.body) === 'done', renamed.body)
 
-// --- no context at all: the profile's patch file is asked instead -------------------------------
-// Last resort. The loader watches that file, so one comment line re-imports the changed modules;
-// the line is not the user's and must be gone from the file afterwards.
+// --- no context at all: the reload is refused and the profile file is never written -----------
+// The profile patch file belongs to the user; a comment line in it is not a reliable way to
+// re-import a module, and the plugin does not touch that file at all.
 const profileDir = mkdtempSync(join(tmpdir(), 'dsh-unlag-profile-'))
 const patchFile = join(profileDir, 'cordis.patch.yml')
 const originalPatch = 'plugins:\n  dsh-unlag:\n    reloadInterface: true\n'
@@ -386,13 +399,10 @@ const strandedRoutes = (() => {
 const stranded = fakeRes()
 await strandedRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, stranded)
 check('a save that cannot be queued is reported failed', verdict(stranded.body) === 'failed', stranded.body)
-check('the profile is asked to apply it instead', readFileSync(patchFile, 'utf8').includes('# dsh-unlag: apply saved plugin code'))
-await new Promise((resolve) => setTimeout(resolve, 3400))
-check('the marker line is taken back out', readFileSync(patchFile, 'utf8') === originalPatch, JSON.stringify(readFileSync(patchFile, 'utf8')))
+await new Promise((resolve) => setTimeout(resolve, 600))
+check('the profile file is left alone', readFileSync(patchFile, 'utf8') === originalPatch, JSON.stringify(readFileSync(patchFile, 'utf8')))
 
-// --- a marker a crash left behind is cleaned at the next start ---------------------------------
-writeFileSync(patchFile, `${originalPatch}\n# dsh-unlag: apply saved plugin code\n`)
-const recoveryRoutes = (() => {
+const restartedRoutes = (() => {
   const routes = new Map()
   const ctx = {
     get: (key) => {
@@ -405,8 +415,7 @@ const recoveryRoutes = (() => {
   apply(ctx, {})
   return routes
 })()
-check('a leftover marker is removed at start', readFileSync(patchFile, 'utf8') === originalPatch, JSON.stringify(readFileSync(patchFile, 'utf8')))
-check('the rest of the profile is untouched', readFileSync(patchFile, 'utf8').startsWith('plugins:'))
+check('a start does not touch the profile file', readFileSync(patchFile, 'utf8') === originalPatch, JSON.stringify(readFileSync(patchFile, 'utf8')))
 delete process.env.DSH_UNLAG_RETRY_MS
 
 // --- hostile surroundings --------------------------------------------------------------------
