@@ -201,6 +201,18 @@ check('the hold names the plugin the body does not register', foreign.probe.star
 // A body that registers a different plugin is as broken as one that registers none.
 const wrongId = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok(registered('@local/b')) } })
 check('a saved script registering another plugin holds the rebuild', (await wrongId.probe.startupLooksServable()) === false)
+
+// A shell whose saved list names no script hands the next document nothing to load. That is a
+// readable answer, not an unread one: holding would refuse a rebuild with no reason on screen.
+const emptyList = harness({ bridge: bridgeOf([]), frozen: boot, live })
+check('a saved list naming no script lets the rebuild through', (await emptyList.probe.startupLooksServable()) === true, String(emptyList.probe.startupHoldReason()))
+check('and it reads nothing off the page instead', emptyList.requests.length === 0)
+
+// A payload that carries no list at all is still unread, and the hold says so.
+const noList = harness({ bridge: { ready: async () => ({}) }, frozen: boot, live })
+check('a shell answer with no list holds the rebuild', (await noList.probe.startupLooksServable()) === false)
+check('and the hold names the list', noList.probe.startupHoldReason() === 'list', String(noList.probe.startupHoldReason()))
+
 check('the hold names the plugin a wrong body registers', wrongId.probe.startupHoldReason() === 'plugin', String(wrongId.probe.startupHoldReason()))
 
 // A script that needs a plugin the next document does not carry cannot start it either.
@@ -257,7 +269,7 @@ check('a served list that does not load holds the rebuild', (await webStale.prob
 const broken = harness({ bridge: { ready: async () => { throw new Error('not ready') } }, frozen: boot, live })
 check('an app that cannot answer reads as unknown', (await broken.probe.desktopStartupPayload()) === null)
 const empty = harness({ bridge: bridgeOf([]), frozen: boot, live })
-check('an empty saved list reads as unknown', (await empty.probe.desktopStartupPayload()) === null)
+check('an empty saved list reads as an empty list, not as unknown', Array.isArray(await empty.probe.desktopStartupPayload()) && (await empty.probe.desktopStartupPayload()).length === 0)
 
 // --- the host verdict itself, on the real function the route calls ----------------------------
 const read = (text) => async () => ok(text)

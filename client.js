@@ -363,8 +363,10 @@ window.__ModuleLoader__.load({
       if (bridge === undefined || bridge === null || typeof bridge.ready !== 'function') return null;
       try {
         const payload = await withTimeout(bridge.ready(), 8000);
-        const rows = Array.isArray(payload?.injections) ? payload.injections : [];
-        return rows.length === 0 ? null : rows;
+        // An empty list is still an answer: a document booting from it loads no plugin script, so
+        // nothing about it can fail. Only a shape that names no list at all stays unread.
+        const rows = Array.isArray(payload?.injections) ? payload.injections : null;
+        return rows;
       } catch {
         return null;
       }
@@ -590,7 +592,11 @@ window.__ModuleLoader__.load({
           }
           const fromHost = saved === null ? await servedBootGraph() : null;
           let servable = false;
-          if (saved !== null) servable = await frozenStartupLooksServable(saved);
+          if (saved !== null && saved.length === 0) {
+            // A shell whose saved list names no script hands the next document nothing to load, so
+            // a rebuild has no script to fail: holding here would be a refusal with no reason.
+            servable = true;
+          } else if (saved !== null) servable = await frozenStartupLooksServable(saved);
           else if (fromHost === null && own === null) held('list');
           else servable = await bundlesCoverStartup(fromHost ?? own);
           if (servable) return true;
