@@ -1,3 +1,7 @@
+## 1.9.81
+
+- 测试补齐：`test/verify-route.test.mjs` 现在真的走 `/verify` 路由跑一遍「插件已不在集合里、由占位脚本顶上」的情况，断言通过、`standInRows` 为 1，并从日志文件里读到 `a startup check passed with 1 row(s) answered by a stand-in script`——1.9.80 那条日志不再只是单元测试里的字符串。全套 541 PASS / 0 FAIL。
+
 ## 1.9.80
 
 - 日志证据补齐：一次按压通过启动检查时，如果某一行地址是「插件已经不在集合里、由占位脚本顶上」的回答，日志现在会写明（`a startup check passed with N row(s) answered by a stand-in script`），与真正由集合服务的情况分开。`/verify` 的回答里带上 `standInRows` 计数，页面侧忽略它，不改变任何判断。

@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -19,7 +20,7 @@ const check = (label, ok, extra = '') => {
 const registered = (id) => `window.__ModuleLoader__.load({ id: "${id}", factory() {} })`
 const graph = { rev: 'new', entries: [{ id: '@local/a', rev: 'new', url: '/plugins/??@local/a/client.js&rev=new' }], batches: [{ url: '/plugins/??@local/a/client.js&rev=new', entries: ['@local/a'], rev: 'new' }] }
 
-function mount() {
+function mount(overrides = {}) {
   const routes = new Map()
   const ctx = {
     get: (key) =>
@@ -27,8 +28,8 @@ function mount() {
         ? { collectIndexInjections: () => [], register: (route) => { routes.set(route.path, route.handler); return () => routes.delete(route.path) } }
         : key === 'clientModules'
           ? {
-              graph: () => graph,
-              fetchBundle: async () => new Response(registered('@local/a'), { status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8' } }),
+              graph: () => overrides.graph ?? graph,
+              fetchBundle: overrides.fetchBundle ?? (async () => new Response(registered('@local/a'), { status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8' } })),
             }
           : key === 'hmr'
             ? { baseDir: '/tmp/unlag-verify-route-profile', runExclusive: async (op) => op(), reconcileProfile: async () => ({ warnings: [], pending: [] }) }
@@ -85,6 +86,22 @@ check('and the refusal says the list is longer than the check reads', /longer th
 
 const broken = await post('{"rows": [')
 check('a body that is not JSON stays a refused list', broken.body.status === 'blocked' && broken.body.reason === 'list', JSON.stringify(broken.body))
+
+// A profile that loses a plugin still boots an older document from a stand-in script, and the pass
+// that says so must leave a line naming how the row was answered: a later look at the log has to
+// tell a plugin loss from a normal pass without re-running the press.
+{
+  const lostRoutes = mount({ graph: { rev: 'new', entries: [], batches: [] }, fetchBundle: async () => new Response('', { status: 404 }) })
+  const answer = await (async () => {
+    const res = fakeRes()
+    await lostRoutes.get('/dsh-unlag/verify')(request(JSON.stringify({ rows: ['/plugins/??@local/a/client.js&rev=old'] })), res)
+    return { status: res.status, body: JSON.parse(res.body) }
+  })()
+  check('a list whose plugin is gone still passes on the stand-in', answer.body.status === 'ok', JSON.stringify(answer.body).slice(0, 160))
+  check('and the pass counts the stand-in row', answer.body.standInRows === 1, JSON.stringify(answer.body))
+  const logText = readFileSync(process.env.DSH_UNLAG_LOG, 'utf8')
+  check('and the log says a stand-in answered the row', /answered by a stand-in script/u.test(logText), logText.split('\n').slice(-3).join(' | '))
+}
 
 console.log(out.join('\n'))
 if (out.some((line) => line.startsWith('FAIL'))) process.exitCode = 1
