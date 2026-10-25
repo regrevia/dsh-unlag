@@ -34,9 +34,10 @@ function show(tree) {
   return pill === undefined ? null : String(Array.isArray(pill.children) ? pill.children.join('') : pill.children)
 }
 
-function harness({ settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, reportAnswers = [] } = {}) {
+function harness({ settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, reportAnswers = [], revAfterReload } = {}) {
   const requests = []
   const navigations = []
+  const current = { rev: graph.rev }
   let reloadBody = reload
   let reloadAnswer = null
   const location = { href: 'http://127.0.0.1:62542/?interface=live', replace: (target) => navigations.push(String(target)) }
@@ -48,11 +49,14 @@ function harness({ settings = { plugins: true, page: true }, reload = { status: 
       return new Response(JSON.stringify(settings), { status: 200, headers: { 'content-type': 'application/json' } })
     }
     if (path.startsWith('/dsh-unlag/reload')) {
+      if (revAfterReload !== undefined) current.rev = revAfterReload
       if (reloadAnswer !== null) await reloadAnswer
       if (reloadBody instanceof Error) throw reloadBody
       return new Response(JSON.stringify(reloadBody), { status: 200, headers: { 'content-type': 'application/json' } })
     }
-    if (path.startsWith('/dsh-unlag/graph')) return new Response(JSON.stringify({ graph }), { status: 200, headers: { 'content-type': 'application/json' } })
+    if (path.startsWith('/dsh-unlag/graph')) {
+      return new Response(JSON.stringify({ graph: current.rev === graph.rev ? graph : { ...graph, rev: current.rev } }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
     if (path.startsWith('/dsh-unlag/verify')) return new Response(JSON.stringify({ status: 'ok' }), { status: 200, headers: { 'content-type': 'application/json' } })
     if (path.startsWith('/dsh-unlag/report')) {
       const next = reportAnswers.shift()
@@ -281,6 +285,15 @@ check('and the pressed page still rebuilt', swapped.navigations.length === 1, sw
   check('an unanswered replacement keeps the page', page.navigations.length === 0)
   check('an unanswered replacement says it did not finish', /did not finish/.test(String(page.notice())), String(page.notice()))
   check('an unanswered replacement is logged', page.requests.some((request) => request.path.includes('event=plugin-held')))
+}
+
+// --- the replacement answer is lost, but the set did change ------------------------------------
+{
+  const page = harness({ reload: new Error('the route was replaced while it answered'), revAfterReload: 'next' })
+  await page.press()
+  check('a lost answer is not a failed replacement when the set changed', page.navigations.length === 1, String(page.navigations.length))
+  check('and the press is logged as a rebuild', page.requests.some((request) => request.path.includes('event=rebuild')))
+  check('and the notice never says it did not finish', !/did not finish/.test(String(page.notice())))
 }
 
 // --- plugins replaced, page held: the notice says what did happen ----------------------------

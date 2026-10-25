@@ -634,7 +634,25 @@ window.__ModuleLoader__.load({
           // A replacement that did not finish stops the press here: rebuilding the page anyway would
           // start a document against a plugin set the app has not finished applying.
           if (replace) {
-            const status = await withTimeout(replacePlugins()).catch(() => 'failed');
+            /**
+             * The answer to a replacement can be lost while the set is being recomposed, which reads
+             * as a failure even though the plugins did change. The startup list says which set is
+             * serving now, so a lost answer is checked against it before the press claims to fail.
+             */
+            const before = await hostBootGraph();
+            const revBefore = typeof before?.rev === 'string' ? before.rev : null;
+            let status = await withTimeout(replacePlugins()).catch(() => 'failed');
+            if (status === 'failed' && revBefore !== null) {
+              for (const wait of [400, 900, 1800]) { // ui-copy-ignore
+                await new Promise((resolve) => setTimeout(resolve, wait));
+                const after = await hostBootGraph();
+                const revNow = typeof after?.rev === 'string' ? after.rev : null;
+                if (revNow !== null && revNow !== revBefore) {
+                  status = 'done';
+                  break;
+                }
+              }
+            }
             if (status !== 'done' && status !== 'off') {
               const key =
                 status === 'queued'
