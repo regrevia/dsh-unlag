@@ -1,3 +1,9 @@
+## 1.9.102
+
+- 测试不再往用户的日志里写字：`reload-answer`、`client-guard` 会加载插件本体并留下日志，之前直接写进 `~/.dsh/unlag-reload.log`——本次核对时里面已经有 21 行测试噪音（`no web server: the header button cannot ask for a reload`），真按下之后要查的那份记录被掺了假。现在两个文件都把日志指向临时文件。
+- 新增 `test/log-isolation.test.mjs`：扫描 `test/*.test.mjs`，凡是加载 `../index.js` 的文件必须自己指定日志位置，否则失败。这类污染靠读代码防不住，靠这条守着。
+- 全套 663 PASS / 0 FAIL。
+
 ## 1.9.101
 
 - 自动重载的布桩再也不影响按下：设置监听时任何一步抛错（读不到 profile 目录、句柄耗尽等），现在只留一行 `cannot watch for saved plugin changes: …; a press still works` 并放弃监听。此前这类异常会传到整段启动逻辑，插件整个不加载——按钮也随之消失。

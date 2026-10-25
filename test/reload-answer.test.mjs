@@ -5,6 +5,14 @@
  * has to leave the page with one status, because a route that throws here takes the app with it and
  * the person sees a press that did nothing at all.
  */
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+// This file asks the press route's answer helper directly; the helper says its own things in the
+// log. Point that log at a temporary file so a test run never writes into the record a person reads
+// after a real press.
+process.env.DSH_UNLAG_LOG = join(tmpdir(), 'unlag-reload-answer.log')
+
 import { answerReload } from '../index.js'
 
 const out = []

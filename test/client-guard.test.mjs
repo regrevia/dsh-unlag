@@ -1,6 +1,13 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+// The startup judgement records what it refused; point that record at a temporary file so running
+// the tests never adds lines to the log a person reads after a real press.
+process.env.DSH_UNLAG_LOG = join(tmpdir(), 'unlag-client-guard.log')
+
 import { verifyStartupRows } from '../index.js'
 
 // The desktop shell reads the startup list once, when the app starts, and replays that same copy
