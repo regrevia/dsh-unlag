@@ -48,6 +48,15 @@ function fakeRes() {
     res.headers = headers
     res.headersSent = true
   }
+  res.write = (chunk) => {
+    // Node writes the headers implicitly on the first write, which is exactly the leak under test.
+    if (res.headersSent !== true) {
+      res.status = 200
+      res.headersSent = true
+    }
+    res.body += String(chunk)
+    return true
+  }
   res.end = (body) => {
     if (body !== undefined) res.body += String(body)
     res.writableEnded = true
@@ -56,7 +65,7 @@ function fakeRes() {
 }
 
 /** Mount the plugin over a stand-in module table and hand back the wrapped route. */
-function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.get(path), keep = null, late = false, shape = 'handler', breaksMidWrite = false, hang = false, delay = 0, hmr = null } = {}) {
+function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.get(path), keep = null, late = false, shape = 'handler', streams404 = false, breaksMidWrite = false, hang = false, delay = 0, hmr = null } = {}) {
   const original = (req, res) => {
     if (breaksMidWrite) {
       res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' })
@@ -69,6 +78,11 @@ function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.
       return
     }
     res.writeHead(404, { 'content-type': 'text/plain' })
+    if (streams404) {
+      res.write('half ')
+      res.end('original')
+      return
+    }
     res.end('original')
   }
   // A newer app registers this route as a request-in/response-out resource instead of a handler.
@@ -221,6 +235,14 @@ const graphAsk = await call(late.routes.get('/dsh-unlag/graph'), { method: 'GET'
 check('a page asking for the startup list wraps the route that appeared', late.route.handler !== late.original, String(graphAsk.status))
 const lateStale = await call(late.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js&rev=old' })
 check('the late route answers a stale entry', lateStale.status === 200 && lateStale.body === '/* one entry */ @local/a', `${lateStale.status} ${lateStale.body}`)
+
+// --- a table that writes its 404 in pieces ----------------------------------------------------
+// Node sends the 200 headers it has not been given on the first `write`. Letting those pieces
+// through would put a 200 on the wire that no fallback could replace, so they are held with the body.
+const streamed = mount({ streams404: true })
+const streamedStale = await call(streamed.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js&rev=old' })
+check('a 404 written in pieces is still held back', streamedStale.status === 200 && streamedStale.body.includes('@local/a'), `${streamedStale.status} ${streamedStale.body}`)
+check('and the half-written 404 never reaches the wire', streamedStale.body === '/* one entry */ @local/a', `${streamedStale.status} ${JSON.stringify(streamedStale.body)}`)
 
 const replaced = mount()
 const foreign = (req, res) => {

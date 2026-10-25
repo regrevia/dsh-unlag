@@ -1312,6 +1312,7 @@ function serveBundlesAtCurrentRevision(ctx) {
     const ask = async (url) => {
       let held = null
       let body
+      const parts = []
       let failed = false
       if (url !== originalUrl) {
         try {
@@ -1329,10 +1330,27 @@ function serveBundlesAtCurrentRevision(ctx) {
           return realWriteHead.call(res, status, ...rest)
         }
       }
+      /**
+       * A held 404 can still be written to in pieces. Passing those pieces through would send the
+       * implicit 200 headers Node writes on a first `write`, and the real answer could then never
+       * be sent; so the pieces are kept with the body and the socket stays untouched.
+       */
+      const realWrite = res.write
+      if (typeof realWrite === 'function') {
+        res.write = (chunk, ...rest) => {
+          if (held !== null) {
+            if (typeof chunk === 'string' || Buffer.isBuffer(chunk)) parts.push(Buffer.from(chunk))
+            return true
+          }
+          return realWrite.call(res, chunk, ...rest)
+        }
+      }
       if (typeof realEnd === 'function') {
         res.end = (...args) => {
           if (held !== null) {
-            body = typeof args[0] === 'string' || Buffer.isBuffer(args[0]) ? args[0] : ''
+            const last = args[0]
+            if (typeof last === 'string' || Buffer.isBuffer(last)) parts.push(Buffer.from(last))
+            body = parts.length === 0 ? '' : Buffer.concat(parts)
             return res
           }
           return realEnd.apply(res, args)
@@ -1346,6 +1364,7 @@ function serveBundlesAtCurrentRevision(ctx) {
       } finally {
         try {
           res.writeHead = realWriteHead
+          if (realWrite !== undefined) res.write = realWrite
           res.end = realEnd
         } catch {
           /* the response object owns its own shape */
