@@ -432,6 +432,22 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * The stamp written when the plugin code was last loaded. A replacement that was applied
+     * without changing which bundles are served keeps the startup list's revision, so the graph
+     * alone cannot tell a lost answer from a failed press; the code stamp can.
+     */
+    async function hostCodeStamp() {
+      try {
+        const response = await withTimeout(fetch(`${HOST_BASE}/state`, { cache: 'no-store', credentials: 'same-origin' }));
+        if (!response.ok) return null;
+        const data = await withTimeout(response.json());
+        return typeof data?.code === 'string' ? data.code : null;
+      } catch {
+        return null;
+      }
+    }
+
     /** Whether a plugin no longer in the running set still has its script answered. */
     async function hostShimAnswersGone() {
       try {
@@ -683,13 +699,19 @@ window.__ModuleLoader__.load({
              */
             const before = await hostBootGraph();
             const revBefore = typeof before?.rev === 'string' ? before.rev : null;
+            const codeBefore = await hostCodeStamp();
             let status = await withTimeout(replacePlugins()).catch(() => 'failed');
-            if (status === 'failed' && revBefore !== null) {
+            if (status === 'failed' && (revBefore !== null || codeBefore !== null)) {
               for (const wait of [400, 900, 1800]) { // ui-copy-ignore
                 await new Promise((resolve) => setTimeout(resolve, wait));
                 const after = await hostBootGraph();
                 const revNow = typeof after?.rev === 'string' ? after.rev : null;
-                if (revNow !== null && revNow !== revBefore) {
+                if (revNow !== null && revBefore !== null && revNow !== revBefore) {
+                  status = 'done';
+                  break;
+                }
+                const codeNow = await hostCodeStamp();
+                if (codeNow !== null && codeBefore !== null && codeNow !== codeBefore) {
                   status = 'done';
                   break;
                 }

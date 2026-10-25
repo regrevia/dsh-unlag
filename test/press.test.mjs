@@ -34,10 +34,10 @@ function show(tree) {
   return pill === undefined ? null : String(Array.isArray(pill.children) ? pill.children.join('') : pill.children)
 }
 
-function harness({ settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], revAfterReload, bootRows = rows } = {}) {
+function harness({ settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], revAfterReload, codeAfterReload, bootRows = rows } = {}) {
   const requests = []
   const navigations = []
-  const current = { rev: graph.rev }
+  const current = { rev: graph.rev, code: 'c1' }
   let reloadBody = reload
   let reloadAnswer = null
   const location = { href: 'http://127.0.0.1:62542/?interface=live', replace: (target) => navigations.push(String(target)) }
@@ -46,10 +46,11 @@ function harness({ settings = { plugins: true, page: true }, reload = { status: 
     requests.push({ path, init })
     if (path.startsWith('/dsh-unlag/state')) {
       if (settings === null) return new Response('', { status: 503 })
-      return new Response(JSON.stringify(settings), { status: 200, headers: { 'content-type': 'application/json' } })
+      return new Response(JSON.stringify({ ...settings, code: current.code }), { status: 200, headers: { 'content-type': 'application/json' } })
     }
     if (path.startsWith('/dsh-unlag/reload')) {
       if (revAfterReload !== undefined) current.rev = revAfterReload
+      if (codeAfterReload !== undefined) current.code = codeAfterReload
       if (reloadAnswer !== null) await reloadAnswer
       if (reloadBody instanceof Error) throw reloadBody
       return new Response(JSON.stringify(reloadBody), { status: 200, headers: { 'content-type': 'application/json' } })
@@ -329,6 +330,18 @@ check('and the pressed page still rebuilt', swapped.navigations.length === 1, sw
   check('a lost answer is not a failed replacement when the set changed', page.navigations.length === 1, String(page.navigations.length))
   check('and the press is logged as a rebuild', page.requests.some((request) => request.path.includes('event=rebuild')))
   check('and the notice never says it did not finish', !/did not finish/.test(String(page.notice())))
+}
+
+// --- a lost answer where only the code changed ----------------------------------------------
+// Replacing a plugin whose served bundles keep the same revision leaves the boot list unchanged, so
+// the graph cannot show that the press worked; the code stamp can, and the press must use it rather
+// than tell the user it did not finish.
+{
+  const page = harness({ reload: new Error('the route was replaced while it answered'), codeAfterReload: 'c2', settings: { plugins: true, page: false } })
+  await page.press()
+  check('a lost answer is a finished replacement when the code changed', page.requests.some((request) => request.path.includes('event=replaced')), page.requests.map((r) => r.path).join(' '))
+  check('and the press does not say it did not finish', !/did not finish/.test(String(page.notice())), String(page.notice()))
+  check('and nothing navigates when only the code was asked for', page.navigations.length === 0, String(page.navigations.length))
 }
 
 // --- plugins replaced, page held: the notice says what did happen ----------------------------
