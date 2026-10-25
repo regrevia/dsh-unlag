@@ -1500,7 +1500,10 @@ function serveButton(ctx, controller, config) {
           const event = params.get('event') ?? ''
           // A query comes from outside: one shaped gate keeps a forged line out of the log.
           const gate = (params.get('gate') ?? '').replace(/[^a-z-]/gu, '').slice(0, 24)
-          if (event === 'mounted') log('interface rebuilt; the page runs the plugins as served now')
+          // Which generation of the page came up. A rebuild that lands on older bytes then says so.
+          const pageRev = (params.get('rev') ?? '').replace(/[^a-z0-9]/gu, '').slice(0, 24)
+          const from = pageRev === '' ? '' : ` (page ${pageRev})`
+          if (event === 'mounted') log(`interface rebuilt; the page runs the plugins as served now${from}`)
           else if (event === 'rebuild') log('rebuild allowed: the page re-enters on the served modules')
           else if (event === 'held') log(`rebuild held back: ${gate === '' ? 'unknown' : gate}`)
           sendJson(res, 200, { status: 'done' })

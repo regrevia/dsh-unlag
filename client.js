@@ -118,7 +118,9 @@ window.__ModuleLoader__.load({
      * the time anyone reads it.
      */
     function report(event, gate) {
-      const query = gate === undefined ? `event=${event}` : `event=${event}&gate=${encodeURIComponent(gate)}`;
+      const page = String(window?.__DSH_BOOT__?.rev ?? '').replace(/[^a-z0-9]/gu, '').slice(0, 24);
+      const named = gate === undefined ? `event=${event}` : `event=${event}&gate=${encodeURIComponent(gate)}`;
+      const query = page === '' ? named : `${named}&rev=${page}`;
       try {
         fetch(`${HOST_BASE}/report?${query}`, {
           method: 'POST', // ui-copy-ignore

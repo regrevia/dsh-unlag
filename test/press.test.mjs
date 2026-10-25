@@ -194,6 +194,10 @@ const count = (requests, piece) => requests.filter((request) => request.path.sta
   check('a press navigates exactly once', page.navigations.length === 1, String(page.navigations.length))
   check('the new page keeps the address it already had', page.navigations[0]?.includes('interface=live') === true, String(page.navigations[0]))
   check('a press writes its outcome to the app log', page.requests.some((request) => request.path.includes('/dsh-unlag/report') && request.path.includes('event=rebuild')))
+  check(
+    'that line says which page generation came up',
+    page.requests.some((request) => request.path.includes('/dsh-unlag/report') && request.path.includes('&rev=live')),
+  )
   check('a plain press shows nothing to fix', page.notice() === null, String(page.notice()))
 }
 

@@ -158,6 +158,18 @@ check('report accepts a post', heldRes.status === 200 && heldRes.body === '{"sta
 await new Promise((resolve) => setTimeout(resolve, 30))
 check('report names the gate that stopped it', readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('rebuild held back: unsaved'))
 
+const namedRes = fakeRes()
+liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', url: '/dsh-unlag/report?event=mounted&rev=bad58412ac96' }, namedRes)
+await new Promise((resolve) => setTimeout(resolve, 30))
+check(
+  'the rebuilt line names the page generation that came up',
+  readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('(page bad58412ac96)'),
+)
+const forgedRes = fakeRes()
+liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', url: '/dsh-unlag/report?event=mounted&rev=%3Cscript%3Ealert(1)' }, forgedRes)
+await new Promise((resolve) => setTimeout(resolve, 30))
+check('a forged page name cannot put markup in the log', !readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('<script>'))
+
 const reportGet = fakeRes()
 liveMount.routes.get('/dsh-unlag/report')({ method: 'GET' }, reportGet)
 check('report rejects GET', reportGet.status === 405)
