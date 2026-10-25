@@ -156,13 +156,17 @@ check('a stale source map is answered here', staleMap.status === 200 && staleMap
 const parts = (...bodies) => bodies.join('\n;\n')
 const regrouped = await call(first.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js,@deepseek-ai/dsh-client-modules/client.js&rev=g1' })
 check('a set the table no longer groups is answered entry by entry', regrouped.status === 200 && regrouped.body === '/* one entry */ @local/a\n;\n/* one entry */ @deepseek-ai/dsh-client-modules', `${regrouped.status} ${regrouped.body}`)
-// Two bodies joined without a separator do not parse as one script, and the document would run
+
 // neither; the line holding `;` between them is what keeps each one a statement of its own.
 check('joined bodies are separated by a statement boundary', regrouped.body === parts('/* one entry */ @local/a', '/* one entry */ @deepseek-ai/dsh-client-modules'), regrouped.body)
 check('the regrouped answer is not cached', regrouped.headers?.['cache-control'] === 'no-store', JSON.stringify(regrouped.headers))
 
 const regroupedMissing = await call(first.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js,@local/gone/client.js&rev=g1' })
-check('a set with one unknown plugin still 404s', regroupedMissing.status === 404 && regroupedMissing.body === 'original', regroupedMissing.body)
+check(
+  'a stale set with a plugin the set no longer has is answered without it',
+  regroupedMissing.status === 200 && regroupedMissing.body.includes('is not part of the plugin set served now'),
+  regroupedMissing.body,
+)
 
 const regroupedMap = await call(first.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js,@deepseek-ai/dsh-client-modules/client.js.map&rev=g1' })
 check('a regrouped source map is not assembled', regroupedMap.status === 404 && regroupedMap.body === 'original', regroupedMap.body)
@@ -175,7 +179,13 @@ check('a post is left to the table', post.body === 'original', post.body)
 
 // --- everything the wrapper cannot place is answered exactly as before ------------------------
 const unknownId = await call(first.route.handler, { method: 'GET', url: '/plugins/??@local/gone/client.js&rev=old' })
-check('an unknown plugin still 404s', unknownId.status === 404 && unknownId.body === 'original', unknownId.body)
+// A document made before that plugin was removed still lists it. The table's 404 for the one
+// script ends the app, so an empty script stands in its place and the boot comes up without it.
+check(
+  'a stale request for a plugin the set no longer has is answered with an empty script',
+  unknownId.status === 200 && unknownId.body.includes('is not part of the plugin set served now'),
+  `${unknownId.status} ${unknownId.body}`,
+)
 
 const chunk = await call(first.route.handler, { method: 'GET', url: '/plugins/@local/a/chunk-1.js?rev=old' })
 check('a package-local chunk is left alone', chunk.body === 'original', chunk.body)
@@ -327,3 +337,29 @@ if (log.includes('plugin reload did not start')) {
   console.log('FAIL  apply threw instead of starting')
   process.exitCode = 1
 }
+
+
+// --- a stale set that names a plugin the profile no longer has --------------------------------
+// The app's own answer is 404, and a document booting from an old startup list that meets one ends
+// the whole app. The plugin is genuinely gone, so the set is answered without it.
+const withoutB = {
+  rev: 'newrev',
+  entries: CURRENT.entries.filter((row) => row.id !== '@local/b'),
+  batches: CURRENT.batches.filter((row) => !row.entries.includes('@local/b')),
+}
+const removedMount = mount({ graph: withoutB })
+const removedAsked = await call(removedMount.route.handler, {
+  method: 'GET',
+  url: '/plugins/??@local/a/client.js,@local/b/client.js&rev=abrev',
+})
+check(
+  'a stale set naming a removed plugin is answered instead of 404',
+  removedAsked.status === 200,
+  `${removedAsked.status}`,
+)
+check(
+  'the plugin that remains is in the answer',
+  String(removedAsked.body).includes('@local/a') && String(removedAsked.body).includes('is not part of the plugin set served now'),
+  String(removedAsked.body),
+)
+check('and the log names what was left out', readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('left out @local/b'))// Two bodies joined without a separator do not parse as one script, and the document would run

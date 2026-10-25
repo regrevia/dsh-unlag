@@ -48,10 +48,13 @@ const atCurrent = await verifyStartup(current, [frozenRow])
 check('a frozen startup script is read at the revision that holds it', atCurrent.status === 'ok', JSON.stringify(atCurrent))
 check('the read goes to the revision that holds the set', current.asked.every((url) => url.includes('&rev=new')), current.asked.join(' '))
 
-// The mapping must not invent an answer: a plugin the table no longer has stays a refusal.
+// A plugin the table no longer has is answered by the stand-in script the route serves in its
+// place, so the boot comes up without it and the check says so instead of refusing the rebuild.
 const absent = table({ liveGraph: { rev: 'new', entries: [], batches: [] } })
-const missing = await verifyStartup(absent, [frozenRow])
-check('a script for a plugin the table lost still refuses', missing.status === 'blocked' && missing.reason === 'missing', JSON.stringify(missing))
+const gone = await verifyStartup(absent, [frozenRow])
+check('a startup row for a plugin the set no longer has is readable', gone.status === 'ok', JSON.stringify(gone))
+check('the verdict names the plugin the page comes up without', gone.leftOut?.includes('@local/a') === true, JSON.stringify(gone))
+
 
 // A body that does not register what its address claims is a refusal even when served.
 const wrong = table({ body: registered('@local/other') })

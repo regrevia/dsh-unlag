@@ -941,6 +941,35 @@ async function regroupedBundleAnswer(clientModules, graph, request) {
 }
 
 /**
+ * A stale request can name a plugin the profile no longer has at all: it was turned off or removed
+ * after the document that asks was made. Every plugin in the request is still served on its own, so
+ * the ones that remain are answered and the ones that are gone take a comment's place, which a
+ * script can hold without registering anything. The app's own answer here is 404, and a document
+ * booting from an old startup list that meets one ends the whole app: a boot that comes up without
+ * a plugin it no longer has beats that.
+ */
+async function survivingBundleAnswer(clientModules, graph, request) {
+  if (request.sourceMap) return null
+  const entries = Array.isArray(graph?.entries) ? graph.entries : []
+  const served = new Set(entries.filter((row) => typeof row?.id === 'string').map((row) => row.id))
+  const gone = request.ids.filter((id) => !served.has(id))
+  if (gone.length === 0) return null
+  const parts = []
+  for (const id of request.ids) {
+    if (served.has(id)) {
+      const body = await currentEntryBody(clientModules, graph, id)
+      if (body === null) return null
+      parts.push(body)
+      continue
+    }
+    parts.push(Buffer.from(`/* ${id.replace(/[^a-z0-9@/._-]/giu, '')} is not part of the plugin set served now */`))
+  }
+  if (parts.length === 0) return null
+  const body = Buffer.concat(parts.flatMap((part, index) => (index === parts.length - 1 ? [part] : [part, Buffer.from('\n;\n')])))
+  return { body, contentType: 'text/javascript; charset=utf-8', ids: request.ids, gone }
+}
+
+/**
  * The plugin set one stale request names, answered at the revision the app serves now. Only a body
  * that really contains every plugin it claims is handed back; anything unsure answers null, so the
  * route then behaves exactly as before and an unknown id still ends as a plain 404.
@@ -971,7 +1000,7 @@ async function currentBundleAnswer(clientModules, method, url) {
       }
     }
   }
-  return regroupedBundleAnswer(clientModules, graph, request)
+  return (await regroupedBundleAnswer(clientModules, graph, request)) ?? survivingBundleAnswer(clientModules, graph, request)
 }
 
 /** Answer one stale request over the plain request/response route an app registers. */
@@ -988,7 +1017,16 @@ async function serveCurrentBundle(clientModules, req, res) {
       'content-length': String(answer.body.length),
     })
     res.end(method === 'HEAD' ? undefined : answer.body)
-    log(`served ${answer.ids.join(', ')} at the current revision: a page asked for an older one`)
+    if (Array.isArray(answer.gone) && answer.gone.length > 0) {
+      const kept = answer.ids.filter((id) => !answer.gone.includes(id))
+      log(
+        kept.length === 0
+          ? `answered an older set with an empty script in place of ${answer.gone.join(', ')}: the app would have ended on the table's 404`
+          : `served ${kept.join(', ')} at the current revision and left out ${answer.gone.join(', ')}: a page asked for an older set`,
+      )
+    } else {
+      log(`served ${answer.ids.join(', ')} at the current revision: a page asked for an older one`)
+    }
     return true
   } catch (error) {
     log(`cannot serve a bundle from an older revision: ${error?.message ?? error}`)
@@ -1037,7 +1075,16 @@ async function serveCurrentBundleResource(clientModules, request) {
     if (method !== 'GET' && method !== 'HEAD') return null
     const answer = await currentBundleAnswer(clientModules, method, request?.url)
     if (answer === null) return null
-    log(`served ${answer.ids.join(', ')} at the current revision: a page asked for an older one`)
+    if (Array.isArray(answer.gone) && answer.gone.length > 0) {
+      const kept = answer.ids.filter((id) => !answer.gone.includes(id))
+      log(
+        kept.length === 0
+          ? `answered an older set with an empty script in place of ${answer.gone.join(', ')}: the app would have ended on the table's 404`
+          : `served ${kept.join(', ')} at the current revision and left out ${answer.gone.join(', ')}: a page asked for an older set`,
+      )
+    } else {
+      log(`served ${answer.ids.join(', ')} at the current revision: a page asked for an older one`)
+    }
     return new Response(method === 'HEAD' ? null : answer.body, {
       status: 200,
       headers: {
@@ -1361,10 +1408,19 @@ export async function verifyStartupRows(graph, fetchBody, rows) {
     wanted.push({ url, ids: request === null ? [] : request.ids })
   }
   if (wanted.length === 0) return { status: 'blocked', reason: 'list', detail: 'the startup list names no script' }
+  /**
+   * A row can name a plugin the profile no longer has: the document that made it was composed
+   * before that plugin was turned off. The route answers such a row with a stand-in that registers
+   * nothing, so the boot comes up without the plugin; the check reads the same way and does not
+   * demand a registration the set cannot give.
+   */
+  const served = new Set(entries.keys())
+  const leftOut = new Set()
   const listed = new Set()
   const bodies = []
   for (const item of wanted) {
-    for (const id of item.ids) listed.add(id)
+    for (const id of item.ids) if (served.has(id)) listed.add(id)
+    for (const id of item.ids) if (!served.has(id)) leftOut.add(id)
     let response = null
     try {
       response = await fetchBody(item.url)
@@ -1380,8 +1436,9 @@ export async function verifyStartupRows(graph, fetchBody, rows) {
     const complaint = parseAsScript(text, item.url)
     if (complaint !== null) return { status: 'blocked', reason: 'parse', detail: `${item.url}: ${complaint}` }
     const registered = registeredIds(text)
-    const missing = item.ids.filter((id) => !registered.has(id))
-    if (item.ids.length > 0 && missing.length > 0) {
+    const required = item.ids.filter((id) => served.has(id))
+    const missing = required.filter((id) => !registered.has(id))
+    if (required.length > 0 && missing.length > 0) {
       return { status: 'blocked', reason: 'register', detail: `${item.url} does not register ${missing.join(', ')}` }
     }
     bodies.push({
@@ -1418,6 +1475,7 @@ export async function verifyStartupRows(graph, fetchBody, rows) {
     reason: 'ok', // ui-copy-ignore
     revision: typeof graph?.rev === 'string' ? graph.rev : null,
     scripts: bodies.map((body) => ({ url: body.url, digest: body.digest, ids: body.ids })),
+    ...(leftOut.size > 0 ? { leftOut: [...leftOut] } : {}),
   }
 }
 
@@ -1507,6 +1565,9 @@ function serveButton(ctx, controller, config) {
             verdict = await verifyStartup(clientModules, Array.isArray(body?.rows) ? body.rows : [])
           } catch (error) {
             verdict = { status: 'blocked', reason: 'list', detail: String(error?.message ?? error) }
+          }
+          if (Array.isArray(verdict?.leftOut) && verdict.leftOut.length > 0) {
+            log(`a startup row names a plugin this app no longer serves: ${verdict.leftOut.join(', ')}; the page comes up without it`)
           }
           sendJson(res, 200, verdict)
         } catch (error) {

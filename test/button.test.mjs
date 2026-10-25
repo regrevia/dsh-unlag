@@ -100,7 +100,9 @@ function mount(config, extra = {}) {
                 return { warnings: (extra.reloadWarnings ?? []).slice(), pending: [] }
               },
             }
-          : undefined,
+          : key === 'clientModules'
+            ? extra.clientModules
+            : undefined,
     on: (event, fn) => {
       if (event === 'dispose') handlers.dispose = fn
     },
@@ -532,7 +534,43 @@ const fromOutside = fakeRes()
 await gate.routes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1', host: '203.0.113.9:62542' } }, fromOutside)
 check('a press addressed from outside this machine is refused', fromOutside.status === 403, fromOutside.body)
 
+// --- a startup row that names a plugin the set no longer has ----------------------------------
+// The press asks the table before it rebuilds. The row is answered by the stand-in the route serves
+// for a plugin the profile no longer has, so the verdict is a boot that comes up without it, said
+// out loud in the log rather than refused.
+const goneRows = mount(
+  {},
+  {
+    clientModules: {
+      graph: () => ({ rev: 'new', entries: [], batches: [] }),
+      fetchBundle: async (request) => {
+        const url = String(request?.url ?? request)
+        if (!url.includes('&rev=new')) return new Response('', { status: 404 })
+        return new Response('window.__ModuleLoader__.load({ id: "@local/a", factory() {} })', {
+          status: 200,
+          headers: { 'content-type': 'text/javascript; charset=utf-8' },
+        })
+      },
+    },
+  },
+)
+const goneRes = fakeRes()
+const goneReq = { method: 'POST', headers: { 'x-dsh-unlag': '1' }, on: () => {}, destroy: () => {} }
+const listeners = {}
+goneReq.on = (event, fn) => {
+  ;(listeners[event] ??= []).push(fn)
+}
+setImmediate(() => {
+  for (const fn of listeners.data ?? []) fn(Buffer.from(JSON.stringify({ rows: ['/plugins/??@local/a/client.js&rev=old'] })))
+  for (const fn of listeners.end ?? []) fn()
+})
+await goneRows.routes.get('/dsh-unlag/verify')(goneReq, goneRes)
+check('verify accepts a startup row for a plugin the set lost', verdict(goneRes.body) === 'ok', goneRes.body)
+check('verify names the plugin the page comes up without', String(goneRes.body).includes('@local/a'), goneRes.body)
+check('the log says the app no longer serves it', readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('no longer serves: @local/a'))
+
 console.log(out.join('\n'))
-console.log(process.exitCode === 1 ? 'FAILURES' : 'ALL PASS')
 process.exit(process.exitCode ?? 0)
 
+
+console.log(process.exitCode === 1 ? 'FAILURES' : 'ALL PASS')
