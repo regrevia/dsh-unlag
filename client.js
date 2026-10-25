@@ -559,7 +559,12 @@ window.__ModuleLoader__.load({
     function stillHeldBack() {
       const probe = new Event('beforeunload', { cancelable: true }); // ui-copy-ignore
       window.dispatchEvent(probe);
-      return probe.defaultPrevented === true || probe.returnValue === false;
+      // A handler says no in three ways: cancelling the event, setting `returnValue` to false, or
+      // returning a message through `window.onbeforeunload` (the browser copies that message into
+      // `returnValue`). Missing the last one let a press start a navigation the page would then
+      // ask about over the page's own head.
+      const message = probe.returnValue;
+      return probe.defaultPrevented === true || message === false || (typeof message === 'string' && message !== '');
     }
 
     /**

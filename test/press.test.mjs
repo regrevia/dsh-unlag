@@ -34,7 +34,7 @@ function show(tree) {
   return pill === undefined ? null : String(Array.isArray(pill.children) ? pill.children.join('') : pill.children)
 }
 
-function harness({ settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, reportAnswers = [], revAfterReload } = {}) {
+function harness({ settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], revAfterReload } = {}) {
   const requests = []
   const navigations = []
   const current = { rev: graph.rev }
@@ -84,10 +84,20 @@ function harness({ settings = { plugins: true, page: true }, reload = { status: 
     location,
     dispatchEvent: (event) => {
       listeners.push(event.type)
+      /**
+       * The browser runs `window.onbeforeunload` for a dispatched beforeunload and, when it returns
+       * a message, copies that message into `returnValue`. The stand-in does the same so a test can
+       * ask the question the page really asks.
+       */
+      if (event.type === 'beforeunload' && typeof window.onbeforeunload === 'function') {
+        const answer = window.onbeforeunload(event)
+        if (typeof answer === 'string' && answer !== '') event.returnValue = answer
+      }
       if (typeof hold === 'function') hold(event)
       return true
     },
   }
+  if (answers !== null) window.onbeforeunload = () => answers
   // The component talks to React through hooks; this stand-in runs a render, keeps state across
   // renders, and hands back the last tree so a notice can be read the way a person reads it.
   let hooks = []
@@ -223,6 +233,17 @@ const count = (requests, piece) => requests.filter((request) => request.path.sta
   // The notice may only claim the plugins changed when this press really replaced them.
   check('a held navigation says the code went live too', /Plugin code updated/.test(String(page.notice())), String(page.notice()))
   check('a held navigation says why', page.requests.some((request) => request.path.includes('event=held') && request.path.includes('gate=navigation')))
+}
+
+// --- a handler that answers with a message is a page that holds the navigation -----------------
+// `event.returnValue = false` was the only shape checked, so a plugin that says "unsaved work" by
+// returning a message was judged ready: the press navigated and the browser asked over its head.
+{
+  const page = harness({ answers: 'unsaved work' })
+  await page.press()
+  check('a handler that answers with a message keeps the page', page.navigations.length === 0, JSON.stringify(page.navigations))
+  check('and the press says why it stayed', /Unsaved changes; save them, then retry/u.test(String(page.notice())), String(page.notice()))
+  check('and leaves the button usable', page.render().button.props.style.opacity === 0.75, String(page.render().button.props.style.opacity))
 }
 
 // --- a page-only press that holds the navigation must not claim the code changed ----------------
