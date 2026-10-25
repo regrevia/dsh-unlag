@@ -92,13 +92,18 @@ const MAX_DEFERRALS = 40
 const MAX_STARTUP_ROWS = 64
 const MAX_STARTUP_ROW_CHARS = 4096
 /**
- * The largest one startup script may be before a check refuses it. A real client bundle is far
- * below this; a body past it is either a mistake or an attempt to make a check read (and compile)
- * an unbounded amount of text inside the process that owns every running turn.
+ * The largest one startup script may be before a check refuses it. The app serves a whole profile as
+ * a few bundles, and those grow with every installed plugin: one profile's largest bundle measured
+ * 8.7 MB, which a smaller bound refused as if it were an attack and left the page unrebuildable.
+ * A body past this bound is a mistake or an attempt to make a check read (and compile) an unbounded
+ * amount of text inside the process that owns every running turn.
  */
-const MAX_SCRIPT_BYTES = 8 * 1024 * 1024
-/** The same bound for one whole startup list, so a list of large bodies cannot add up either. */
-const MAX_TOTAL_SCRIPT_BYTES = 32 * 1024 * 1024
+const MAX_SCRIPT_BYTES = 64 * 1024 * 1024
+/**
+ * The same bound for one whole startup list, so a list of large bodies cannot add up either. Only
+ * the compile happens under it: what a check keeps per body is the ids it names, never its text.
+ */
+const MAX_TOTAL_SCRIPT_BYTES = 128 * 1024 * 1024
 
 /**
  * The most plugin ids one bundle address may name. A real startup list is far below this; a made-up
@@ -1534,12 +1539,11 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
     if (required.length > 0 && missing.length > 0) {
       return { status: 'blocked', reason: 'register', detail: `${item.url} does not register ${missing.join(', ')}` }
     }
-    bodies.push({
-      url: item.url,
-      text,
-      ids: item.ids,
-      digest: createHash('sha256').update(bytes).digest('hex').slice(0, 16),
-    })
+    // Only what the cross-checks below need from this body is kept; the text itself is let go here,
+    // so a list of large scripts costs one script of memory rather than the whole list.
+    const record = { url: item.url, ids: item.ids, registered, required: requiredIds(text) }
+    record.digest = createHash('sha256').update(bytes).digest('hex').slice(0, 16)
+    bodies.push(record)
   }
   /**
    * A body can read a plugin its own document does not list: the set changed after that document was
@@ -1548,10 +1552,10 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
    * itself is that case, so the press is held rather than booting a page that dies half way.
    */
   const available = new Set(listed)
-  for (const body of bodies) for (const id of registeredIds(body.text)) available.add(id)
+  for (const body of bodies) for (const id of body.registered) available.add(id)
   const absent = new Set()
   for (const body of bodies) {
-    for (const id of requiredIds(body.text)) {
+    for (const id of body.required) {
       if (available.has(id) || !entries.has(id)) continue
       absent.add(id)
     }
