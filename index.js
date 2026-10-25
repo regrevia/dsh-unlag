@@ -369,8 +369,41 @@ function sendJson(res, status, payload) {
 }
 
 /**
- * The two entry points the header button calls. Both answer with the current switches so the page
- * never guesses: with both off it does nothing, and a busy turn is reported rather than ignored.
+ * The startup list the server would hand the next document, read from the live index injection
+ * table. The page's own copy describes the page already running: a plugin swapped since then
+ * leaves it naming a module graph that no longer resolves, which is exactly the list a rebuild
+ * must not trust.
+ */
+function liveBootGraph(server) {
+  try {
+    if (typeof server.collectIndexInjections !== 'function') return null
+    const rows = server.collectIndexInjections()
+    if (!Array.isArray(rows)) return null
+    for (const row of rows) {
+      if (row?.kind !== 'global') continue
+      let value = row.value
+      if (typeof value === 'string') {
+        try {
+          value = JSON.parse(value)
+        } catch {
+          continue
+        }
+      }
+      if (value === null || typeof value !== 'object') continue
+      if (Array.isArray(value.entries) && Array.isArray(value.batches)) return value
+    }
+    return null
+  } catch (error) {
+    log(`cannot read the startup list: ${error?.message ?? error}`)
+    return null
+  }
+}
+
+/**
+ * The entry points the header button calls. Each answers with the current switches so the page
+ * never guesses: with both off it does nothing, and a turn still running is reported rather than
+ * cut. The press outcome is written to the log, because a press that stopped before rebuilding
+ * leaves no other trace once the page goes on running.
  */
 function serveButton(ctx, controller, config) {
   const server = ctx.get('webServer')
@@ -387,11 +420,26 @@ function serveButton(ctx, controller, config) {
       },
     ],
     [
-      `${BASE_PATH}/mounted`,
+      `${BASE_PATH}/graph`,
+      (_req, res) => {
+        sendJson(res, 200, { graph: liveBootGraph(server) })
+      },
+    ],
+    [
+      `${BASE_PATH}/report`,
       (req, res) => {
         const method = String(req?.method ?? 'GET').toUpperCase()
         if (method !== 'POST') return sendJson(res, 405, { status: 'method' })
-        log('interface rebuilt; the page runs the plugins as served now')
+        let query = ''
+        try {
+          query = new URL(String(req?.url ?? ''), 'http://x').searchParams.toString()
+        } catch {}
+        const params = new URLSearchParams(query)
+        const event = params.get('event') ?? ''
+        const gate = params.get('gate') ?? ''
+        if (event === 'mounted') log('interface rebuilt; the page runs the plugins as served now')
+        else if (event === 'rebuild') log('rebuild allowed: the page re-enters on the served modules')
+        else if (event === 'held') log(`rebuild held back: ${gate === '' ? 'unknown' : gate}`)
         sendJson(res, 200, { status: 'done' })
       },
     ],

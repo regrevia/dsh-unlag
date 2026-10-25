@@ -43,6 +43,23 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * Leave one line per press outcome in the log the app keeps. Without it a press that stopped
+     * before rebuilding looks exactly like one that never happened, and the page itself is gone by
+     * the time anyone reads it.
+     */
+    function report(event, gate) {
+      const query = gate === undefined ? `event=${event}` : `event=${event}&gate=${encodeURIComponent(gate)}`;
+      try {
+        fetch(`${HOST_BASE}/report?${query}`, {
+          method: 'POST', // ui-copy-ignore
+          credentials: 'same-origin',
+          headers: { 'x-dsh-unlag': '1' }, // ui-copy-ignore
+          keepalive: true, // ui-copy-ignore
+        }).catch(() => {});
+      } catch {}
+    }
+
     /** Ask the running app to replace changed plugins now; a running turn is reported, never cut. */
     async function replacePlugins() {
       try {
@@ -143,7 +160,26 @@ window.__ModuleLoader__.load({
      * page already running: a plugin swapped since then is listed there under its old module,
      * so asking it first would refuse a rebuild that is in fact safe.
      */
+    /**
+     * The startup list the next document would get, read from the running app. It renders that
+     * list for every index response, so this is the same row the next boot reads, described by
+     * the side that serves the bundles rather than by whatever this document happens to hold.
+     */
+    async function hostBootGraph() {
+      try {
+        const response = await fetch(`${HOST_BASE}/graph`, { cache: 'no-store', credentials: 'same-origin' });
+        if (!response.ok) return null;
+        const data = await response.json();
+        const graph = data?.graph;
+        return graph !== null && typeof graph === 'object' ? graph : null;
+      } catch {
+        return null;
+      }
+    }
+
     async function servedBootGraph() {
+      const fromHost = await hostBootGraph();
+      if (fromHost !== null) return fromHost;
       try {
         const response = await fetch(location.href, { cache: 'no-store', credentials: 'same-origin' });
         if (!response.ok) return null;
@@ -318,7 +354,11 @@ window.__ModuleLoader__.load({
         }
         window.sessionStorage.setItem(STAMP_KEY, String(Date.now()));
         const reason = await prepareInterface();
-        if (reason !== null) return stop(reason);
+        if (reason !== null) {
+          report('held', reason);
+          return stop(reason);
+        }
+        report('rebuild');
         reloadFreshPage();
         setTimeout(() => setPending(false), 4000); // ui-copy-ignore
       };
@@ -354,7 +394,7 @@ window.__ModuleLoader__.load({
         if (!desktop) return;
         // Leave a line in the log per rebuilt interface: it is the one place that shows which
         // plugin code a running page actually loaded.
-        fetch(`${HOST_BASE}/mounted`, { method: 'POST', credentials: 'same-origin', headers: { 'x-dsh-unlag': '1' }, body: '{}', keepalive: true }).catch(() => {});
+        report('mounted');
         ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
           name: 'conversation.session.header.utilities',
           id: 'dsh-unlag', // ui-copy-ignore

@@ -1,5 +1,6 @@
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { Config, apply, name, inject } from '../index.js'
 
 // Keep the live log readable: this run writes its own.
@@ -46,7 +47,7 @@ function fakeRes() {
   return res
 }
 
-function mount(config) {
+function mount(config, extra = {}) {
   const routes = new Map()
   const disposed = []
   const handlers = {}
@@ -54,6 +55,7 @@ function mount(config) {
     get: (key) =>
       key === 'webServer'
         ? {
+            collectIndexInjections: () => extra.injections ?? [],
             register: (route) => {
               routes.set(route.path, route.handler)
               const dispose = () => routes.delete(route.path)
@@ -80,7 +82,7 @@ function mount(config) {
 }
 
 const both = mount({})
-check('three routes registered', both.routes.size === 3, [...both.routes.keys()].join(','))
+check('four routes registered', both.routes.size === 4, [...both.routes.keys()].join(','))
 
 const stateRes = fakeRes()
 both.routes.get('/dsh-unlag/state')({ method: 'GET' }, stateRes)
@@ -99,6 +101,28 @@ const ok = fakeRes()
 await both.routes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, ok)
 check('reload runs and reports done', ok.body === '{"status":"done"}', ok.body)
 check('the hmr service really ran', both.handlers.reloads === 1, String(both.handlers.reloads))
+
+// --- the startup list the next document gets --------------------------------------------------
+const noGraph = fakeRes()
+both.routes.get('/dsh-unlag/graph')({ method: 'GET' }, noGraph)
+check('graph without a module table is empty', noGraph.body === '{"graph":null}', noGraph.body)
+
+const served = { rev: 'r1', entries: [{ id: '@local/a' }, { id: '@local/b' }], batches: [{ url: '/plugins/??@local/a/client.js,@local/b/client.js', entries: ['@local/a', '@local/b'] }] }
+const liveMount = mount({}, { injections: [{ kind: 'global', name: '__DSH_BOOT__', value: served }] })
+const liveGraph = fakeRes()
+liveMount.routes.get('/dsh-unlag/graph')({ method: 'GET' }, liveGraph)
+check('graph reports the live startup list', liveGraph.body === JSON.stringify({ graph: served }), liveGraph.body.slice(0, 80))
+
+// --- the press outcome reaches the log ---------------------------------------------------------
+const heldRes = fakeRes()
+liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', url: '/dsh-unlag/report?event=held&gate=unsaved' }, heldRes)
+check('report accepts a post', heldRes.status === 200 && heldRes.body === '{"status":"done"}', heldRes.body)
+await new Promise((resolve) => setTimeout(resolve, 30))
+check('report names the gate that stopped it', readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('rebuild held back: unsaved'))
+
+const reportGet = fakeRes()
+liveMount.routes.get('/dsh-unlag/report')({ method: 'GET' }, reportGet)
+check('report rejects GET', reportGet.status === 405)
 
 // --- switches --------------------------------------------------------------------------------
 const onlyPage = mount({ reloadPlugins: false })
@@ -212,7 +236,7 @@ check('no web server and no hmr is not fatal', survived)
 // --- replacing the module twice must not stack routes ----------------------------------------
 const first = mount({})
 const second = mount({})
-check('remount leaves one route set', first.routes.size === 0 && second.routes.size === 3, `${first.routes.size}/${second.routes.size}`)
+check('remount leaves one route set', first.routes.size === 0 && second.routes.size === 4, `${first.routes.size}/${second.routes.size}`)
 
 console.log(out.join('\n'))
 console.log(process.exitCode === 1 ? 'FAILURES' : 'ALL PASS')
