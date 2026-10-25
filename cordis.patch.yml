@@ -1,0 +1,17 @@
+- insert:
+    - id: dsh-unlag
+      name: 'dsh-unlag'
+
+# Turn on the shipped module watcher, which the desktop launcher leaves off.
+# `base` resolves against the plugin's own location, and an installed plugin
+# lives inside app.asar, which the watcher cannot stat — hence the working
+# directory, the one directory that always exists on the machine that boots it.
+# `root` stays empty here: the profile's own modules are watched by the watcher
+# installed-plugin path, and this entry only needs to start. To also watch
+# source checkouts, add their absolute paths to `root` in your own profile
+# patch layer.
+- id: hmr
+  disabled: false
+  config:
+    base: !!js 'process.cwd()'
+    root: []

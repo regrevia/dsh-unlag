@@ -1,0 +1,51 @@
+{
+  "name": "dsh-unlag",
+  "version": "1.6.0",
+  "type": "module",
+  "description": "Clear a sluggish DeepSeek Harness workbench without restarting: rebuild the interface and swap plugin code in place, keeping running turns, queued messages and unsent drafts.",
+  "license": "MIT",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "README.md",
+    "icon.svg"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "hot-reload",
+    "hmr"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/regrevia/dsh-unlag.git"
+  },
+  "homepage": "https://github.com/regrevia/dsh-unlag#readme",
+  "bugs": {
+    "url": "https://github.com/regrevia/dsh-unlag/issues"
+  },
+  "engines": {
+    "dsh": ">=0.2.0-rc.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}
