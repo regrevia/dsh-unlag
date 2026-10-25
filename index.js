@@ -110,6 +110,15 @@ const MAX_SCRIPT_BYTES = 64 * 1024 * 1024
  * the compile happens under it: what a check keeps per body is the ids it names, never its text.
  */
 const MAX_TOTAL_SCRIPT_BYTES = 128 * 1024 * 1024
+/**
+ * How large the request that carries the list may be. The list itself is bounded (64 addresses of at
+ * most 8 KB, plus JSON escaping), so a bound below that would refuse a sound startup list from a
+ * profile with many bundles and report it as an empty one. A body past this bound is not a list this
+ * app could boot from, and it is answered as such instead of being read.
+ */
+const MAX_LIST_BODY_BYTES = 1024 * 1024
+/** The body reader's answer for a request past its bound: not JSON, and not an empty list either. */
+const TOO_LARGE = Symbol('too-large')
 
 /**
  * The most plugin ids one bundle address may name. A real startup list is far below this; a made-up
@@ -801,7 +810,7 @@ function buttonAllowed(req) {
 }
 
 /** Read one small JSON request body; anything unreadable answers null instead of hanging. */
-function readJsonBody(req, limit = 64 * 1024) {
+function readJsonBody(req, limit = MAX_LIST_BODY_BYTES) {
 
   return new Promise((resolve) => {
     let size = 0
@@ -828,7 +837,7 @@ function readJsonBody(req, limit = 64 * 1024) {
       req.on('data', (chunk) => {
         size += chunk.length
         if (size > limit) {
-          finish(null)
+          finish(TOO_LARGE)
           return
         }
         parts.push(chunk)
@@ -1675,6 +1684,12 @@ function serveButton(ctx, controller, config) {
             return sendJson(res, 200, { status: 'blocked', reason: 'list', detail: 'the plugin table is not running' })
           }
           const body = await readJsonBody(req)
+          // A list larger than the bound is refused in its own words: an oversized request is not an
+          // empty list, and a person told their startup list names nothing would look in the wrong place.
+          if (body === TOO_LARGE) {
+            log('a startup check refused the page: size (the startup list is longer than this check reads)')
+            return sendJson(res, 200, { status: 'blocked', reason: 'size', detail: 'the startup list is longer than this check reads' })
+          }
           let verdict = null
           try {
             verdict = await verifyStartup(clientModules, Array.isArray(body?.rows) ? body.rows : [])

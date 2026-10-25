@@ -1,3 +1,10 @@
+## 1.9.46
+
+- `/verify` 的请求体积上限从 64 KiB 提到 1 MiB：清单本身允许 64 条 × 8 KB（含 JSON 转义约 524 KB），旧上限会把多 bundle 的重型 profile 的合法清单拒掉，还误报成「清单里没有脚本」。上限仍按请求计，与启动清单自身的边界对齐。
+- 超过上限时用独立结论回答：`blocked / size`，「the startup list is longer than this check reads」，不再冒充空清单 —— 按按钮的人不会被指向错误的地方。
+- 新增 `test/verify-route.test.mjs`（5 项，走真实路由）：282 KB 的合法长清单被读取并通过、超限请求得到 `size` 与真实说明、非法 JSON 仍是 `list`。
+- 活体证据：App 内 20 条互不相同的 9 MB 地址 → `blocked / size`（128 MiB 总上限），1.02 s 返回，`/state` 随后正常；12 条 → 110 MB 读取后 `ok`，1.06 s。
+
 ## 1.9.45
 
 - 新增 `npm run smoke`：把线上 `client.js` 放进沙箱、指向正在运行的 App，用 App 现在渲染的启动清单（版本号改成旧值，等同按下时拿到的冻结清单）走一遍真实判定，只回答「能不能刷」，不按按钮。这是第一次用真页面半 + 真宿主半 + 真清单一起验证按键前的判断。
