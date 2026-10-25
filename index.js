@@ -83,6 +83,8 @@ const TEST_PATH = /(^|\/)(test|tests|__tests__|__mocks__)(\/|$)|[.-](test|spec)\
 const DEFAULT_ROOTS = [join(homedir(), '.dsh', 'plugins')]
 /** A turn that never goes idle must not turn this into an endless poll. */
 const MAX_DEFERRALS = 40
+const MAX_STARTUP_ROWS = 64
+const MAX_STARTUP_ROW_CHARS = 4096
 const MIN_INTERVAL_MS = 1500
 /** The route the app publishes client bundles under; the same key the module table registers. */
 const BUNDLE_ROUTE = '/plugins'
@@ -1323,9 +1325,14 @@ export async function verifyStartupRows(graph, fetchBody, rows) {
       .filter((row) => typeof row?.id === 'string' && row.id !== '')
       .map((row) => [row.id, row]),
   )
+  // A startup list is a handful of addresses. Anything past that bound is not a list this app could
+  // boot from, and reading it would turn one request into unbounded work on the process that owns
+  // every running turn.
+  const offered = Array.isArray(rows) ? rows.slice(0, MAX_STARTUP_ROWS) : []
   const wanted = []
-  for (const row of Array.isArray(rows) ? rows : []) {
+  for (const row of offered) {
     if (typeof row !== 'string' || row === '') continue
+    if (row.length > MAX_STARTUP_ROW_CHARS) continue
     const path = row.includes('://') ? row.replace(/^[a-z]+:\/\/[^/]+/iu, '') : row
     const url = path.startsWith('/') ? path : `/${path.replace(/^\.?\//u, '')}`
     const request = bundleRequest(url)

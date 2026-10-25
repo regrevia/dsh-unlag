@@ -211,6 +211,23 @@ const grewRows = [{ id: '@local/a', rev: 'an' }, { id: '@local/b', rev: 'bn' }]
 const verdictDependency = await verifyStartupRows({ rev: 'new', entries: grewRows }, read('window.__ModuleLoader__.load({ id: "@local/a", factory(require) { require("@local/b") } })'), row)
 check('a script that requires a plugin outside the list is blocked', verdictDependency.status === 'blocked' && verdictDependency.reason === 'dependencies', JSON.stringify(verdictDependency))
 
+// One request must not become unbounded work on the process that owns every running turn.
+let reads = 0
+const manyRows = 'plugins/??@local/a/client.js&rev=live'
+const bounded = await verifyStartupRows(live, async () => {
+  reads += 1
+  return read(body)()
+}, Array.from({ length: 200 }, () => manyRows))
+check('a list far longer than a startup list is read only up to the bound', reads === 64, `${reads} reads`)
+check('and it still answers instead of failing', bounded.status === 'ok', JSON.stringify(bounded).slice(0, 120))
+let longReads = 0
+const tooLong = await verifyStartupRows(live, async () => {
+  longReads += 1
+  return read(body)()
+}, [`plugins/??@local/a/client.js&rev=live&pad=${'x'.repeat(5000)}`])
+check('an address too long to be a startup script is not read', longReads === 0, `${longReads} reads`)
+check('and the list it leaves is empty, not silently approved', tooLong.status === 'blocked' && tooLong.reason === 'list', JSON.stringify(tooLong))
+
 const verdictList = await verifyStartupRows(live, read(body), [])
 check('a list that names no script is blocked', verdictList.status === 'blocked' && verdictList.reason === 'list', JSON.stringify(verdictList))
 
