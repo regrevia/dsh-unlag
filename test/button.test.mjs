@@ -158,6 +158,22 @@ check('report accepts a post', heldRes.status === 200 && heldRes.body === '{"sta
 await new Promise((resolve) => setTimeout(resolve, 30))
 check('report names the gate that stopped it', readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('rebuild held back: unsaved'))
 
+const failedRes = fakeRes()
+liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', url: '/dsh-unlag/report?event=failed&gate=press' }, failedRes)
+await new Promise((resolve) => setTimeout(resolve, 30))
+check(
+  'a press that failed says so instead of going unrecorded',
+  readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('a press ended: failed (press)'),
+)
+
+const oddRes = fakeRes()
+liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', url: '/dsh-unlag/report?event=%3Cb%3Ex' }, oddRes)
+await new Promise((resolve) => setTimeout(resolve, 30))
+check(
+  'an unknown outcome is written in a shape a forged one cannot forge',
+  readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('a press ended: bx'),
+)
+
 const namedRes = fakeRes()
 liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', url: '/dsh-unlag/report?event=mounted&rev=bad58412ac96' }, namedRes)
 await new Promise((resolve) => setTimeout(resolve, 30))

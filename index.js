@@ -1532,9 +1532,17 @@ function serveButton(ctx, controller, config) {
           // Which generation of the page came up. A rebuild that lands on older bytes then says so.
           const pageRev = (params.get('rev') ?? '').replace(/[^a-z0-9]/gu, '').slice(0, 24)
           const from = pageRev === '' ? '' : ` (page ${pageRev})`
-          if (event === 'mounted') log(`interface rebuilt; the page runs the plugins as served now${from}`)
-          else if (event === 'rebuild') log('rebuild allowed: the page re-enters on the served modules')
-          else if (event === 'held') log(`rebuild held back: ${gate === '' ? 'unknown' : gate}`)
+          /**
+           * Every outcome the page reports is written down. A press whose line was missing left the
+           * log unable to say what happened; an outcome with no line of its own (a failed
+           * replacement, a press when both switches are off) says so in its own words.
+           */
+          const named = event.replace(/[^a-z-]/gu, '').slice(0, 24)
+          if (named === 'mounted') log(`interface rebuilt; the page runs the plugins as served now${from}`)
+          else if (named === 'rebuild') log('rebuild allowed: the page re-enters on the served modules')
+          else if (named === 'held') log(`rebuild held back: ${gate === '' ? 'unknown' : gate}`)
+          else if (named === '') log('a press reported nothing')
+          else log(`a press ended: ${named}${gate === '' ? '' : ` (${gate})`}${from}`)
           sendJson(res, 200, { status: 'done' })
         } catch (error) {
           log(`cannot record a press report: ${error?.message ?? error}`)
