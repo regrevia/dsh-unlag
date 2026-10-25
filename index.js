@@ -2051,14 +2051,23 @@ export function apply(ctx, config) {
      * root is installed and no saved file applies anything by itself.
      */
     const syncWatching = () => {
-      if (settingsOf(config ?? {}).autoReload !== true) return
-      if (controller.available() === false) {
+      // Automatic reloading is an extra, and the press is the feature: anything that goes wrong
+      // while setting a watch up is said in one line and left off, never turned into a plugin that
+      // did not load.
+      try {
+        if (settingsOf(config ?? {}).autoReload !== true) return
+        if (controller.available() === false) {
+          closeAll(globalThis[WATCHER_KEY])
+          globalThis[WATCHER_KEY] = null
+          return
+        }
+        if (globalThis[WATCHER_KEY] !== null) return
+        globalThis[WATCHER_KEY] = controller.startWatching()
+      } catch (error) {
         closeAll(globalThis[WATCHER_KEY])
         globalThis[WATCHER_KEY] = null
-        return
+        log(`cannot watch for saved plugin changes: ${error?.message ?? error}; a press still works`)
       }
-      if (globalThis[WATCHER_KEY] !== null) return
-      globalThis[WATCHER_KEY] = controller.startWatching()
     }
     // Printed on every start so a reader of the log knows which action applies a change: a person
     // pressing the button, never this plugin, and never a restart of the app.
@@ -2073,8 +2082,14 @@ export function apply(ctx, config) {
     }
     if (typeof ctx.on === 'function') {
       ctx.on('internal/service', (service) => {
-        if (service === 'hmr') syncWatching()
-        if (service === 'clientModules') syncBundles()
+        // A service event is dispatched by the app itself; an exception here would travel back into
+        // whatever asked, so each answer is kept to its own line.
+        try {
+          if (service === 'hmr') syncWatching()
+          if (service === 'clientModules') syncBundles()
+        } catch (error) {
+          log(`cannot follow the ${oneLine(service, 40)} service: ${error?.message ?? error}`)
+        }
       })
     }
     globalThis[ROUTES_KEY] = serveButton(ctx, controller, config ?? {})
