@@ -48,7 +48,7 @@ const VERSION = (() => {
 })()
 
 /**
- * When this file was last written. The version alone can name a package whose host half was never
+ * When this file was last written. The version alone can name a package whose host half was never // ui-copy-ignore
  * reloaded — the loader keeps a module it already loaded — and this is what tells the two apart.
  */
 const CODE_STAMP = (() => {
