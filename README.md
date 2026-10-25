@@ -76,6 +76,17 @@ dsh plugin install dsh-unlag
 - 状态：`GET /dsh-unlag/state` → `{"version":"<当前版本>","code":"<index.js 写入时间>","plugins":true,"page":true,"shim":{...}}`。`code` 用来分清「版本号没刷」和「旧代码真的还在跑」。
 - 重建后的日志带起页面代次：`interface rebuilt; the page runs the plugins as served now (page <rev>)`，据此判断新文档加载的是新脚本还是旧脚本。
 
+## 改完后让运行中的 App 用上
+
+不用重启 App，也不用重启页面：换掉 `index.js` 后让插件的记录重载一次即可。
+
+1. 改版本号，并 `touch index.js client.js`。**只改版本号是不够的**：插件的装载按文件时间判断要不要重新读，时间没变就还是旧代码在跑，`/state` 里会看到版本号没变（或变了但 `code` 是旧的）。
+2. 在插件列表里把本插件关掉再打开。这两步之后 `~/.dsh/unlag-reload.log` 会出现一行新的 `dsh-unlag <版本>`。
+3. 等约 20 秒，读 `GET /dsh-unlag/state`：`version` 是新版本、`code` 是刚才 `index.js` 的写入时间，才算真的换上了。
+4. `npm run live-smoke` 对着运行中的 App 复核一遍（见下一节）。
+
+页面那一半（按钮点击后的重建）不在这一步里：那是按钮本人的事，只有人能按。
+
 ## 测试
 
 ```sh
