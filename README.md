@@ -78,5 +78,13 @@ dsh plugin install dsh-unlag
 ## 测试
 
 ```sh
-node --test test/*.test.mjs
+npm test
 ```
+
+对着正在运行的 App 走一遍真实判定（页面半、宿主半都是线上代码，用的是 App 现在渲染的启动清单；只回答「能不能刷」，绝不按按钮）：
+
+```sh
+npm run smoke
+```
+
+没有 App 在监听时打印 `skip` 并退出 0。
