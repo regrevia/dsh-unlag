@@ -1,3 +1,9 @@
+## 1.9.48
+
+- 日志现在分得清两种「仍在应用」：更新本身慢到超出页面等待（「outlasted the answer the page waits for」），和按按钮时另一次更新已在跑（「a press arrived while an update is already applying」）。此前第二种也被记成第一种，读日志的人会误判成慢更新。
+- 新增 `test/reload-answer.test.mjs`（5 项，挂真实 `/reload` 路由）：慢更新在 150 ms 上限后如实回答仍在应用；更新进行中再按一次立即返回；两条日志各自正确；第一次更新事后仍跑完、计数归零。
+- 与官方文档核对：`docs/subsystems/client-modules.md` 仍为 204 行、sha256 前缀 `c7a3dfd256e195d1`，无新增偏差。
+
 ## 1.9.47
 
 - 日志目录缺失时不再永久丢日志：首次写入失败会尝试建一次目录（每进程一次）并重试。全新 HOME、`~/.dsh` 还没建的第一次运行，现在也会留下加载行。

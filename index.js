@@ -1785,8 +1785,14 @@ function serveButton(ctx, controller, config) {
           if (!settings.reloadPlugins) return sendJson(res, 200, { status: 'off' })
           const limit = Number(process.env.DSH_UNLAG_ANSWER_MS ?? '') || RELOAD_ANSWER_MS
           let timer = null
+          let timedOut = false
           const stillApplying = new Promise((resolve) => {
-            timer = setTimeout(() => resolve({ status: 'applying', warnings: [], pending: [], restartReason: null, failedEntries: [] }), limit)
+            timer = setTimeout(() => {
+              // Only the timer's own answer means the update outlasted the page: an update that
+              // says "applying" itself is a press that arrived during another one, not a slow one.
+              timedOut = true
+              resolve({ status: 'applying', warnings: [], pending: [], restartReason: null, failedEntries: [] })
+            }, limit)
           })
           let answeredEarly = false
           try {
@@ -1807,7 +1813,8 @@ function serveButton(ctx, controller, config) {
             const outcome = await Promise.race([work, stillApplying])
             if (outcome?.status === 'applying') {
               answeredEarly = true
-              log('the update outlasted the answer the page waits for: the press is told it is still applying')
+              if (timedOut) log('the update outlasted the answer the page waits for: the press is told it is still applying')
+              else log('a press arrived while an update is already applying: the press is told it is still applying')
             }
             sendJson(res, 200, outcome)
           } finally {
