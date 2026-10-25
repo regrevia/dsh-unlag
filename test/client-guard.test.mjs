@@ -245,7 +245,7 @@ let longReads = 0
 const tooLong = await verifyStartupRows(live, async () => {
   longReads += 1
   return read(body)()
-}, [`plugins/??@local/a/client.js&rev=live&pad=${'x'.repeat(5000)}`])
+}, [`plugins/??@local/a/client.js&rev=live&pad=${'x'.repeat(9000)}`])
 check('an address too long to be a startup script is not read', longReads === 0, `${longReads} reads`)
 check('and the list it leaves is empty, not silently approved', tooLong.status === 'blocked' && tooLong.reason === 'list', JSON.stringify(tooLong))
 

@@ -136,6 +136,23 @@ check('a list of large bodies refuses once the whole list passes its bound', sum
 check('that refusal stops reading the list early', servedLarge === 3, String(servedLarge))
 
 
+// An address can name a whole plugin set at once: this profile's largest measured 2.8 KB, and one
+// id list of a hundred plugin names passes 4 KB. An address past the old bound was dropped from the
+// check without a word, and a script the check never reads is a script nothing proved would load.
+const longIds = Array.from({ length: 100 }, (_, at) => `@local/dsh-client-plugin-with-a-normal-name-${String(at)}`)
+const longUrl = (rev) => `/plugins/??${longIds.map((id) => `${id}/client.js`).join(',')}&rev=${rev}`
+const longTable = table({
+  body: longIds.map((id) => registered(id)).join('\n'),
+  liveGraph: {
+    rev: 'new',
+    entries: longIds.map((id) => ({ id, rev: 'new', url: `/plugins/??${id}/client.js&rev=new` })),
+    batches: [{ url: longUrl('new'), entries: longIds, rev: 'new' }],
+  },
+})
+const longRead = await verifyStartup(longTable, [longUrl('old')])
+check('an address naming a whole plugin set is read, not dropped', longRead.status === 'ok' && longTable.asked.length === 1, JSON.stringify(longRead).slice(0, 160))
+check('that address is longer than a thousand ids of slack', longUrl('old').length > 4096, String(longUrl('old').length))
+
 // Garbage in the row is a refusal, not a throw.
 const junk = await verifyStartup(table(), [''])
 check('an empty address refuses instead of throwing', junk.status === 'blocked' && junk.reason === 'list', JSON.stringify(junk))

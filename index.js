@@ -90,7 +90,13 @@ const DEFAULT_ROOTS = [join(homedir(), '.dsh', 'plugins')]
 /** A turn that never goes idle must not turn this into an endless poll. */
 const MAX_DEFERRALS = 40
 const MAX_STARTUP_ROWS = 64
-const MAX_STARTUP_ROW_CHARS = 4096
+/**
+ * The longest one startup address may be. The app folds a whole plugin set into one bundle address,
+ * and this profile's largest already measured 2.8 KB: one id list up to MAX_BUNDLE_IDS of normal
+ * plugin names is about 5 KB, so a bound below that would drop a sound address — and a script the
+ * check never reads is a script nothing proved would load in the next document.
+ */
+const MAX_STARTUP_ROW_CHARS = 8192
 /**
  * The largest one startup script may be before a check refuses it. The app serves a whole profile as
  * a few bundles, and those grow with every installed plugin: one profile's largest bundle measured
