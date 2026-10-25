@@ -68,7 +68,8 @@ dsh plugin install dsh-unlag
 ## 排错
 
 - 日志：`~/.dsh/unlag-reload.log`，换代码／跳过／被拦各一行，含原因。
-- 状态：`GET /dsh-unlag/state` → `{"plugins":true,"page":true,"shim":{...}}`。
+- 状态：`GET /dsh-unlag/state` → `{"version":"1.9.14","code":"<index.js 写入时间>","plugins":true,"page":true,"shim":{...}}`。`code` 用来分清「版本号没刷」和「旧代码真的还在跑」。
+- 重建后的日志带起页面代次：`interface rebuilt; the page runs the plugins as served now (page <rev>)`，据此判断新文档加载的是新脚本还是旧脚本。
 
 ## 测试
 
