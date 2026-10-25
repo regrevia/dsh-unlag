@@ -65,6 +65,25 @@ try {
 check('a handler request whose address throws does not reject', threw === null, String(threw?.message ?? ''))
 check('and the caller still gets an answer', answer.writableEnded === true && answer.status === 404, `${answer.status} ended=${answer.writableEnded}`)
 
+const hostile = mount('handler')
+let hostileThrew = null
+try {
+  const res = fakeRes()
+  Object.defineProperty(res, 'write', { get() { throw new Error('no write') } })
+  await hostile.handler({ method: 'GET', url: '/plugins/??@local/a/client.js&rev=old', headers: {}, on() {}, once() {}, removeListener() {} }, res)
+} catch (error) {
+  hostileThrew = error
+}
+check('a response whose write cannot be read does not reject', hostileThrew === null, String(hostileThrew?.message ?? ''))
+
+let nullThrew = null
+try {
+  await hostile.handler({ method: 'GET', url: '/plugins/@local/a/client.js&rev=old', headers: {}, on() {}, once() {}, removeListener() {} }, null)
+} catch (error) {
+  nullThrew = error
+}
+check('a missing response does not reject', nullThrew === null, String(nullThrew?.message ?? ''))
+
 const resource = mount('resource')
 let resourceThrew = null
 let resourceAnswer = null

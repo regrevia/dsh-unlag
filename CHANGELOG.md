@@ -1,3 +1,10 @@
+## 1.9.60
+
+- 包装里读应答对象（`writeHead`/`write`/`end`）与读请求地址一样，都发生在任何保护之前；应答对象读不出这几个成员时（取值抛错、应答缺失），处理函数会 reject，而没人接的 reject 会把整个应用带走。现在读取失败一律按“这个应答不能被暂时扣住”处理：照常回答，不向外 reject，也不再在扣留路径里重复读一次 `write`。
+- `test/request-shape.test.mjs` 扩到 6 条：应答的 `write` 取值抛错、应答为 null 各一条，断言不 reject。全套 388 PASS / 0 FAIL。
+- 一次性脚本对 10 种应答形状 × 4 种请求做了 40 例复核（`writeHead`/`write`/`end`/`headersSent`/`writableEnded` 取值抛错、冻结、缺少应答、空对象、写入即抛的代理）：0 逃逸、0 超长日志行。
+- 官方文档复核：`docs/subsystems/client-modules.md` 204 行，sha256 前缀 `c7a3dfd256e195d1`。
+
 ## 1.9.59
 
 - 两条打包路由的包装都是 async 处理函数：读请求地址是第一件事，一旦请求对象读不出地址（取值抛错），包装会在任何保护之前 reject，而这个 reject 没人接，会把整个应用带走。现在两种路由形状都把地址读成“没有地址”，照常回答，不再向外 reject。

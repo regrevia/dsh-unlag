@@ -1335,10 +1335,22 @@ function serveBundlesAtCurrentRevision(ctx) {
     } catch (error) {
       log(`cannot read the plugin table for a bundle request: ${error?.message ?? error}`)
     }
-    const realWriteHead = res.writeHead
-    const realEnd = res.end
-    const realWriteRef = res.write
+    /**
+     * Reading the response is the other thing that runs before any guard. A response that cannot
+     * answer a read is treated as one that cannot be held: the table's answer goes through, and a
+     * throw here would reject the handler the server is awaiting.
+     */
+    let realWriteHead
+    let realEnd
+    let realWriteRef
     let canHold = true
+    try {
+      realWriteHead = res.writeHead
+      realEnd = res.end
+      realWriteRef = res.write
+    } catch {
+      canHold = false
+    }
     const ask = async (url) => {
       let held = null
       let body
@@ -1358,7 +1370,6 @@ function serveBundlesAtCurrentRevision(ctx) {
        * also owes the caller the callbacks it passed: dropping one would leave a handler that waits
        * for the flush awaiting forever, and the answer after it would never run.
        */
-      const realWrite = res.write
       const answerCallback = (args) => {
         for (let at = args.length - 1; at >= 0; at -= 1) {
           if (typeof args[at] === 'function') {
@@ -1385,14 +1396,14 @@ function serveBundlesAtCurrentRevision(ctx) {
        */
       if (canHold) {
         try {
-          if (typeof realWrite === 'function') {
+          if (typeof realWriteRef === 'function') {
             res.write = (chunk, ...rest) => {
               if (held !== null) {
                 if (typeof chunk === 'string' || Buffer.isBuffer(chunk)) parts.push(Buffer.from(chunk))
                 answerCallback(rest)
                 return true
               }
-              return realWrite.call(res, chunk, ...rest)
+              return realWriteRef.call(res, chunk, ...rest)
             }
           }
           if (typeof realEnd === 'function') {
