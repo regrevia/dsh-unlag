@@ -1133,6 +1133,7 @@ function serveBundlesAtCurrentRevision(ctx) {
     const ask = async (url) => {
       let held = null
       let body
+      let failed = false
       if (url !== originalUrl) {
         try {
           req.url = url
@@ -1161,6 +1162,7 @@ function serveBundlesAtCurrentRevision(ctx) {
       try {
         await Promise.resolve(original(req, res))
       } catch (error) {
+        failed = true
         log(`cannot answer a bundle request: ${error?.message ?? error}`)
       } finally {
         try {
@@ -1170,12 +1172,26 @@ function serveBundlesAtCurrentRevision(ctx) {
           /* the response object owns its own shape */
         }
       }
-      return { held, body }
+      return { held, body, failed }
     }
     // The table's own answer first: it still holds the generation this page booted from.
     let outcome = await ask(originalUrl)
     if (outcome.held !== null && retargeted !== null) outcome = await ask(retargeted)
-    if (outcome.held === null) return undefined
+    if (outcome.held === null) {
+      /**
+       * The table started writing and then failed. A body that already sent its status cannot take
+       * another one, and a socket left open is a document that waits for a script forever; ending it
+       * lets the page see the failure and carry on.
+       */
+      if (outcome.failed === true) {
+        try {
+          if (res.headersSent === true && res.writableEnded !== true && res.destroyed !== true) realEnd.call(res)
+        } catch {
+          /* the response is gone; nothing left to answer */
+        }
+      }
+      return undefined
+    }
     // The shim resolves the set from the address the page asked for, not the retried one.
     try {
       req.url = originalUrl

@@ -46,6 +46,7 @@ function fakeRes() {
   res.writeHead = (status, headers) => {
     res.status = status
     res.headers = headers
+    res.headersSent = true
   }
   res.end = (body) => {
     if (body !== undefined) res.body += String(body)
@@ -55,8 +56,12 @@ function fakeRes() {
 }
 
 /** Mount the plugin over a stand-in module table and hand back the wrapped route. */
-function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.get(path), keep = null, late = false, shape = 'handler' } = {}) {
+function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.get(path), keep = null, late = false, shape = 'handler', breaksMidWrite = false } = {}) {
   const original = (req, res) => {
+    if (breaksMidWrite) {
+      res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' })
+      throw new Error('table died mid-write')
+    }
     const kept = keep === null ? undefined : keep(asPath(req.url))
     if (kept !== undefined) {
       res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' })
@@ -294,6 +299,16 @@ check(
   'a resource-shaped route survives a table that throws',
   brokenResourceAnswer instanceof Response && brokenResourceAnswer.status === 404,
   String(brokenResourceAnswer?.status),
+)
+
+// --- a table that starts writing and then fails -------------------------------------------------
+const midWrite = mount({ breaksMidWrite: true, serve: () => undefined })
+const midRes = fakeRes()
+await midWrite.route.handler({ method: 'GET', url: '/plugins/??@local/a/client.js&rev=old' }, midRes)
+check('a table that dies after sending its status still ends the answer', midRes.writableEnded === true && midRes.body === '', `${midRes.status}/${midRes.body}/${midRes.writableEnded}`)
+check(
+  'and the log says the table failed instead of the document hanging',
+  readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('cannot answer a bundle request: table died mid-write'),
 )
 
 // --- a table that throws while it is being swapped --------------------------------------------
