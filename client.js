@@ -15,8 +15,8 @@ window.__ModuleLoader__.load({
      * repeating one generic sentence.
      */
     const REASONS = zh
-      ? { list: '读不到启动信息', slow: '启动信息读得太慢', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', size: '启动脚本太大', verify: '插件后端没有应答' }
-      : { list: 'startup info is unavailable', slow: 'the startup list answered too slowly', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete', size: 'a startup script is too large', verify: 'the plugin is not answering' };
+      ? { list: '读不到启动信息', slow: '启动信息读得太慢', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', size: '启动脚本太大', verify: '插件后端没有应答', screen: '页面状态读不到' }
+      : { list: 'startup info is unavailable', slow: 'the startup list answered too slowly', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete', size: 'a startup script is too large', verify: 'the plugin is not answering', screen: 'the page state cannot be read' };
 
     /** The last reason a readiness check refused for, or null after a check that passed. */
     let holdReason = null;
@@ -611,10 +611,21 @@ window.__ModuleLoader__.load({
      */
     async function prepareInterface() {
       if (!(await startupLooksServable())) return 'blocked';
-      if (screenHasOpenWindow()) return 'dialog';
-      await commitFocusedField();
-      const ready = await otherPluginsAreReady();
-      if (!ready || stillHeldBack()) return 'unsaved';
+      /**
+       * Everything below reads the page itself: the document, the events it answers, the fields it
+       * holds. A page that cannot be read is not a page that can be left running behind a fresh
+       * document, and a throw here would end the press as a failure with no reason on screen, so
+       * an unreadable page holds the rebuild and says so.
+       */
+      try {
+        if (screenHasOpenWindow()) return 'dialog';
+        await commitFocusedField();
+        const ready = await otherPluginsAreReady();
+        if (!ready || stillHeldBack()) return 'unsaved';
+      } catch {
+        held('screen');
+        return 'blocked';
+      }
       return null;
     }
 

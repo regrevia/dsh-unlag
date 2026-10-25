@@ -376,13 +376,16 @@ check('and the pressed page still rebuilt', swapped.navigations.length === 1, sw
   check('unreadable switches are logged as such', page.requests.some((request) => request.path.includes('event=held') && request.path.includes('gate=settings')))
 }
 
-// --- a page check throws: no crash, no navigation, the button is usable again ---------------
+// --- a page check throws: the rebuild is held with its real reason, no crash, no navigation ---
 {
   const page = harness({ brokenSelector: true })
   const view = await page.press()
   check('a failing page check does not navigate', page.navigations.length === 0)
-  check('a failing page check says it failed', /did not finish/.test(String(page.notice())), String(page.notice()))
-  check('a failing page check is logged', page.requests.some((request) => request.path.includes('event=failed') && request.path.includes('gate=press')))
+  // The plugins are replaced by then; what is left to say is that the page could not be read,
+  // which is the truth of it, rather than a bare failure with no reason.
+  check('a failing page check names the page as unreadable', /page state cannot be read/.test(String(page.notice())), String(page.notice()))
+  const heldLog = page.requests.filter((request) => request.path.includes('event=held')).map((request) => request.path)
+  check('a failing page check is logged as a hold', heldLog.some((path) => path.includes('screen')), JSON.stringify(heldLog))
   check('a failing page check leaves the button usable', view.button !== null && view.button.props.disabled !== true)
 }
 

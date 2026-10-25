@@ -1,3 +1,9 @@
+## 1.9.65
+
+- 修复：重建前的页面检查（是否还有打开的窗口、焦点字段能否落盘、别的插件能否确认、页面是否拦跳转）任一读取失败时，异常会穿出到按下流程，被记成一次没有原因、且插件其实已经替换的「失败」。现在这四项整体兜住：页面读不到就保持重建、提示写明「页面状态读不到」、不跳转，日志记 `held` + `applied:blocked:screen`（`client.js` 的 `prepareInterface`，`REASONS.screen`）。
+- 一次性脚本对 11 类退化 DOM（`querySelector` 抛错或缺失、`activeElement` 取值抛错、无 `CustomEvent`、`dispatchEvent` 抛错等）复核：改动后 0 逃逸。
+- 补 `test/client-guard.test.mjs` 四组常驻用例（各 3 条断言）；`test/press.test.mjs` 里「页面检查抛错」的原断言随之改为如实保持。全套 447 PASS / 0 FAIL。
+
 ## 1.9.64
 
 - 修复：重建跳转只做一次地址解析，页面地址无法解析（`new URL` 抛错）时一次已经替换过插件代码的按下会以 `failed` 结束、旧页面继续跑，用户看到的状态和实际相反。现在解析失败改为原地重载，跳转本身也被兜住（`client.js` 的 `reloadFreshPage`）。

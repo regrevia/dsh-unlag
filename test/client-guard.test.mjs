@@ -20,7 +20,7 @@ const gone = () => new Response('', { status: 404 })
 const asPath = (url) => String(url).replace(/^https?:\/\/[^/]+/u, '')
 const registered = (id) => `window.__ModuleLoader__.load({ id: "${id}", factory() {} })`
 
-function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge, frozen, live, scripts = {}, probe = true, prepare, verifyAnswer, verifyReply, shimWrapped } = {}) {
+function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge, frozen, live, scripts = {}, probe = true, prepare, verifyAnswer, verifyReply, shimWrapped, dom, noCustomEvent } = {}) {
   let registration
   const navigations = []
   const requests = []
@@ -74,7 +74,9 @@ function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge
     window,
     navigator: { language: 'en-US', userAgent },
     location,
-    document: { activeElement: null, querySelector: () => null },
+    // The page below the plugin is a shared global too: a page whose own document cannot be read
+    // must still answer a press with a reason instead of throwing out of it.
+    document: dom ?? { activeElement: null, querySelector: () => null },
     sessionStorage: window.sessionStorage,
     fetch,
     URL,
@@ -85,7 +87,7 @@ function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge
     clearTimeout,
     requestAnimationFrame: (fn) => fn(),
     Event,
-    CustomEvent,
+    ...(noCustomEvent ? {} : { CustomEvent }),
     JSON,
     RegExp,
   }
@@ -158,6 +160,31 @@ for (const [label, reply] of [
   check(`${label} holds the rebuild instead of rejecting the press`, threw === null && servable === false, String(threw?.message ?? servable))
   check(`${label} names the check as the reason`, answerless.probe.startupHoldReason() === 'verify', String(answerless.probe.startupHoldReason()))
   check(`${label} does not navigate`, answerless.navigations.length === 0)
+}
+
+// --- the page itself cannot be read: hold the rebuild and say so, never fail silently ---------
+// The plugins are replaced before this point, so the press has to end in a notice that names what
+// is left undone; a throw here would be reported as a failure with the code already swapped.
+{
+  const cases = [
+    ['a page whose document cannot be queried', { dom: { activeElement: null, querySelector: () => { throw new Error('sel') } } }],
+    ['a page without a document query', { dom: { activeElement: null } }],
+    ['a page whose focused field cannot be read', { dom: { get activeElement() { throw new Error('active') }, querySelector: () => null } }],
+    ['a page that has no announcement event', { noCustomEvent: true }],
+  ]
+  for (const [label, patch] of cases) {
+    const page = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok(body) }, ...patch })
+    let threw = null
+    let reason = null
+    try {
+      reason = await page.probe.prepareInterface()
+    } catch (error) {
+      threw = error
+    }
+    check(`${label} holds the rebuild instead of throwing`, threw === null && reason === 'blocked', String(threw?.message ?? reason))
+    check(`${label} names the page as the reason`, page.probe.startupHoldReason() === 'screen', String(page.probe.startupHoldReason()))
+    check(`${label} does not navigate`, page.navigations.length === 0)
+  }
 }
 
 const noStandIn = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live: { rev: 'new', entries: [], batches: [] }, shimWrapped: false })
