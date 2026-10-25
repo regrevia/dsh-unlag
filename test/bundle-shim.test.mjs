@@ -291,7 +291,9 @@ const waitedStale = await Promise.race([
 check('a 404 whose handler waits for the flush still answers', waitedStale.status === 200 && waitedStale.body.includes('@local/a'), `${waitedStale.status} ${JSON.stringify(waitedStale.body)}`)
 
 const replaced = mount()
+let foreignCalls = 0
 const foreign = (req, res) => {
+  foreignCalls += 1
   res.writeHead(404, { 'content-type': 'text/plain' })
   res.end('foreign')
 }
@@ -300,6 +302,12 @@ await call(replaced.routes.get('/dsh-unlag/graph'), { method: 'GET', url: '/dsh-
 check('a route replaced since the wrap is wrapped again', replaced.route.handler !== foreign)
 const replacedStale = await call(replaced.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js&rev=old' })
 check('the wrapped route answers a stale entry again', replacedStale.status === 200 && replacedStale.body === '/* one entry */ @local/a', `${replacedStale.status} ${replacedStale.body}`)
+
+// One wrapper only: a second one would call the table twice for every request it passes through,
+// and a page that gets two 404s for one script never boots.
+foreignCalls = 0
+const replacedCurrent = await call(replaced.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js&rev=newrev' })
+check('a current revision asks the table exactly once', foreignCalls === 1 && replacedCurrent.body === 'foreign', `${foreignCalls} ${replacedCurrent.body}`)
 
 // --- an update that hands the route to a fresh handler must not leave it unwrapped ------------
 const upd = mount({ hmr: { runExclusive: (fn) => Promise.resolve(fn()), reconcileProfile: async () => ({ warnings: [] }) } })
