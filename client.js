@@ -212,10 +212,78 @@ window.__ModuleLoader__.load({
       return out;
     }
 
+    /**
+     * Whether a script has a `return` at the top level. A function body accepts one and a classic
+     * script does not, so that difference decides whether the document runs the body at all. Only
+     * depth zero counts: a return inside a callback, method or block is ordinary code, and reading
+     * one as a refusal held every real bundle back.
+     */
+    function hasTopLevelReturn(source) {
+      let depth = 0;
+      let index = 0;
+      let previous = '';
+      while (index < source.length) {
+        const here = source[index];
+        const next = source[index + 1];
+        if (here === '/' && next === '*') {
+          const end = source.indexOf('*/', index + 2);
+          index = end < 0 ? source.length : end + 2;
+          continue;
+        }
+        if (here === '/' && next === '/') {
+          const end = source.indexOf('\n', index + 2);
+          index = end < 0 ? source.length : end;
+          continue;
+        }
+        if (here === '"' || here === "'" || here === '`') {
+          index += 1;
+          while (index < source.length && source[index] !== here) {
+            if (source[index] === '\\') index += 1;
+            index += 1;
+          }
+          index += 1;
+          previous = 'a';
+          continue;
+        }
+        if (here === '/' && /(?:^|[(,=:[!&|?{};+\-*%<>~^])$/u.test(previous)) {
+          // A regular expression literal; its body is pattern text, not code.
+          index += 1;
+          let inClass = false;
+          while (index < source.length) {
+            const part = source[index];
+            if (part === '\\') index += 2;
+            else if (part === '[') {
+              inClass = true;
+              index += 1;
+            } else if (part === ']') {
+              inClass = false;
+              index += 1;
+            } else if (part === '/' && !inClass) {
+              index += 1;
+              break;
+            } else if (part === '\n') break;
+            else index += 1;
+          }
+          previous = 'a';
+          continue;
+        }
+        if (here === '(' || here === '[' || here === '{') depth += 1;
+        else if (here === ')' || here === ']' || here === '}') depth = Math.max(0, depth - 1);
+        else if (depth === 0 && here === 'r' && source.startsWith('return', index)) {
+          const before = source[index - 1] ?? '';
+          const after = source[index + 6] ?? '';
+          if (!/[\w$]/u.test(before) && !/[\w$]/u.test(after)) return true;
+        }
+        if (!/\s/u.test(here)) previous = here;
+        index += 1;
+      }
+      return false;
+    }
+
     function parsesAsClassicScript(body) {
       try {
         // A top-level return parses in a function body but not as a classic script.
-        if (/(?:^|[;{}])\s*return\b/u.test(codeOnly(body))) return false;
+        if (hasTopLevelReturn(body)) return false;
         new Function(body); // eslint-disable-line no-new-func
         return true;
       } catch (error) {

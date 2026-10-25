@@ -137,8 +137,12 @@ check('a stale source map is answered here', staleMap.status === 200 && staleMap
 // A document made before two plugins were grouped apart asks for a set the table never sends
 // again. Each plugin is still served on its own, so the set is answered from those bodies in the
 // order the document listed them: a 404 here used to end the desktop app.
+const parts = (...bodies) => bodies.join('\n;\n')
 const regrouped = await call(first.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js,@deepseek-ai/dsh-client-modules/client.js&rev=g1' })
-check('a set the table no longer groups is answered entry by entry', regrouped.status === 200 && regrouped.body === '/* one entry */ @local/a/* one entry */ @deepseek-ai/dsh-client-modules', `${regrouped.status} ${regrouped.body}`)
+check('a set the table no longer groups is answered entry by entry', regrouped.status === 200 && regrouped.body === '/* one entry */ @local/a\n;\n/* one entry */ @deepseek-ai/dsh-client-modules', `${regrouped.status} ${regrouped.body}`)
+// Two bodies joined without a separator do not parse as one script, and the document would run
+// neither; the line holding `;` between them is what keeps each one a statement of its own.
+check('joined bodies are separated by a statement boundary', regrouped.body === parts('/* one entry */ @local/a', '/* one entry */ @deepseek-ai/dsh-client-modules'), regrouped.body)
 check('the regrouped answer is not cached', regrouped.headers?.['cache-control'] === 'no-store', JSON.stringify(regrouped.headers))
 
 const regroupedMissing = await call(first.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js,@local/gone/client.js&rev=g1' })

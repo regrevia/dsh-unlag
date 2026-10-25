@@ -119,6 +119,14 @@ check('a saved script that parses lets the rebuild through', (await compiles.pro
 const returned = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('return;\n/* @local/a */') } })
 check('a saved script with a top-level return holds the rebuild', (await returned.probe.startupLooksServable()) === false)
 
+// A return inside a callback is ordinary code. Reading every `}` before a `return` as a top-level
+// one refused every real bundle the app serves, which held the rebuild while nothing was wrong.
+const nested = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('(function () {\n  const bytes = [7];\n  const hex = bytes.map((byte) => {\n    return byte.toString(16)\n  })\n  return hex\n})()\n/* @local/a */') } })
+check('a return inside a callback does not hold the rebuild', (await nested.probe.startupLooksServable()) === true, String(nested.probe.startupHoldReason()))
+// A pattern that mentions the keyword is not a return either.
+const pattern = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('const re = /[}]\\s*return/\nif (re.test("a")) { console.log("a") }\n/* @local/a */') } })
+check('a pattern holding the keyword does not hold the rebuild', (await pattern.probe.startupLooksServable()) === true, String(pattern.probe.startupHoldReason()))
+
 // Without the running list there is nothing to compare a saved one against, so it is not trusted.
 const noLive = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live: null, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('const id = "@local/a"') } })
 check('a saved list without a served one holds the rebuild', (await noLive.probe.startupLooksServable()) === false)

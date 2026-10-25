@@ -621,7 +621,13 @@ async function regroupedBundleAnswer(clientModules, graph, request) {
     parts.push(body)
   }
   if (parts.length === 0) return null
-  const body = Buffer.concat(parts)
+  /**
+   * Each entry body is a script of its own and need not end where another can begin: an entry
+   * that ends in `})` followed by one that starts with an identifier is a syntax error, and a
+   * document would run neither. A line holding just `;` between them keeps every body its own
+   * statement whatever the two sides end and start with, and leaves each body itself untouched.
+   */
+  const body = Buffer.concat(parts.flatMap((part, index) => (index === parts.length - 1 ? [part] : [part, Buffer.from('\n;\n')])))
   if (!request.ids.every((id) => body.includes(id))) return null
   return { body, contentType: 'text/javascript; charset=utf-8', ids: request.ids }
 }
