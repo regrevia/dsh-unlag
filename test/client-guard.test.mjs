@@ -265,6 +265,18 @@ check('no saved list is read outside the desktop shell', (await web.probe.deskto
 const webStale = harness({ userAgent: 'Mozilla/5.0 (Macintosh) Firefox/140.0', frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=new': gone } })
 check('a served list that does not load holds the rebuild', (await webStale.probe.startupLooksServable()) === false)
 
+// A browser tab of a profile with no plugin at all: the next document loads no script, so a
+// rebuild has nothing to fail. A held press there would blame a list that is perfectly complete.
+const noPlugins = harness({ userAgent: 'Mozilla/5.0 (Macintosh) Firefox/140.0', boot: { rev: 'new', entries: [], batches: [] } })
+check('a page with no plugin at all lets the rebuild through', (await noPlugins.probe.startupLooksServable()) === true, String(noPlugins.probe.startupHoldReason()))
+check('and reads no script for it', noPlugins.requests.every((r) => !r.path.startsWith('/plugins/')), JSON.stringify(noPlugins.requests.map((r) => r.path)))
+
+// A list that names plugins but no script serving them is still unproven, and says so.
+const noBatches = harness({ userAgent: 'Mozilla/5.0 (Macintosh) Firefox/140.0', boot: { rev: 'new', entries: [{ id: '@local/a', rev: 'new' }], batches: [] } })
+check('plugins with no batch to load them still holds', (await noBatches.probe.startupLooksServable()) === false)
+check('and names the list as what stopped it', noBatches.probe.startupHoldReason() === 'graph', String(noBatches.probe.startupHoldReason()))
+
+
 // --- the payload itself: an app that cannot answer is not trusted to be safe -------------------
 const broken = harness({ bridge: { ready: async () => { throw new Error('not ready') } }, frozen: boot, live })
 check('an app that cannot answer reads as unknown', (await broken.probe.desktopStartupPayload()) === null)

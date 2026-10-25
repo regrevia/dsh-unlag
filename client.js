@@ -299,6 +299,9 @@ window.__ModuleLoader__.load({
       } catch {
         return held('graph');
       }
+      // A profile with no plugin at all hands the next document no script to load: a rebuild has
+      // nothing to fail, and holding would refuse it with a reason that is not true.
+      if (entries.length === 0 && batches.length === 0) return true;
       if (entries.length === 0 || batches.length === 0) return held('graph');
       const covered = new Set();
       const sources = [];
