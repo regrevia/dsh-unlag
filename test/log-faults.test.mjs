@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -66,6 +66,43 @@ try {
 check('an unwritable log does not throw', applyBlocked.status === 0, applyBlocked.stderr.slice(0, 160))
 check('the plugin still mounts and answers state', blockedAnswer?.status === 200 && blockedAnswer?.routes === 5, JSON.stringify(blockedAnswer))
 check('and nothing is written through the unwritable path', statSync(blocked).isDirectory())
+
+// A log directory that exists but refuses writes: the press path answers from what it did, never
+// from whether the line could be written. A press that failed only because its own record could
+// not be saved would look like a refused reload with no reason.
+const readOnlyDir = join(root, 'readonly')
+mkdirSync(readOnlyDir, { recursive: true })
+chmodSync(readOnlyDir, 0o500)
+const applyReadOnly = run(
+  { HOME: join(root, 'readonly-home'), DSH_UNLAG_LOG: join(readOnlyDir, 'press.log') },
+  `const { apply } = await import('./index.js')
+   const routes = new Map()
+   const graph = { rev: 'new', entries: [{ id: '@local/a', rev: 'new', url: '/plugins/??@local/a/client.js&rev=new' }], batches: [{ url: '/plugins/??@local/a/client.js&rev=new', entries: ['@local/a'], rev: 'new' }] }
+   const ctx = { get: (key) => key === 'webServer'
+       ? { collectIndexInjections: () => [], register: (route) => { routes.set(route.path, route.handler); return () => routes.delete(route.path) } }
+       : key === 'clientModules' ? { graph: () => graph, fetchBundle: async () => new Response('window.__ModuleLoader__.load({ id: "@local/a", factory() {} })', { status: 200 }) }
+       : key === 'hmr' ? { baseDir: '/tmp/unlag-ro-profile', runExclusive: async (op) => op(), reconcileProfile: async () => ({ warnings: [], pending: [] }) }
+       : undefined, on: () => {} }
+   apply(ctx, {})
+   const answer = async (url, method) => {
+     const res = { status: 0, body: '', writableEnded: false, writeHead(s) { this.status = s }, end(b) { this.body += b ?? ''; this.writableEnded = true } }
+     await routes.get(url.split('?')[0])({ method, url, headers: { 'x-dsh-unlag': '1', host: '127.0.0.1:52847', origin: 'http://127.0.0.1:52847' }, on() {}, destroy() {} }, res)
+     return { status: res.status, verdict: JSON.parse(res.body || '{}').status, ended: res.writableEnded }
+   }
+   const pressed = await answer('/dsh-unlag/reload', 'POST')
+   const reported = await answer('/dsh-unlag/report?event=mounted', 'POST')
+   const state = await answer('/dsh-unlag/state', 'GET')
+   console.log(JSON.stringify({ pressed, reported, state }))`,
+)
+let readOnlyAnswer = null
+try {
+  readOnlyAnswer = JSON.parse(applyReadOnly.stdout.trim().split('\n').pop())
+} catch {}
+check('an unwritable log directory does not throw on the press path', applyReadOnly.status === 0, applyReadOnly.stderr.slice(0, 700))
+check('and a press there still answers from what it did', readOnlyAnswer?.pressed?.status === 200 && readOnlyAnswer?.pressed?.verdict === 'done' && readOnlyAnswer?.pressed?.ended === true, JSON.stringify(readOnlyAnswer?.pressed))
+check('and the report it sends is still recorded as an answer', readOnlyAnswer?.reported?.status === 200 && readOnlyAnswer?.reported?.verdict === 'done', JSON.stringify(readOnlyAnswer?.reported))
+check('and the state read is unaffected', readOnlyAnswer?.state?.status === 200 && readOnlyAnswer?.state?.ended === true, JSON.stringify(readOnlyAnswer?.state))
+chmodSync(readOnlyDir, 0o700)
 
 // A log that is capped must start over rather than grow: proven by writing past the cap first.
 const capped = join(root, 'capped.log')
