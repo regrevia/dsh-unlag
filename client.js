@@ -100,15 +100,23 @@ window.__ModuleLoader__.load({
      */
     const HOST_BASE = '/dsh-unlag'; // ui-copy-ignore
 
-    async function readSettings() {
+    async function readSettings(attempt = 0) {
+      const again = async () => {
+        if (attempt >= 1) return null;
+        await new Promise((resolve) => setTimeout(resolve, 250)); // ui-copy-ignore
+        return readSettings(attempt + 1);
+      };
       try {
+        // The answer can be missing for a moment while the plugin set is recomposed, which reads
+        // exactly like a press with nothing switched on. One more ask costs a fraction of a second
+        // and turns that into the press the person meant; a second miss is still reported as such.
         const response = await withTimeout(fetch(`${HOST_BASE}/state`, { cache: 'no-store', credentials: 'same-origin' }));
-        if (!response.ok) return null;
+        if (!response.ok) return again();
         const data = await withTimeout(response.json());
-        if (data === null || typeof data !== 'object') return null;
+        if (data === null || typeof data !== 'object') return again();
         return { plugins: data.plugins !== false, page: data.page !== false };
       } catch {
-        return null;
+        return again();
       }
     }
 
@@ -918,6 +926,7 @@ window.__ModuleLoader__.load({
      */
     const PROBE = {
       prepareInterface,
+      readSettings,
       startupLooksServable,
       startupHoldReason: () => holdReason,
       noticeFor,

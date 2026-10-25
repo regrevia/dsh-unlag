@@ -20,7 +20,7 @@ const gone = () => new Response('', { status: 404 })
 const asPath = (url) => String(url).replace(/^https?:\/\/[^/]+/u, '')
 const registered = (id) => `window.__ModuleLoader__.load({ id: "${id}", factory() {} })`
 
-function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge, boot, frozen, live, scripts = {}, probe = true, prepare, verifyAnswer, verifyReply, shimWrapped, dom, noCustomEvent } = {}) {
+function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge, boot, frozen, live, scripts = {}, probe = true, prepare, verifyAnswer, verifyReply, shimWrapped, stateReply, dom, noCustomEvent } = {}) {
   let registration
   const navigations = []
   const requests = []
@@ -30,6 +30,9 @@ function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge
     if (path.startsWith('/dsh-unlag/graph')) {
       if (live === undefined || live === null) return gone()
       return new Response(JSON.stringify({ graph: live }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    if (path.startsWith('/dsh-unlag/state') && stateReply !== undefined) {
+      return stateReply()
     }
     if (path.startsWith('/dsh-unlag/state') && shimWrapped !== undefined) {
       return new Response(JSON.stringify({ version: 'test', code: 'test', plugins: true, page: true, shim: { wrapped: shimWrapped } }), { status: 200, headers: { 'content-type': 'application/json' } })
@@ -461,6 +464,28 @@ check('and the notice says the list answered too slowly', String(slowCheck.probe
   })
   check('an entry whose id cannot be read holds the press', (await badEntry.plugin.probe.startupLooksServable()) === false)
   check('and names coverage as what stopped it', badEntry.plugin.probe.startupHoldReason() === 'covers', String(badEntry.plugin.probe.startupHoldReason()))
+}
+
+// A settings answer that is missing for a moment is asked for once more, so a press made while the
+// plugin set is being recomposed still does what it says.
+{
+  let asked = 0
+  const flaky = harness({
+    stateReply: () => {
+      asked += 1
+      if (asked === 1) return new Response('', { status: 404 })
+      return new Response(JSON.stringify({ plugins: true, page: false }), { status: 200, headers: { 'content-type': 'application/json' } })
+    },
+  })
+  const settings = await flaky.plugin.probe.readSettings()
+  check('a settings answer that was missing once is asked again', asked === 2, String(asked))
+  check('and the press then reads what is switched on', settings?.plugins === true && settings?.page === false, JSON.stringify(settings))
+
+  let misses = 0
+  const never = harness({ stateReply: () => { misses += 1; return new Response('', { status: 404 }) } })
+  const none = await never.plugin.probe.readSettings()
+  check('a settings answer that stays missing is asked twice and no more', misses === 2, String(misses))
+  check('and the press holds instead of guessing', none === null, JSON.stringify(none))
 }
 
 console.log(out.join('\n'))
