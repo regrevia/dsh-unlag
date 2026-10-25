@@ -168,10 +168,11 @@ const nestedRoutes = (() => {
       if (key === 'hmr')
         return {
           baseDir: '/tmp/x',
+          operations: Promise.resolve(),
           runExclusive: async (op) => op(),
           reconcileProfile: async () => {
             nestedTries += 1
-            if (nestedTries <= 2) throw new Error('HMR transactions cannot be nested')
+            if (nestedTries <= 1) throw new Error('HMR transactions cannot be nested')
             return { warnings: [], pending: [] }
           },
         }
@@ -185,7 +186,7 @@ const nestedRoutes = (() => {
 })()
 const nestedRes = fakeRes()
 await nestedRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, nestedRes)
-check('a colliding swap is retried', nestedRes.body === '{"status":"done"}' && nestedTries === 3, `tries=${nestedTries}`)
+check('a stale transaction refusal still reloads', nestedRes.body === '{"status":"done"}' && nestedTries === 2, `tries=${nestedTries}`)
 // --- hostile surroundings --------------------------------------------------------------------
 let survived = true
 try {

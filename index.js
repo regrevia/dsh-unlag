@@ -153,6 +153,19 @@ function pluginReloader(ctx, config) {
   let deferrals = 0
   let lastRun = 0
 
+  /** Resolve true when the HMR queue is empty, i.e. no transaction is really running right now. */
+  const queueIsIdle = async (hmr) => {
+    const queue = hmr?.operations
+    if (typeof queue?.then !== 'function') return true
+    let settled = false
+    Promise.resolve(queue).then(
+      () => (settled = true),
+      () => (settled = true),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    return settled
+  }
+
   const busy = () => {
     if (!idleOnly) return false
     try {
@@ -170,20 +183,30 @@ function pluginReloader(ctx, config) {
    * so a nested refusal is retried instead of being reported as a reload that failed.
    */
   const reload = async (hmr) => {
+    let result = null
     for (let attempt = 0; ; attempt += 1) {
       try {
-        const result = await hmr.runExclusive(() => hmr.reconcileProfile([]))
-        const warnings = Array.isArray(result?.warnings) ? result.warnings.length : 0
-        const pending = Array.isArray(result?.pending) ? result.pending.length : 0
-        const suffix = typeof result?.restartReason === 'string' ? ` restart=${result.restartReason}` : ''
-        log(`plugins reloaded (warnings=${warnings} pending=${pending}${suffix})`)
-        return
+        result = await hmr.runExclusive(() => hmr.reconcileProfile([]))
+        break
       } catch (error) {
         const message = String(error?.message ?? error)
-        if (attempt >= 9 || message.includes('nested') === false) throw error
+        if (message.includes('nested') === false) throw error
+        if (await queueIsIdle(hmr)) {
+          // The refusal came from a finished transaction whose context this callback inherited
+          // (a watcher created while a reload was restarting this plugin). With the queue empty
+          // there is nothing to serialize against, so recompose directly.
+          log('reload ran outside the queue: the caller inherited a finished transaction')
+          result = await hmr.reconcileProfile([])
+          break
+        }
+        if (attempt >= 9) throw error
         await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)))
       }
     }
+    const warnings = Array.isArray(result?.warnings) ? result.warnings.length : 0
+    const pending = Array.isArray(result?.pending) ? result.pending.length : 0
+    const suffix = typeof result?.restartReason === 'string' ? ` restart=${result.restartReason}` : ''
+    log(`plugins reloaded (warnings=${warnings} pending=${pending}${suffix})`)
   }
 
   const flush = async () => {
