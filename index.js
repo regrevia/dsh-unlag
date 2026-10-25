@@ -830,12 +830,19 @@ function buttonAllowed(req) {
       return false
     }
     const origin = typeof req?.headers?.origin === 'string' ? req.headers.origin.trim().toLowerCase() : ''
-    if (origin === 'null') return false
+    // An opaque origin belongs to a document this machine did not open, and an origin that cannot
+    // be read is one this check cannot judge. Both are refused, and both say so: a refusal nobody
+    // can find afterwards is the kind of silence that makes a wrong answer look like a right one.
+    if (origin === 'null') {
+      log('refused a press from an opaque origin')
+      return false
+    }
     if (origin !== '') {
       let originSite = ''
       try {
         originSite = new URL(origin).host.toLowerCase() // ui-copy-ignore
       } catch {
+        log(`refused a press from an origin that is not an address: ${oneLine(origin, 200)}`)
         return false
       }
       if (originSite !== site) {
@@ -1936,8 +1943,10 @@ function serveButton(ctx, controller, config) {
            * A page on any site can post to a local address without asking first, and a log is
            * evidence: a made-up outcome must not get in. The header the page's own script sends
            * makes the request one a browser has to ask about first, and this app never agrees.
+           * The same address check the press uses applies here too: the log is the record a press
+           * leaves behind, so a page that may not press may not write into it either.
            */
-          if (typeof req?.headers?.[BUTTON_HEADER] !== 'string') return sendJson(res, 403, { status: 'forbidden' })
+          if (buttonAllowed(req) === false) return sendJson(res, 403, { status: 'forbidden' })
           let query = ''
           try {
             query = new URL(String(req?.url ?? ''), 'http://x').searchParams.toString()
