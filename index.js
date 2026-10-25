@@ -371,6 +371,8 @@ function pluginReloader(ctx, config) {
       request.then(settle, settle)
       return request
     }
+    /** Whether the bundle route was wrapped when this update started, so a re-wrap is written down. */
+    const shimWrappedBefore = bundleShimStatus(ctx).wrapped
     let result = null
     for (let attempt = 0; ; attempt += 1) {
       try {
@@ -390,6 +392,19 @@ function pluginReloader(ctx, config) {
         }
         throw error
       }
+    }
+    /**
+     * A recomposition can leave the bundle route owned by a fresh handler. A page started from the
+     * launch-time list is then answered by the app's own 404 for a stale set, and the desktop shell
+     * treats such an entry as fatal — it exits and takes every running turn with it. Wrapping again
+     * here means the time between an update and the next press is never left unwrapped.
+     */
+    try {
+      ensureBundleShim(ctx)
+      if (bundleShimStatus(ctx).wrapped !== true) log('the bundle route is not wrapped after the update; a page started now may not boot')
+      else if (shimWrappedBefore !== true) log('the bundle route was wrapped again after the update')
+    } catch (error) {
+      log(`cannot wrap the bundle route after the update: ${error?.message ?? error}`)
     }
     const warnings = Array.isArray(result?.warnings) ? result.warnings : []
     const pending = Array.isArray(result?.pending) ? result.pending : []

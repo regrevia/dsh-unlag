@@ -56,7 +56,7 @@ function fakeRes() {
 }
 
 /** Mount the plugin over a stand-in module table and hand back the wrapped route. */
-function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.get(path), keep = null, late = false, shape = 'handler', breaksMidWrite = false, hang = false } = {}) {
+function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.get(path), keep = null, late = false, shape = 'handler', breaksMidWrite = false, hang = false, hmr = null } = {}) {
   const original = (req, res) => {
     if (breaksMidWrite) {
       res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' })
@@ -116,7 +116,9 @@ function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.
                 return new Response(body, { status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8' } })
               },
             }
-          : undefined,
+          : key === 'hmr'
+            ? hmr
+            : undefined,
     on: (event, fn) => {
       if (event === 'dispose') handled.push({ dispose: fn })
     },
@@ -229,6 +231,19 @@ await call(replaced.routes.get('/dsh-unlag/graph'), { method: 'GET', url: '/dsh-
 check('a route replaced since the wrap is wrapped again', replaced.route.handler !== foreign)
 const replacedStale = await call(replaced.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js&rev=old' })
 check('the wrapped route answers a stale entry again', replacedStale.status === 200 && replacedStale.body === '/* one entry */ @local/a', `${replacedStale.status} ${replacedStale.body}`)
+
+// --- an update that hands the route to a fresh handler must not leave it unwrapped ------------
+const upd = mount({ hmr: { runExclusive: (fn) => Promise.resolve(fn()), reconcileProfile: async () => ({ warnings: [] }) } })
+const updForeign = (req, res) => {
+  res.writeHead(404, { 'content-type': 'text/plain' })
+  res.end('foreign')
+}
+upd.route.handler = updForeign
+const updPress = await call(upd.routes.get('/dsh-unlag/reload'), { method: 'POST', url: '/dsh-unlag/reload', headers: { 'x-dsh-unlag': '1' } })
+check('a press over a re-registered route answers', updPress.status === 200, String(updPress.status))
+check('an update wraps the route again', upd.route.handler !== updForeign)
+const updStale = await call(upd.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js&rev=old' })
+check('a page starting after an update still gets its stale entry', updStale.status === 200 && updStale.body === '/* one entry */ @local/a', `${updStale.status} ${updStale.body}`)
 
 // --- a route registered as a resource, not a handler (newer app) ------------------------------
 // Dispatch prefers the resource branch, so wrapping the handler of a route that has one would
