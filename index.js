@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, watch, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, watch, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { Script } from 'node:vm'
@@ -271,9 +271,19 @@ function log(line) {
      * A file that only grows eventually costs the app its own memory budget, and a burst of lines
      * can land between two periodic checks: the size is read before every write and the whole
      * line has to fit, so the file never passes the cap even for one event.
+     *
+     * A full file is moved aside rather than emptied: the lines it holds are the evidence for
+     * whatever just happened, and the event that fills the log is very often the one worth reading.
+     * One previous generation is kept, so a hostile page can cost at most one past million bytes.
      */
     try {
-      if (statSync(target).size + Buffer.byteLength(text) > LOG_MAX_BYTES) writeFileSync(target, '')
+      if (statSync(target).size + Buffer.byteLength(text) > LOG_MAX_BYTES) {
+        try {
+          renameSync(target, `${target}.1`)
+        } catch {
+          writeFileSync(target, '')
+        }
+      }
     } catch {
       /* a missing or unreadable log is created by the append below */
     }

@@ -39,6 +39,17 @@ const size = (() => {
 })()
 check('the oversized log starts over instead of growing', size >= 0 && size < 4096, `size=${size}`)
 
+// Emptying a full log would throw away the lines that explain the event which filled it, so the
+// file is moved aside first: the previous generation stays readable next to the new one.
+const kept = (() => {
+  try {
+    return readFileSync(`${LOG}.1`, 'utf8')
+  } catch {
+    return ''
+  }
+})()
+check('the full log is kept as one previous generation', kept.length >= CAP, `size=${kept.length}`)
+
 if (size > 0) {
   const text = readFileSync(LOG, 'utf8')
   check('the first line after the restart is a real one', /^\d{4}-\d{2}-\d{2}T/u.test(text), text.slice(0, 60))
