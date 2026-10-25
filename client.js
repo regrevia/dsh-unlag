@@ -115,6 +115,7 @@ window.__ModuleLoader__.load({
           for (const id of source.ids) {
             if (!body.includes(id)) return false;
           }
+          if (!parsesAsClassicScript(body)) return false;
         } catch {
           return false;
         }
@@ -124,6 +125,25 @@ window.__ModuleLoader__.load({
 
     // Every row kind a document boot understands; an unknown one ends the document.
     const STARTUP_ROW_KINDS = new Set(['global', 'script', 'script-src', 'script-preload', 'style', 'html']);
+
+    /**
+     * Whether a script body parses the way the document will parse it: as a classic script. A body
+     * that needs module syntax never runs, so the document that loads it fails to boot and the
+     * desktop shell ends. Compiling runs nothing, so nothing here has a side effect; a page that
+     * forbids compiling strings cannot answer, and then the checks already done stand.
+     * @param body - the served script.
+     * @returns true when the body parses, or when this page cannot compile one at all.
+     */
+    function parsesAsClassicScript(body) {
+      try {
+        new Function(body); // eslint-disable-line no-new-func
+        return true;
+      } catch (error) {
+        const text = String(error?.message ?? error);
+        if (/unsafe-eval|Content Security Policy/iu.test(text)) return true;
+        return false;
+      }
+    }
 
     /**
      * The startup list the desktop shell hands the next document, exactly as it hands it. The
@@ -195,6 +215,7 @@ window.__ModuleLoader__.load({
           for (const id of bundledIds(target)) {
             if (!body.includes(id)) return false;
           }
+          if (!parsesAsClassicScript(body)) return false;
         } catch {
           return false;
         }

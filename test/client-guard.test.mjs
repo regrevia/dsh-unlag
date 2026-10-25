@@ -84,12 +84,12 @@ check('a held rebuild reports as blocked', (await crashed.probe.prepareInterface
 check('a held rebuild does not navigate', crashed.navigations.length === 0)
 
 // The same page after the plugin answers the old revision at the current one: safe to rebuild.
-const served = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('/* new code */ @local/a') } })
+const served = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('const id = "@local/a"') } })
 check('a saved script answered at the current revision lets the rebuild through', (await served.probe.startupLooksServable()) === true)
 check('the guard reads every saved script back', served.requests.filter((r) => r.path.startsWith('/plugins/')).length === 2, String(served.requests.filter((r) => r.path.startsWith('/plugins/')).length))
 
 // A plugin removed since the app started leaves a saved entry with nowhere to load from.
-const removed = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live: { rev: 'new', entries: [], batches: [] }, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('/* new code */ @local/a') } })
+const removed = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live: { rev: 'new', entries: [], batches: [] }, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('const id = "@local/a"') } })
 check('a plugin gone from the running app holds the rebuild', (await removed.probe.startupLooksServable()) === false)
 
 // A saved body that no longer carries the plugin it lists is broken exactly as a 404 is.
@@ -97,13 +97,19 @@ const foreign = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scri
 check('a saved script missing its plugin holds the rebuild', (await foreign.probe.startupLooksServable()) === false)
 
 // A row the boot code cannot read ends the document just as a missing script does.
-const unknownRow = harness({ bridge: bridgeOf([...rows(boot), { kind: 'frame-src', src: 'plugins/??@local/a/client.js&rev=stale' }]), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('/* new */ @local/a') } })
+const unknownRow = harness({ bridge: bridgeOf([...rows(boot), { kind: 'frame-src', src: 'plugins/??@local/a/client.js&rev=stale' }]), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('const id = "@local/a"') } })
 check('a saved row of an unknown kind holds the rebuild', (await unknownRow.probe.startupLooksServable()) === false)
-const noSource = harness({ bridge: bridgeOf([{ kind: 'script-src', src: '' }, ...rows(boot)]), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('/* new */ @local/a') } })
+const noSource = harness({ bridge: bridgeOf([{ kind: 'script-src', src: '' }, ...rows(boot)]), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('const id = "@local/a"') } })
 check('a saved script row with no address holds the rebuild', (await noSource.probe.startupLooksServable()) === false)
 
+// A body written as a module never runs as a classic script, so the document that loads it ends.
+const moduleBody = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('export function revealAllowed() {}\n/* @local/a */') } })
+check('a saved script written as a module holds the rebuild', (await moduleBody.probe.startupLooksServable()) === false)
+const compiles = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('(function () { const id = "@local/a" })()') } })
+check('a saved script that parses lets the rebuild through', (await compiles.probe.startupLooksServable()) === true)
+
 // --- a page not running inside the desktop shell: the served list is the one it asks -----------
-const web = harness({ userAgent: 'Mozilla/5.0 (Macintosh) Firefox/140.0', frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=new': () => ok('/* new */ @local/a') } })
+const web = harness({ userAgent: 'Mozilla/5.0 (Macintosh) Firefox/140.0', frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=new': () => ok('const id = "@local/a"') } })
 check('a page outside the desktop shell asks the served list', (await web.probe.startupLooksServable()) === true)
 check('no saved list is read outside the desktop shell', (await web.probe.desktopStartupPayload()) === null)
 
