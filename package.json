@@ -1,6 +1,6 @@
 {
   "name": "dsh-unlag",
-  "version": "1.8.2",
+  "version": "1.8.3",
   "type": "module",
   "description": "One press applies plugin edits right away and brings a laggy interface back; running turns, queued messages and unsent input are untouched, and nothing restarts.",
   "license": "MIT",

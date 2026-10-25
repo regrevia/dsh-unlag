@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { appendFileSync, existsSync, readFileSync, statSync, watch } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { appendFileSync, existsSync, readFileSync, readdirSync, statSync, watch } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -44,6 +45,11 @@ const BUTTON_HEADER = 'x-dsh-unlag'
 const CODE_EXTENSIONS = new Set(['.js', '.mjs', '.cjs'])
 /** Build output and dependency trees change without the source a developer edits changing. */
 const IGNORED_PATH = /(^|\/)(node_modules|\.git|\.cache|dist|build|coverage)([./]|$)/u
+/**
+ * A test edit does not change what a running plugin does, so it is not a reason to restart the
+ * plugin set. A development session runs its tests far more often than it changes source.
+ */
+const TEST_PATH = /(^|\/)(test|tests|__tests__|__mocks__)(\/|$)|[.-](test|spec)\.[cm]?js$/u
 const DEFAULT_ROOTS = [join(homedir(), '.dsh', 'plugins')]
 /** A turn that never goes idle must not turn this into an endless poll. */
 const MAX_DEFERRALS = 40
@@ -119,6 +125,40 @@ function closeAll(closer) {
   }
 }
 
+/**
+ * One line for the source a reload would act on: the same files, the same sizes, the same times.
+ * A watch event that arrives without any of that changing (a log beside a plugin, a save that
+ * wrote back the same bytes, a burst of events for one edit) is not a reason to swap anything,
+ * and swapping anyway is what put eleven applies next to a running turn.
+ */
+function fingerprintOf(roots) {
+  const rows = []
+  const walk = (dir, depth) => {
+    if (depth > 6) return
+    let names
+    try {
+      names = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const item of names) {
+      const path = join(dir, item.name)
+      if (item.isDirectory()) {
+        walk(path, depth + 1)
+        continue
+      }
+      if (item.isFile() === false || !worthReloading(path)) continue
+      try {
+        const stat = statSync(path)
+        rows.push(`${path}\u0000${stat.size}\u0000${stat.mtimeMs}`)
+      } catch {}
+    }
+  }
+  for (const root of roots) walk(root, 0)
+  rows.sort()
+  return createHash('sha1').update(rows.join('\u0001')).digest('hex')
+}
+
 /** Development roots the profile links by path; a packaged dependency is not watched. */
 function linkedRoots(baseDir) {
   const roots = []
@@ -142,7 +182,8 @@ function worthReloading(filename) {
   const name = typeof filename === 'string' ? filename : ''
   if (name === '') return false
   if (!CODE_EXTENSIONS.has(name.slice(name.lastIndexOf('.')))) return false
-  return !IGNORED_PATH.test(name)
+  if (IGNORED_PATH.test(name) || TEST_PATH.test(name)) return false
+  return true
 }
 
 /**
@@ -172,6 +213,17 @@ function pluginReloader(ctx, config) {
   /** Opt-in: wait for a quiet moment instead of swapping at once. Off by default. */
   const idleOnly = config?.idleOnly === true
   const debounce = Number.isFinite(config?.debounce) ? config.debounce : 300
+  /**
+   * How long a saved file waits for the rest of its burst. Editors write a file more than once and
+   * an agent saves a set of files in a row; a swap per write restarts the plugin set under the
+   * user's feet, so the watcher waits for the writes to stop instead of racing them. A press is
+   * never delayed by this.
+   */
+  /** How close together two applies may land; one apply restarts the whole plugin set. */
+  const minInterval = Number.isFinite(config?.minIntervalMs) ? Math.max(0, config.minIntervalMs) : MIN_INTERVAL_MS
+  const settle = Number.isFinite(config?.settleMs)
+    ? Math.max(0, config.settleMs)
+    : Math.max(debounce, Math.min(1200, debounce * 4))
 
   let timer = null
   let running = false
@@ -180,6 +232,14 @@ function pluginReloader(ctx, config) {
   let again = false
   let deferrals = 0
   let lastRun = 0
+  /** The source the last successful reload applied, so an unchanged save costs nothing. */
+  let lastStamp = null
+  /** The roots the watcher covers; empty when watching never started. */
+  let watchRoots = []
+  /** Whether the pending flush came from a saved file rather than from the button. */
+  let fromWatch = false
+  /** The file named by the newest watch event, so a reload can say what caused it. */
+  let lastChange = ''
 
   const turnsRunning = () => {
     try {
@@ -285,21 +345,38 @@ function pluginReloader(ctx, config) {
           return
         }
       }
-      const wait = lastRun + MIN_INTERVAL_MS - Date.now()
+      const wait = lastRun + minInterval - Date.now()
       if (wait > 0) {
         timer = setTimeout(() => void flush(), wait)
         return
       }
       const hmr = hmrService()
       if (hmr === null) return
+      const watched = fromWatch
+      fromWatch = false
+      /**
+       * A saved file that did not change anything a reload would apply is not applied again: the
+       * watcher reports more events than edits (one save can deliver several), and each apply
+       * restarts the whole plugin set next to whatever the user is doing.
+       */
+      const stamp = watchRoots.length === 0 ? null : fingerprintOf(watchRoots)
+      if (watched && stamp !== null && stamp === lastStamp) {
+        log(`a change to ${lastChange || 'a watched file'} left the plugin set as it is; nothing applied`)
+        return
+      }
+      if (watched && lastChange !== '') log(`reloading after a change to ${lastChange}`)
       deferrals = 0
       lastRun = Date.now()
       running = true
-      await reload(hmr)
+      try {
+        await reload(hmr)
+        if (stamp !== null) lastStamp = stamp
+      } finally {
+        running = false
+      }
     } catch (error) {
       log(`reload did not finish; the plugin set may be partly applied: ${error?.message ?? error}`)
     } finally {
-      running = false
       if (again) {
         again = false
         if (timer === null) timer = setTimeout(() => void flush(), debounce)
@@ -310,8 +387,10 @@ function pluginReloader(ctx, config) {
   const schedule = (filename) => {
     try {
       if (!worthReloading(filename)) return
+      fromWatch = true
+      lastChange = String(filename).split('/').pop() ?? ''
       if (timer !== null) clearTimeout(timer)
-      timer = setTimeout(() => void flush(), debounce)
+      timer = setTimeout(() => void flush(), settle)
     } catch (error) {
       log(`ignored a watch event: ${error?.message ?? error}`)
     }
@@ -433,6 +512,8 @@ function pluginReloader(ctx, config) {
     if (hmr === null) return null
     const configured = Array.isArray(config?.roots) ? config.roots.filter((root) => typeof root === 'string') : []
     const roots = [...new Set([...configured, ...linkedRoots(hmr.baseDir ?? process.cwd()), ...DEFAULT_ROOTS])]
+    watchRoots = roots
+    lastStamp = fingerprintOf(roots)
     const closers = []
     let watching = 0
     for (const root of roots) {
