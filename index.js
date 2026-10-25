@@ -134,7 +134,7 @@ function worthReloading(filename) {
 
 /**
  * The plugin half. One controller serves both callers: a saved file (debounced) and the header
- * button (immediate). Neither ever replaces code while a turn is running, and neither re-enters.
+ * button (immediate). A swap never waits for turns, never interrupts them, and never re-enters.
  */
 function pluginReloader(ctx, config) {
   /** HMR can start after this half, so ask per use instead of once at load. */
@@ -144,7 +144,8 @@ function pluginReloader(ctx, config) {
     return hmr
   }
   const available = () => hmrService() !== null
-  const idleOnly = config?.idleOnly !== false
+  /** Opt-in: wait for a quiet moment instead of swapping at once. Off by default. */
+  const idleOnly = config?.idleOnly === true
   const debounce = Number.isFinite(config?.debounce) ? config.debounce : 300
 
   let timer = null
@@ -166,8 +167,7 @@ function pluginReloader(ctx, config) {
     return settled
   }
 
-  const busy = () => {
-    if (!idleOnly) return false
+  const turnsRunning = () => {
     try {
       const agents = ctx.get('agents')
       const list = typeof agents?.list === 'function' ? agents.list() : []
@@ -176,6 +176,7 @@ function pluginReloader(ctx, config) {
       return false
     }
   }
+  const busy = () => idleOnly && turnsRunning()
 
   /**
    * Ask the HMR service to recompose; it throws rather than half-applying, so a catch is enough.
@@ -259,9 +260,8 @@ function pluginReloader(ctx, config) {
   }
 
   /**
-   * One press is enough. A press that lands during a running turn waits for a quiet moment, and
-   * after a short grace reloads anyway: swapping code never interrupts a turn, it only hands the
-   * next step newer code. Waiting forever would leave busy machines with a dead button.
+   * Opt-in (`idleOnly`) quiet-moment mode: wait for a gap, and after a short grace swap anyway,
+   * because waiting forever would leave busy machines with a dead button.
    */
   const WAIT_MAX_MS = Number.isFinite(config?.busyWaitMs) ? Math.max(0, config.busyWaitMs) : 60_000
   let queued = null
@@ -293,6 +293,7 @@ function pluginReloader(ctx, config) {
   const reloadNow = async (force = false) => {
     const hmr = hmrService()
     if (hmr === null) return 'unavailable'
+    if (turnsRunning()) log('reloading while turns are still running; they keep running')
     if (running || (force === false && busy())) return queueReload()
     const wait = lastRun + MIN_INTERVAL_MS - Date.now()
     if (wait > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(wait, 2000)))

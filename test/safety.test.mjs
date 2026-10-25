@@ -106,14 +106,23 @@ writeFileSync(join(devRoot, 'change.js'), 'export const c = 1\n')
 await sleep(300)
 check('an absolute link target is watched', reloads === beforeLinked + 1, `reloads=${reloads - beforeLinked}`)
 
-// 5. A busy agent defers instead of interrupting right away.
+// 5. A busy agent does not hold a save back: swapping code never interrupts a turn.
 const busyCtx = makeCtx({ status: 'running' })
 mod.apply(busyCtx, { debounce: 10 })
 await sleep(200)
 const beforeBusy = reloads
 writeFileSync(join(root, 'busy.js'), 'export const b = 1\n')
 await sleep(300)
-check('busy agent defers', reloads === beforeBusy, `reloads=${reloads - beforeBusy}`)
+check('a busy agent still swaps', reloads === beforeBusy + 1, `reloads=${reloads - beforeBusy}`)
+
+// 5b. The opt-in quiet mode waits instead.
+const quietCtx = makeCtx({ status: 'running' })
+mod.apply(quietCtx, { debounce: 10, idleOnly: true })
+await sleep(200)
+const beforeQuiet = reloads
+writeFileSync(join(root, 'quiet.js'), 'export const q = 1\n')
+await sleep(400)
+check('opt-in quiet mode waits', reloads === beforeQuiet, `reloads=${reloads - beforeQuiet}`)
 
 // 6. A reload while another is in flight does not re-enter.
 let concurrent = 0
