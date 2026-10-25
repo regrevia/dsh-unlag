@@ -34,7 +34,7 @@ function show(tree) {
   return pill === undefined ? null : String(Array.isArray(pill.children) ? pill.children.join('') : pill.children)
 }
 
-function harness({ settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold } = {}) {
+function harness({ settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, reportAnswers = [] } = {}) {
   const requests = []
   const navigations = []
   let reloadBody = reload
@@ -54,7 +54,12 @@ function harness({ settings = { plugins: true, page: true }, reload = { status: 
     }
     if (path.startsWith('/dsh-unlag/graph')) return new Response(JSON.stringify({ graph }), { status: 200, headers: { 'content-type': 'application/json' } })
     if (path.startsWith('/dsh-unlag/verify')) return new Response(JSON.stringify({ status: 'ok' }), { status: 200, headers: { 'content-type': 'application/json' } })
-    if (path.startsWith('/dsh-unlag/report')) return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+    if (path.startsWith('/dsh-unlag/report')) {
+      const next = reportAnswers.shift()
+      if (next === undefined) return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+      if (next === 0) throw new Error('the route was not listening')
+      return new Response('{}', { status: next, headers: { 'content-type': 'application/json' } })
+    }
     const answer = scripts[path]
     if (answer === undefined) return new Response('', { status: 404 })
     return new Response(body, { status: 200, headers: { 'content-type': 'text/javascript' } })
@@ -251,6 +256,14 @@ const count = (requests, piece) => requests.filter((request) => request.path.sta
   check('two presses in one moment replace plugins once', count(page.requests, '/dsh-unlag/reload') === 1, String(count(page.requests, '/dsh-unlag/reload')))
   check('two presses in one moment navigate once', page.navigations.length === 1, String(page.navigations.length))
 }
+
+// --- a line written while the route is being replaced ------------------------------------------
+const swapped = harness({ reload: { status: 'done' }, reportAnswers: [404, 0] })
+await swapped.press()
+await new Promise((resolve) => setTimeout(resolve, 1500))
+const reports = swapped.requests.filter((request) => request.path.includes('/dsh-unlag/report'))
+check('a line written during the swap is written again until the route answers', reports.length >= 3, `${reports.length} lines`)
+check('and the pressed page still rebuilt', swapped.navigations.length === 1, swapped.navigations.length)
 
 // --- the app reports the change as still starting: no page is built on it --------------------
 {

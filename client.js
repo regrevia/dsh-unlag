@@ -117,18 +117,33 @@ window.__ModuleLoader__.load({
      * before rebuilding looks exactly like one that never happened, and the page itself is gone by
      * the time anyone reads it.
      */
-    function report(event, gate) {
+    function report(event, gate, attempt = 0) {
       const page = String(window?.__DSH_BOOT__?.rev ?? '').replace(/[^a-z0-9]/gu, '').slice(0, 24);
       const named = gate === undefined ? `event=${event}` : `event=${event}&gate=${encodeURIComponent(gate)}`;
       const query = page === '' ? named : `${named}&rev=${page}`;
+      /**
+       * The route belongs to the instance this press is replacing. Its answer can land while the old
+       * one is gone and the new one is not listening yet, and a lost line is a press nobody can
+       * account for later. Two more tries cost nothing and keep the record.
+       */
+      const again = () => {
+        if (attempt >= 2) return;
+        setTimeout(() => report(event, gate, attempt + 1), attempt === 0 ? 300 : 900);
+      };
       try {
         fetch(`${HOST_BASE}/report?${query}`, {
           method: 'POST', // ui-copy-ignore
           credentials: 'same-origin',
           headers: { 'x-dsh-unlag': '1' }, // ui-copy-ignore
           keepalive: true, // ui-copy-ignore
-        }).catch(() => {});
-      } catch {}
+        })
+          .then((response) => {
+            if (!response?.ok) again();
+          })
+          .catch(again);
+      } catch {
+        again();
+      }
     }
 
     /** Ask the running app to replace changed plugins now; a running turn is reported, never cut. */
