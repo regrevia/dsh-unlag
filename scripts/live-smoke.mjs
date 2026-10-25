@@ -69,6 +69,26 @@ sandbox.globalThis = sandbox
 runInNewContext(source, sandbox)
 const probe = registration.factory(() => ({ createElement: () => null })).probe
 
+// The routes' own contract, proven against the running app: the two reads answer reads only, a
+// press route without the page's header refuses, and the verify route answers a verdict. None of
+// this swaps plugin code; the reload route is never called here.
+const contract = []
+const status = async (path, init) => {
+  try {
+    const response = await fetch(`${HOST}${path}`, init)
+    await response.arrayBuffer()
+    return response.status
+  } catch {
+    return 0
+  }
+}
+contract.push(['state GET', await status('/dsh-unlag/state'), 200])
+contract.push(['state DELETE', await status('/dsh-unlag/state', { method: 'DELETE' }), 405])
+contract.push(['graph PUT', await status('/dsh-unlag/graph', { method: 'PUT' }), 405])
+contract.push(['reload without header', await status('/dsh-unlag/reload', { method: 'POST' }), 403])
+contract.push(['verify without header', await status('/dsh-unlag/verify', { method: 'POST' }), 403])
+const contractHeld = contract.every(([, got, want]) => got === want)
+
 const running = { version: stated.version, code: stated.code, shim: stated.shim }
 const verdict = await probe.startupLooksServable()
 console.log(JSON.stringify({
@@ -80,5 +100,6 @@ console.log(JSON.stringify({
   verdict,
   holdReason: verdict ? null : probe.startupHoldReason(),
   asked: requests,
+  contract: Object.fromEntries(contract.map(([label, got, want]) => [label, `${got}${got === want ? '' : ` (wanted ${want})`}`])),
 }, null, 2))
-process.exitCode = verdict === true ? 0 : 1
+process.exitCode = verdict === true && contractHeld ? 0 : 1

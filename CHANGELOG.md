@@ -1,3 +1,9 @@
+## 1.9.50
+
+- `npm run smoke` 现在除了跑一遍页面半边的启动判定，还把运行中 App 的路由契约真的打一遍：`/state` `GET` 200、`DELETE` 405，`/graph` `PUT` 405，`/reload` 与 `/verify` 不带页面头时 403。它从不调用 `/reload`，只读，安全。
+- `test/smoke-script.test.mjs` 增加一项：起一个假宿主进程，确认 smoke 打印出的契约逐项正确；原来的用例只覆盖「没有宿主时 skip」。
+- 与官方文档核对：`docs/subsystems/client-modules.md` 仍为 204 行、sha256 前缀 `c7a3dfd256e195d1`（本次重新拉取比对一致）。
+
 ## 1.9.49
 
 - `/dsh-unlag/state` 与 `/dsh-unlag/graph` 现在只回答 `GET`（和 `HEAD`），其余方法回 405 `{"status":"method"}`，与官方 bundle 路由「不支持的方法回 405」一致。此前 `PUT`/`DELETE`/`PATCH` 也会拿到 200，读接口却对写方法答话，契约含糊。
