@@ -36,6 +36,7 @@ const response = (kind) => {
     status: 0, body: '', writableEnded: false, destroyed: false, headersSent: false,
     writeHead(status) {
       if (kind === 'writeHead throws') throw new Error('writeHead')
+      this.writeHeads = (this.writeHeads ?? 0) + 1
       this.status = status
       this.headersSent = true
     },
@@ -82,6 +83,21 @@ for (const path of ['/dsh-unlag/state', '/dsh-unlag/graph', '/dsh-unlag/verify',
     check(`${path}: ${kind} does not reject`, threw === null, String(threw?.message ?? ''))
   }
 }
+// A socket a previous write already used still has to be ended: the page waits on this request,
+// and an answer left open is a press that never finishes. Nothing may be written on top of a
+// status this route did not set.
+for (const path of ['/dsh-unlag/state', '/dsh-unlag/graph', '/dsh-unlag/verify', '/dsh-unlag/report', '/dsh-unlag/reload']) {
+  const res = response('plain response')
+  res.headersSent = true
+  let threw = null
+  try {
+    await routes.get(path)(request('POST', null), res)
+  } catch (error) {
+    threw = error
+  }
+  check(`${path}: a status already sent is ended, not written over`, threw === null && res.writableEnded === true && (res.writeHeads ?? 0) === 0, `threw=${threw === null ? 'no' : 'yes'} writeHeads=${res.writeHeads ?? 0} ended=${res.writableEnded}`)
+}
+
 for (const fault of faults) {
   let threw = null
   try {
