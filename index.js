@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
-import { appendFileSync, existsSync, readFileSync, readdirSync, statSync, watch, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, watch, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { Script } from 'node:vm'
@@ -222,6 +222,23 @@ export function oneLine(value, limit = 2000) {
   return text.length > limit ? `${text.slice(0, limit)}\u2026` : text
 }
 
+/** Whether the directory holding the log has already been made, so one attempt per process. */
+let logDirTried = false
+/**
+ * The log is the only evidence a failed update leaves behind, and a home directory that never ran
+ * this app yet has no directory for it: one attempt per process to make that directory, then the
+ * write is retried. Every failure stays silent, because logging must never take a press down.
+ */
+function ensureLogDir(target) {
+  if (logDirTried) return
+  logDirTried = true
+  const cut = target.lastIndexOf('/')
+  if (cut <= 0) return
+  try {
+    mkdirSync(target.slice(0, cut), { recursive: true })
+  } catch {}
+}
+
 function log(line) {
   try {
     const target = logTarget()
@@ -235,7 +252,15 @@ function log(line) {
         /* a missing or unreadable log is created by the append below */
       }
     }
-    appendFileSync(target, `${new Date().toISOString()} ${oneLine(line)}\n`)
+    const text = `${new Date().toISOString()} ${oneLine(line)}\n`
+    try {
+      appendFileSync(target, text)
+    } catch {
+      ensureLogDir(target)
+      try {
+        appendFileSync(target, text)
+      } catch {}
+    }
   } catch {}
 }
 
