@@ -65,8 +65,8 @@ function fakeRes() {
 }
 
 /** Mount the plugin over a stand-in module table and hand back the wrapped route. */
-function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.get(path), keep = null, late = false, shape = 'handler', streams404 = false, breaksMidWrite = false, hang = false, delay = 0, hmr = null } = {}) {
-  const original = (req, res) => {
+function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.get(path), keep = null, late = false, shape = 'handler', streams404 = false, callback404 = false, breaksMidWrite = false, hang = false, delay = 0, hmr = null } = {}) {
+  const original = async (req, res) => {
     if (breaksMidWrite) {
       res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' })
       throw new Error('table died mid-write')
@@ -78,6 +78,10 @@ function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.
       return
     }
     res.writeHead(404, { 'content-type': 'text/plain' })
+    if (callback404) {
+      await new Promise((resolve) => res.end('original', resolve))
+      return
+    }
     if (streams404) {
       res.write('half ')
       res.end('original')
@@ -243,6 +247,16 @@ const streamed = mount({ streams404: true })
 const streamedStale = await call(streamed.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js&rev=old' })
 check('a 404 written in pieces is still held back', streamedStale.status === 200 && streamedStale.body.includes('@local/a'), `${streamedStale.status} ${streamedStale.body}`)
 check('and the half-written 404 never reaches the wire', streamedStale.body === '/* one entry */ @local/a', `${streamedStale.status} ${JSON.stringify(streamedStale.body)}`)
+
+// --- a table that waits for its end callback before returning ---------------------------------
+// Node answers that callback when the body is flushed. A held 404 answers it too, or a handler
+// that awaits the flush would leave the fallback answer waiting behind it forever.
+const waited = mount({ callback404: true })
+const waitedStale = await Promise.race([
+  call(waited.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js&rev=old' }),
+  new Promise((resolve) => setTimeout(() => resolve({ status: 'timeout', body: '' }), 3000)),
+])
+check('a 404 whose handler waits for the flush still answers', waitedStale.status === 200 && waitedStale.body.includes('@local/a'), `${waitedStale.status} ${JSON.stringify(waitedStale.body)}`)
 
 const replaced = mount()
 const foreign = (req, res) => {

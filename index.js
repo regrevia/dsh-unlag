@@ -1336,10 +1336,33 @@ function serveBundlesAtCurrentRevision(ctx) {
        * be sent; so the pieces are kept with the body and the socket stays untouched.
        */
       const realWrite = res.write
+      // A held answer still owes the caller the callbacks it passed: dropping one would leave a
+      // handler that waits for the flush awaiting forever, and the fallback answer would never
+      // run. They are answered on the next turn once the held body is collected.
+      const answerCallback = (args) => {
+        for (let at = args.length - 1; at >= 0; at -= 1) {
+          if (typeof args[at] === 'function') {
+            const done = args[at]
+            try {
+              process.nextTick(() => {
+                try {
+                  done()
+                } catch {
+                  /* the caller's own callback failed; the document still needs its script */
+                }
+              })
+            } catch {
+              /* no event loop to defer on; the answer matters more than the callback */
+            }
+            return
+          }
+        }
+      }
       if (typeof realWrite === 'function') {
         res.write = (chunk, ...rest) => {
           if (held !== null) {
             if (typeof chunk === 'string' || Buffer.isBuffer(chunk)) parts.push(Buffer.from(chunk))
+            answerCallback(rest)
             return true
           }
           return realWrite.call(res, chunk, ...rest)
@@ -1351,6 +1374,7 @@ function serveBundlesAtCurrentRevision(ctx) {
             const last = args[0]
             if (typeof last === 'string' || Buffer.isBuffer(last)) parts.push(Buffer.from(last))
             body = parts.length === 0 ? '' : Buffer.concat(parts)
+            answerCallback(args)
             return res
           }
           return realEnd.apply(res, args)
