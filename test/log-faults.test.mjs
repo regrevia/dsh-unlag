@@ -112,5 +112,22 @@ check('a log past its cap starts over on the next write', statSync(capped).size 
 check('and the restart line is real', /^\d{4}-\d{2}-\d{2}T/u.test(readFileSync(capped, 'utf8')), readFileSync(capped, 'utf8').slice(0, 40))
 check('the capped run applies', applyCapped.status === 0, applyCapped.stderr.slice(0, 120))
 
+// Moving a full log aside can itself fail: the name it moves to may already be a directory, or the
+// directory may be read-only. Neither may cost the plugin its mount or the press its answer, and in
+// both the new line still has to land somewhere a reader can find it.
+const aside = join(root, 'aside.log')
+writeFileSync(aside, 'x'.repeat(1_100_000))
+mkdirSync(`${aside}.1`, { recursive: true })
+const applyAside = run({ HOME: join(root, 'aside-home'), DSH_UNLAG_LOG: aside }, `const { apply } = await import('./index.js'); apply({ get: () => undefined, on: () => {} }, {})`)
+check('a log whose previous generation name is taken still applies', applyAside.status === 0, applyAside.stderr.slice(0, 160))
+check('and the line still lands in the log itself', statSync(aside).isFile() && statSync(aside).size < 4096 && /^\d{4}-\d{2}-\d{2}T/u.test(readFileSync(aside, 'utf8')), `size=${statSync(aside).size}`)
+check('and the taken name is left as it was', statSync(`${aside}.1`).isDirectory())
+
+const asideFile = join(root, 'aside-file.log')
+writeFileSync(asideFile, 'x'.repeat(1_100_000))
+writeFileSync(`${asideFile}.1`, 'older generation')
+const applyAsideFile = run({ HOME: join(root, 'aside-file-home'), DSH_UNLAG_LOG: asideFile }, `const { apply } = await import('./index.js'); apply({ get: () => undefined, on: () => {} }, {})`)
+check('an existing previous generation is replaced by the fuller one', applyAsideFile.status === 0 && readFileSync(`${asideFile}.1`, 'utf8').length >= 1_100_000, `${applyAsideFile.status}/${readFileSync(`${asideFile}.1`, 'utf8').length}`)
+
 console.log(out.join('\n'))
 if (out.some((line) => line.startsWith('FAIL'))) process.exitCode = 1
