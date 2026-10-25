@@ -1,3 +1,8 @@
+## 1.9.52
+
+- 1.9.51 的 `files` 改动没落进 `package.json`（版本号落了，清单没落），发布出来的包仍然没有 `scripts/live-smoke.mjs`。这次把它真正加进清单，并用解包后的 tar 内容核对。
+- 与官方文档核对：`docs/subsystems/client-modules.md` 仍为 204 行、sha256 前缀 `c7a3dfd256e195d1`。
+
 ## 1.9.51
 
 - 发布包带上 `scripts/live-smoke.mjs`：README 让人 `npm run smoke`，装好的包里却没有这个文件，照着做会找不到脚本。

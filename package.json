@@ -1,6 +1,6 @@
 {
   "name": "dsh-unlag",
-  "version": "1.9.51",
+  "version": "1.9.52",
   "type": "module",
   "description": "A press applies plugin edits right away and brings a laggy interface back; automatic reloading stays off unless you turn it on, so the press is the only trigger, and nothing restarts.",
   "license": "MIT",
@@ -15,6 +15,7 @@
     "client.js",
     "cordis.patch.yml",
     "locale/*.json",
+    "scripts/live-smoke.mjs",
     "README.md",
     "icon.svg"
   ],
