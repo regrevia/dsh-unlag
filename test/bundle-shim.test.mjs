@@ -53,13 +53,14 @@ function fakeRes() {
 }
 
 /** Mount the plugin over a stand-in module table and hand back the wrapped route. */
-function mount({ graph = CURRENT, serve = (path) => bodies.get(path) } = {}) {
+function mount({ graph = CURRENT, serve = (path) => bodies.get(path), late = false } = {}) {
   const original = (req, res) => {
     res.writeHead(404, { 'content-type': 'text/plain' })
     res.end('original')
   }
   const route = { kind: 'prefix', path: '/plugins', handler: original }
-  const prefixes = new Map([['/plugins', route]])
+  const prefixes = new Map(late ? [] : [['/plugins', route]])
+  const routes = new Map()
   const handled = []
   const ctx = {
     get: (key) =>
@@ -67,7 +68,10 @@ function mount({ graph = CURRENT, serve = (path) => bodies.get(path) } = {}) {
         ? {
             prefixes,
             collectIndexInjections: () => [],
-            register: () => () => {},
+            register: ({ path, handler }) => {
+              routes.set(path, handler)
+              return () => {}
+            },
           }
         : key === 'clientModules'
           ? {
@@ -86,7 +90,7 @@ function mount({ graph = CURRENT, serve = (path) => bodies.get(path) } = {}) {
     },
   }
   apply(ctx, {})
-  return { route, original, ctx, handled, prefixes }
+  return { route, original, ctx, handled, prefixes, routes }
 }
 
 const call = (handler, req) => {
@@ -146,6 +150,26 @@ check('dispose leaves no mark on the route', Object.getOwnPropertySymbols(first.
 
 const again = mount()
 check('a second apply wraps the route again', again.route.handler !== again.original)
+
+// --- the route can appear after this plugin starts, and can be replaced afterwards ------------
+const late = mount({ late: true })
+check('a route that is not there yet leaves nothing wrapped', late.route.handler === late.original)
+late.prefixes.set('/plugins', late.route)
+const graphAsk = await call(late.routes.get('/dsh-unlag/graph'), { method: 'GET', url: '/dsh-unlag/graph' })
+check('a page asking for the startup list wraps the route that appeared', late.route.handler !== late.original, String(graphAsk.status))
+const lateStale = await call(late.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js&rev=old' })
+check('the late route answers a stale entry', lateStale.status === 200 && lateStale.body === '/* one entry */ @local/a', `${lateStale.status} ${lateStale.body}`)
+
+const replaced = mount()
+const foreign = (req, res) => {
+  res.writeHead(404, { 'content-type': 'text/plain' })
+  res.end('foreign')
+}
+replaced.route.handler = foreign
+await call(replaced.routes.get('/dsh-unlag/graph'), { method: 'GET', url: '/dsh-unlag/graph' })
+check('a route replaced since the wrap is wrapped again', replaced.route.handler !== foreign)
+const replacedStale = await call(replaced.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js&rev=old' })
+check('the wrapped route answers a stale entry again', replacedStale.status === 200 && replacedStale.body === '/* one entry */ @local/a', `${replacedStale.status} ${replacedStale.body}`)
 
 // --- the log tells a reader what happened -----------------------------------------------------
 const log = readFileSync(process.env.DSH_UNLAG_LOG, 'utf8')

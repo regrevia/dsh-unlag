@@ -12,6 +12,16 @@ const check = (label, ok, extra = '') => {
   if (!ok) process.exitCode = 1
 }
 
+/** The two switches a page reads out of a state answer; the rest of the answer is diagnostics. */
+const switches = (body) => {
+  try {
+    const { plugins, page } = JSON.parse(body)
+    return `${plugins}|${page}`
+  } catch {
+    return String(body)
+  }
+}
+
 // --- Config: validation never throws and defaults both switches on -----------------------------
 // Cordis reads every key of an object declaration as a required service name, so the declaration
 // must stay a plain array: `{ optional: [...] }` leaves the entry waiting forever on "optional".
@@ -87,7 +97,7 @@ check('four routes registered', both.routes.size === 4, [...both.routes.keys()].
 const stateRes = fakeRes()
 both.routes.get('/dsh-unlag/state')({ method: 'GET' }, stateRes)
 check('state GET 200', stateRes.status === 200)
-check('state says both on', stateRes.body === '{"plugins":true,"page":true}', stateRes.body)
+check('state says both on', switches(stateRes.body) === 'true|true', stateRes.body)
 
 const viaGet = fakeRes()
 await both.routes.get('/dsh-unlag/reload')({ method: 'GET', headers: {} }, viaGet)
@@ -131,12 +141,12 @@ await onlyPage.routes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-d
 check('switch off -> host does not reload', offRes.body === '{"status":"off"}' && onlyPage.handlers.reloads === undefined)
 const onlyPageState = fakeRes()
 onlyPage.routes.get('/dsh-unlag/state')({}, onlyPageState)
-check('switch off is announced', onlyPageState.body === '{"plugins":false,"page":true}', onlyPageState.body)
+check('switch off is announced', switches(onlyPageState.body) === 'false|true', onlyPageState.body)
 
 const onlyPlugins = mount({ reloadInterface: false })
 const onlyPluginsState = fakeRes()
 onlyPlugins.routes.get('/dsh-unlag/state')({}, onlyPluginsState)
-check('page off is announced', onlyPluginsState.body === '{"plugins":true,"page":false}', onlyPluginsState.body)
+check('page off is announced', switches(onlyPluginsState.body) === 'true|false', onlyPluginsState.body)
 
 // --- a turn in progress ----------------------------------------------------------------------
 let busyRan = 0

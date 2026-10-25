@@ -536,6 +536,36 @@ function releaseBundleShim(shim) {
 }
 
 /**
+ * Wrap the bundle route unless the wrap already there is the one still on the route. The route can
+ * appear after this plugin starts and can be replaced afterwards, so every caller that is about to
+ * matter (a reload, a page asking for the graph) asks again instead of trusting an earlier answer.
+ */
+function ensureBundleShim(ctx) {
+  const shim = globalThis[SHIM_KEY]
+  if (shim !== null && shim !== undefined) {
+    const route = ctx.get('webServer')?.prefixes?.get?.(BUNDLE_ROUTE)
+    if (route === shim.route && route.handler === shim.wrapped && route[SHIM_MARK] === true) return shim
+    releaseBundleShim(shim)
+    globalThis[SHIM_KEY] = null
+  }
+  globalThis[SHIM_KEY] = serveBundlesAtCurrentRevision(ctx)
+  return globalThis[SHIM_KEY]
+}
+
+/** What the bundle route looks like from here, so a stale answer can be told from a missing wrap. */
+function bundleShimStatus(ctx) {
+  const route = ctx.get('webServer')?.prefixes?.get?.(BUNDLE_ROUTE)
+  const clientModules = ctx.get('clientModules')
+  return {
+    route: route !== null && route !== undefined,
+    handler: typeof route?.handler === 'function',
+    wrapped: route?.[SHIM_MARK] === true,
+    fetch: typeof clientModules?.fetchBundle === 'function',
+    graph: typeof clientModules?.graph === 'function',
+  }
+}
+
+/**
  * The entry points the header button calls. Each answers with the current switches so the page
  * never guesses: with both off it does nothing, and a turn still running is reported rather than
  * cut. The press outcome is written to the log, because a press that stopped before rebuilding
@@ -552,12 +582,13 @@ function serveButton(ctx, controller, config) {
     [
       `${BASE_PATH}/state`,
       (_req, res) => {
-        sendJson(res, 200, { plugins: settings.reloadPlugins, page: settings.reloadInterface })
+        sendJson(res, 200, { plugins: settings.reloadPlugins, page: settings.reloadInterface, shim: bundleShimStatus(ctx) })
       },
     ],
     [
       `${BASE_PATH}/graph`,
       (_req, res) => {
+        ensureBundleShim(ctx)
         sendJson(res, 200, { graph: liveBootGraph(server) })
       },
     ],
@@ -622,8 +653,7 @@ export function apply(ctx, config) {
      * half starts, and one that appears after it.
      */
     const syncBundles = () => {
-      if (globalThis[SHIM_KEY] !== null) return
-      globalThis[SHIM_KEY] = serveBundlesAtCurrentRevision(ctx)
+      ensureBundleShim(ctx)
     }
     /** Watching needs HMR; start as soon as it exists, drop the watcher when it goes away. */
     const syncWatching = () => {
