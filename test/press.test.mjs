@@ -34,7 +34,7 @@ function show(tree) {
   return pill === undefined ? null : String(Array.isArray(pill.children) ? pill.children.join('') : pill.children)
 }
 
-function harness({ settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, href } = {}) {
+function harness({ settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, language = 'en-US', href } = {}) {
   const requests = []
   const navigations = []
   const current = { rev: graph.rev, code: 'c1' }
@@ -134,7 +134,7 @@ function harness({ settings = { plugins: true, page: true }, reload = { status: 
   }
   const sandbox = {
     window,
-    navigator: { language: 'en-US', userAgent: 'Mozilla/5.0 (Macintosh) Electron/44.7.0' },
+    navigator: { language, userAgent: 'Mozilla/5.0 (Macintosh) Electron/44.7.0' },
     location,
     document,
     fetch,
@@ -414,6 +414,33 @@ for (const [label, options] of [
   check(`${label} is logged as a screen hold`, gates.some((path) => path.includes('screen')), JSON.stringify(gates))
   check(`${label} leaves the button usable`, view.button !== null && view.button.props.disabled !== true)
   check(`${label} records no answered press`, page.stamp() === 0, String(page.stamp()))
+}
+
+// --- the same press on a Chinese page: every stopping point has words, not a missing key -------
+// The person reading this is more likely to see the Chinese copy than the English one, and a key
+// that only one branch lacks would show up as an empty notice exactly there.
+{
+  const stops = [
+    ['both switches off', { language: 'zh-CN', settings: { plugins: false, page: false } }],
+    ['unreadable switches', { language: 'zh-CN', settings: null }],
+    ['an open window', { language: 'zh-CN', openWindow: true }],
+    ['unsaved work', { language: 'zh-CN', answers: '别走' }],
+    ['an unreadable page', { language: 'zh-CN', brokenSelector: true }],
+    ['an update that failed', { language: 'zh-CN', reload: new Error('nope') }],
+  ]
+  for (const [label, options] of stops) {
+    const page = harness(options)
+    await page.press()
+    const words = String(page.notice() ?? '')
+    check(`${label} says something in Chinese`, words !== '' && !words.includes('undefined'), words)
+    check(`${label} says it in Chinese characters`, /[一-鿿]/u.test(words), words)
+  }
+  // The one press that goes through leaves no notice at all: the document it just asked for is
+  // already on its way.
+  const onItsWay = harness({ language: 'zh-CN' })
+  await onItsWay.press()
+  check('a rebuild that goes ahead leaves no notice behind', onItsWay.notice() === null, String(onItsWay.notice()))
+  check('and it navigates once in Chinese', onItsWay.navigations.length === 1, String(onItsWay.navigations.length))
 }
 
 // --- the list a booting document really gets: one inline queue script, inline global, both kinds ---
