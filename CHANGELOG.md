@@ -1,3 +1,8 @@
+## 1.9.51
+
+- 发布包带上 `scripts/live-smoke.mjs`：README 让人 `npm run smoke`，装好的包里却没有这个文件，照着做会找不到脚本。
+- 与官方文档核对：`docs/subsystems/client-modules.md` 仍为 204 行、sha256 前缀 `c7a3dfd256e195d1`。
+
 ## 1.9.50
 
 - `npm run smoke` 现在除了跑一遍页面半边的启动判定，还把运行中 App 的路由契约真的打一遍：`/state` `GET` 200、`DELETE` 405，`/graph` `PUT` 405，`/reload` 与 `/verify` 不带页面头时 403。它从不调用 `/reload`，只读，安全。
