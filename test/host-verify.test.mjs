@@ -1,4 +1,12 @@
 import { verifyStartup } from '../index.js'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+// Keep this run's evidence in its own file: the fallback below must leave a line there.
+const LOG = join(tmpdir(), 'dsh-unlag-host-verify-test.log')
+process.env.DSH_UNLAG_LOG = LOG
+writeFileSync(LOG, '')
 
 // Before a press navigates, the host half reads the scripts the next document would run and
 // compiles them. A document loads its startup list from the copy the desktop shell froze at launch,
@@ -67,6 +75,24 @@ const huge = table({ body: registered('@local/a') + '\n' + '/*' + 'x'.repeat(8 *
 const tooBig = await verifyStartup(huge, [frozenRow])
 check('an oversized startup script refuses instead of being compiled', tooBig.status === 'blocked' && tooBig.reason === 'size', JSON.stringify(tooBig))
 check('the refusal says how much it read', /bytes/.test(String(tooBig.detail)), String(tooBig.detail))
+
+// The fast path can fail on its own (a table that throws while answering the mapped address); the
+// check must fall back to the app's own route rather than refuse, and the failure must be evidence.
+let graphCalls = 0
+const flip = table()
+const flaky = {
+  graph: () => {
+    graphCalls += 1
+    if (graphCalls > 1) throw new Error('table gone\nsecond line')
+    return live
+  },
+  fetchBundle: flip.fetchBundle,
+}
+const recovered = await verifyStartup(flaky, [frozenRow])
+check('a check whose fast path fails answers from the app\'s own route', recovered.status === 'blocked' && recovered.reason === 'missing', JSON.stringify(recovered))
+const fallbackLog = readFileSync(LOG, 'utf8')
+check('the failure is in the log', fallbackLog.includes("asking the app's own route"), fallbackLog.trim().slice(0, 160))
+check('and it is one line', fallbackLog.trim().split('\n').filter((line) => line.includes('asking the app')).length === 1)
 
 // A list whose addresses each answer slowly is bounded as a whole: a press must not wait past the
 // moment the page stops waiting for the verdict.

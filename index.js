@@ -192,6 +192,16 @@ function settingsOf(config) {
   }
 }
 
+/**
+ * One log line, whatever the message. An address, a plugin id or an error can carry a line break,
+ * and a forged line in a file that is read as evidence is worse than a missing one; a message can
+ * also be arbitrarily long, and the log is one line per event.
+ */
+export function oneLine(value, limit = 2000) {
+  const text = String(value ?? '').replace(/[\r\n\u2028\u2029]+/gu, ' ')
+  return text.length > limit ? `${text.slice(0, limit)}\u2026` : text
+}
+
 function log(line) {
   try {
     const target = logTarget()
@@ -205,7 +215,7 @@ function log(line) {
         /* a missing or unreadable log is created by the append below */
       }
     }
-    appendFileSync(target, `${new Date().toISOString()} ${line}\n`)
+    appendFileSync(target, `${new Date().toISOString()} ${oneLine(line)}\n`)
   } catch {}
 }
 
@@ -1369,7 +1379,10 @@ function releaseBundleShim(shim) {
     }
     // The mark belongs to this wrapper only; a mark left by a newer one stays on the route.
     if (shim.route[SHIM_MARK] === shim.wrapped) delete shim.route[SHIM_MARK]
-  } catch {}
+  } catch (error) {
+    // A route left wrapped here would answer pages from a context that is going away.
+    log(`cannot unwrap the bundle route: ${oneLine(error?.message ?? error)}`)
+  }
 }
 
 /**
@@ -1572,7 +1585,10 @@ export async function readStartupScript(clientModules, url) {
   try {
     const answer = await currentBundleAnswer(clientModules, 'GET', url)
     if (answer !== null) return { status: 200, arrayBuffer: async () => answer.body }
-  } catch {}
+  } catch (error) {
+    // The fallback is still the right answer; the failure itself must not vanish.
+    log(`cannot answer ${oneLine(url)} at the revision the app serves now: ${oneLine(error?.message ?? error)}; asking the app's own route`)
+  }
   return fetchBundleAt(clientModules, url, 'GET')
 }
 

@@ -44,6 +44,15 @@ if (size > 0) {
   check('the first line after the restart is a real one', /^\d{4}-\d{2}-\d{2}T/u.test(text), text.slice(0, 60))
 }
 
+// One log line per event, whatever the message carries: a line break in an address or an error
+// would otherwise forge a line in the file that is read as evidence, and a huge message would make
+// one event cost the log its whole size budget at once.
+const { oneLine } = mod
+check('a log line never carries a line break', oneLine('a\nb\r\nc\u2028d') === 'a b c d', oneLine('a\nb\r\nc\u2028d'))
+check('a log line is capped', oneLine('x'.repeat(2500)).length === 2001, String(oneLine('x'.repeat(2500)).length))
+check('the cap says it cut the line', oneLine('x'.repeat(2500)).endsWith('\u2026'))
+check('a missing message is still a line', oneLine(null) === '' && oneLine(undefined) === '')
+
 for (const { name, ok, detail } of out) console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}  (${detail})`)
 const failed = out.filter((row) => row.ok !== true)
 console.log(failed.length === 0 ? 'ok' : `${failed.length} failed`)
