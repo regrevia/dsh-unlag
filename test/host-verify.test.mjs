@@ -79,7 +79,7 @@ check('a bundle the size of a real profile still verifies', large.status === 'ok
 
 // A body far larger than any real bundle is refused instead of read and compiled in this process:
 // a request must not be able to make one check hold an unbounded amount of text.
-const huge = table({ body: registered('@local/a') + '\n/*' + 'x'.repeat(65 * 1024 * 1024) + '*/' })
+const huge = table({ body: registered('@local/a') + '\n/*' + 'x'.repeat(25 * 1024 * 1024) + '*/' })
 const tooBig = await verifyStartup(huge, [frozenRow])
 check('an oversized startup script refuses instead of being compiled', tooBig.status === 'blocked' && tooBig.reason === 'size', JSON.stringify(tooBig))
 check('the refusal says how much it read', /bytes/.test(String(tooBig.detail)), String(tooBig.detail))
@@ -128,7 +128,7 @@ const summed = await verifyStartupRows(
   { rev: 'new', entries: manyRows.map((row, at) => ({ id: `@local/${'abc'[at]}`, url: row.replace(/^\/plugins\/\?\?/, 'plugins/??') })), batches: [] },
   async () => {
     servedLarge += 1
-    const body = 'abc'.split('').map((one) => registered(`@local/${one}`)).join('\n') + '\n/*' + 'x'.repeat(45 * 1024 * 1024) + '*/'
+    const body = 'abc'.split('').map((one) => registered(`@local/${one}`)).join('\n') + '\n/*' + 'x'.repeat(20 * 1024 * 1024) + '*/'
     return { status: 200, arrayBuffer: async () => body }
   },
   manyRows,
@@ -198,7 +198,6 @@ check('an empty address refuses instead of throwing', junk.status === 'blocked' 
   void oneRow
 }
 
-const failed = checks.filter((row) => !row.pass)
 // A plugin set that cannot be read at all leaves nothing to check a startup list against.
 {
   for (const [what, graph] of [['missing', null], ['not an object', 'gone'], ['without a list', { rev: 'r1' }], ['with a list it cannot name', { rev: 'r1', entries: 'gone' }]]) {
@@ -230,5 +229,20 @@ try {
 check('a row that cannot be read is refused, not thrown', entryThrew === null && entryRead?.status === 'blocked', String(entryThrew?.message ?? entryRead?.status))
 check('and the refusal names the list', entryRead?.reason === 'list', String(entryRead?.reason))
 
+// The measure this bound is set from: this app's own profile serves 15.7 MB across three bundles,
+// the largest 9.2 MB. Loosening the bound past what a profile needs is what let one check hold
+// hundreds of megabytes of text in the process that owns every running turn, so the checks below
+// pin both sides: the measured profile verifies, a body past the bound is refused before compile.
+const measuredRows = [frozenRow, '/plugins/??@local/b/client.js&rev=old']
+const measured = table({ body: registered('@local/a') + '\n/*' + 'x'.repeat(9 * 1024 * 1024) + '*/' })
+const measuredBig = await verifyStartupRows(
+  { rev: 'new', entries: measuredRows.map((row, at) => ({ id: `@local/${'ab'[at]}`, url: row.replace(/^\/plugins\/\?\?/, 'plugins/??') })), batches: [] },
+  async () => ({ status: 200, arrayBuffer: async () => registered('@local/a') + '\n' + registered('@local/b') + '\n/*' + 'x'.repeat(9 * 1024 * 1024) + '*/' }),
+  measuredRows,
+)
+check('a startup list the size of this app\'s own profile verifies', measuredBig.status === 'ok', JSON.stringify(measuredBig).slice(0, 160))
+
+// Counted at the end: a check appended after a mid-file summary must still be able to fail this run.
+const failed = checks.filter((row) => !row.pass)
 console.log(`\n${checks.length - failed.length}/${checks.length} passed`)
 if (failed.length > 0) process.exitCode = 1

@@ -100,15 +100,19 @@ const MAX_STARTUP_ROW_CHARS = 8192
  * The largest one startup script may be before a check refuses it. The app serves a whole profile as
  * a few bundles, and those grow with every installed plugin: one profile's largest bundle measured
  * 8.7 MB, which a smaller bound refused as if it were an attack and left the page unrebuildable.
- * A body past this bound is a mistake or an attempt to make a check read (and compile) an unbounded
- * amount of text inside the process that owns every running turn.
+ * Compiling a body costs several times its size in memory before it is thrown away, and up to three
+ * checks may run at once, so the bound is set close to what a profile actually serves: this one
+ * measured 15.7 MB across three bundles, its largest 9.2 MB. A body past 24 MB is not a profile
+ * this app ships with, and reading one would let a request make the process that owns every running
+ * turn hold text no page boots from.
  */
-const MAX_SCRIPT_BYTES = 64 * 1024 * 1024
+const MAX_SCRIPT_BYTES = 24 * 1024 * 1024
 /**
- * The same bound for one whole startup list, so a list of large bodies cannot add up either. Only
- * the compile happens under it: what a check keeps per body is the ids it names, never its text.
+ * The same bound for one whole startup list, so a list of large bodies cannot add up either. Two
+ * measured profiles' worth: what a check keeps per body is the ids it names, never its text, so
+ * the whole list's transient text is what this bounds.
  */
-const MAX_TOTAL_SCRIPT_BYTES = 128 * 1024 * 1024
+const MAX_TOTAL_SCRIPT_BYTES = 48 * 1024 * 1024
 /**
  * How large the request that carries the list may be. The list itself is bounded (64 addresses of at
  * most 8 KB, plus JSON escaping), so a bound below that would refuse a sound startup list from a
