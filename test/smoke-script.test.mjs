@@ -25,7 +25,24 @@ createServer((req, res) => {
   const send = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
   if (req.url === '/dsh-unlag/state') return req.method === 'GET' ? send(200, { version: 'x', code: 'c', shim: { wrapped: true } }) : send(405, { status: 'method' })
   if (req.url === '/dsh-unlag/graph') return req.method === 'GET' ? send(200, graph) : send(405, { status: 'method' })
-  if (req.url === '/dsh-unlag/verify') return req.headers['x-dsh-unlag'] ? send(200, { status: 'blocked', reason: 'list' }) : send(403, { status: 'forbidden' })
+  // The startup check answers from the rows it is given: a sound list passes, and one address no
+  // plugin serves is turned down. The smoke's own probe has to see both answers to be worth running.
+  if (req.url === '/dsh-unlag/verify') {
+    if (!req.headers['x-dsh-unlag']) return send(403, { status: 'forbidden' })
+    let body = ''
+    req.on('data', (chunk) => {
+      body += chunk
+    })
+    req.on('end', () => {
+      let rows = null
+      try {
+        rows = JSON.parse(body).rows
+      } catch {}
+      const broken = Array.isArray(rows) && rows.some((row) => String(row).includes('no-such-file'))
+      send(200, broken ? { status: 'blocked', reason: 'row' } : { status: 'ok' })
+    })
+    return undefined
+  }
   // The bundle shim answers a frozen revision with the current bytes, and an unlisted plugin with
   // nothing: the smoke asks both of a host, so the stand-in host has to answer both shapes.
   if (req.url.startsWith('/plugins/not-a-plugin/')) return send(404, {})
@@ -66,12 +83,18 @@ if (!checked) process.exitCode = 1
 // The smoke also runs the decision a press would make before it swaps anything, so a reader learns
 // whether the button would go ahead right now instead of only whether the app answers.
 const shim = printed?.shim ?? null
+const verifyProbe = printed?.verify ?? null
+const verifyRight = verifyProbe?.accepts === true && verifyProbe?.refuses === true
+console.log(`${verifyRight ? 'PASS' : 'FAIL'}  the smoke asks the running startup check and sees it turn down a bad row (${JSON.stringify(verifyProbe)})`)
+if (!verifyRight) process.exitCode = 1
 const shimRight = shim?.staleRev?.status === 200 && shim?.staleRev?.bytes > 0 && shim?.unknownPlugin === 404
 console.log(`${shimRight ? 'PASS' : 'FAIL'}  the smoke proves a frozen revision still loads (${JSON.stringify(shim)})`)
 if (!shimRight) process.exitCode = 1
 
 const pressPath = printed?.pressPath ?? null
-const pressPathRight = pressPath?.ready === false && pressPath?.held === 'blocked:list'
+// This fake host answers a sound startup list, so the press path is open: a smoke that could only
+// ever report a hold would not tell a reader whether pressing would work right now.
+const pressPathRight = pressPath?.ready === true && pressPath?.held === undefined
 console.log(`${pressPathRight ? 'PASS' : 'FAIL'}  the smoke prints what a press would decide (${JSON.stringify(pressPath)})`)
 if (!pressPathRight) process.exitCode = 1
 

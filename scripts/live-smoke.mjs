@@ -193,6 +193,35 @@ const pressGate = await probe.prepareInterface().catch((error) => String(error?.
 const pressPath = pressGate === null
   ? { ready: true }
   : { ready: false, held: pressGate === 'blocked' ? `blocked:${probe.startupHoldReason() ?? 'unknown'}` : pressGate }
+// The same judgement over the same rows, asked of the running host directly. A check that always
+// says ok would prove nothing, so one row is pointed at a file no plugin serves: the real answer
+// has to turn that down. The smoke never presses anything either way.
+const verifyWith = async (askRows) => {
+  const reply = await fetch(`${HOST}/dsh-unlag/verify`, {
+    method: 'POST',
+    headers: { 'x-dsh-unlag': '1', 'content-type': 'application/json' },
+    body: JSON.stringify({ rows: askRows }),
+  })
+  return reply.ok ? await reply.json().catch(() => null) : null
+}
+// The host side takes the script addresses a document would request, one per row.
+const addressesOf = (askRows) =>
+  askRows
+    .filter((row) => row.kind === 'script-src' || row.kind === 'script-preload')
+    .map((row) => (String(row.src).startsWith('/') ? String(row.src) : `/${String(row.src)}`))
+const soundRows = addressesOf(rows)
+const firstBatchId = graph.entries.map((entry) => (typeof entry === 'string' ? entry : entry?.id)).find((id) => typeof id === 'string') ?? 'unknown'
+const brokenRows = [...soundRows, `/plugins/${firstBatchId}/no-such-file.js?rev=0000000000ff`]
+const sound = await verifyWith(soundRows).catch(() => null)
+const broken = await verifyWith(brokenRows).catch(() => null)
+const verifyProbe = {
+  sound: sound?.status ?? null,
+  broken: broken?.status ?? null,
+  refuses: broken !== null && broken.status !== 'ok',
+  accepts: sound?.status === 'ok',
+}
+const verifyHeld = verifyProbe.accepts && verifyProbe.refuses
+
 console.log(JSON.stringify({
   host: HOST,
   version: running.version,
@@ -202,9 +231,10 @@ console.log(JSON.stringify({
   verdict,
   holdReason: verdict ? null : probe.startupHoldReason(),
   pressPath,
+  verify: verifyProbe,
   shim: shimBehaviour,
   rehearsal: { ok: rehearsalOk, ...rehearsal },
   asked: requests,
   contract: Object.fromEntries(contract.map(([label, got, want]) => [label, `${got}${got === want ? '' : ` (wanted ${want})`}`])),
 }, null, 2))
-process.exitCode = verdict === true && contractHeld && shimHeld && rehearsalOk ? 0 : 1
+process.exitCode = verdict === true && contractHeld && shimHeld && rehearsalOk && verifyHeld ? 0 : 1

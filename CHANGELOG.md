@@ -1,3 +1,10 @@
+## 1.9.103
+
+- 演练脚本多问一句「按下之前那道启动检查此刻真的会放行吗」：把当前启动清单里的脚本地址发给运行中的检查，再补一条没有插件提供的地址。两条答案必须是 `ok` 和 `blocked`——只报 `ok` 的检查什么也证明不了。`live-smoke` 新增 `verify: {sound, broken, accepts, refuses}`，并且两者都对才算通过。
+- 这条检查真跑出了差别：清单地址形状不对时（少了开头的 `/`）现场就是 `blocked: the startup list names no script`，改对后 sound=`ok`、broken=`blocked`。演练里那条假地址用的是真实插件 id，证明拒绝来自读不到的文件，而不是清单为空。
+- `test/smoke-script.test.mjs` 的假检查按行作答（好行 `ok`、含 `no-such-file` 的行 `blocked`），并断言演练脚本两条都看到了；按钮路径断言改成放行（`ready:true`），因为假清单是好的。
+- 全套 664 PASS / 0 FAIL。
+
 ## 1.9.102
 
 - 测试不再往用户的日志里写字：`reload-answer`、`client-guard` 会加载插件本体并留下日志，之前直接写进 `~/.dsh/unlag-reload.log`——本次核对时里面已经有 21 行测试噪音（`no web server: the header button cannot ask for a reload`），真按下之后要查的那份记录被掺了假。现在两个文件都把日志指向临时文件。
