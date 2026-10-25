@@ -1,3 +1,9 @@
+## 1.9.55
+
+- 扣住 404 要往响应对象上写补丁；响应对象若拒绝被写（只读属性等），之前这一步会从 async 路由处理器里抛出，那是没人接的 rejection，足以把 App 带走。现在补丁安装整段被保护：装不上就照表原本的答案回，并在日志里写明为什么没扣住，且不再回滚没装上的补丁。
+- `test/bundle-shim.test.mjs` 增加 3 项：把响应的 `writeHead`/`write`/`end` 设为只读，断言处理器不抛、表的 404 答案照发、日志写「cannot hold a 404 for a moment」。
+- 与官方文档核对：`docs/subsystems/client-modules.md` 仍为 204 行、sha256 前缀 `c7a3dfd256e195d1`（现场重拉）。
+
 ## 1.9.54
 
 - 被扣住的 404 现在也把调用方传进来的 callback 答掉：处理器若 `await new Promise(r => res.end('404', r))` 等待 flush，之前那个 callback 被丢掉，处理器永远不返回，回退答案排在它后面也永远出不来，页面就停在等脚本。现在下一个事件循环里答掉 callback，回退照常。

@@ -1309,6 +1309,8 @@ function serveBundlesAtCurrentRevision(ctx) {
     }
     const realWriteHead = res.writeHead
     const realEnd = res.end
+    const realWriteRef = res.write
+    let canHold = true
     const ask = async (url) => {
       let held = null
       let body
@@ -1321,24 +1323,14 @@ function serveBundlesAtCurrentRevision(ctx) {
           /* a frozen request keeps its own address */
         }
       }
-      if (typeof realWriteHead === 'function') {
-        res.writeHead = (status, ...rest) => {
-          if (status === 404) {
-            held = { status, headers: rest[0] }
-            return res
-          }
-          return realWriteHead.call(res, status, ...rest)
-        }
-      }
       /**
        * A held 404 can still be written to in pieces. Passing those pieces through would send the
        * implicit 200 headers Node writes on a first `write`, and the real answer could then never
-       * be sent; so the pieces are kept with the body and the socket stays untouched.
+       * be sent; so the pieces are kept with the body and the socket stays untouched. A held answer
+       * also owes the caller the callbacks it passed: dropping one would leave a handler that waits
+       * for the flush awaiting forever, and the answer after it would never run.
        */
       const realWrite = res.write
-      // A held answer still owes the caller the callbacks it passed: dropping one would leave a
-      // handler that waits for the flush awaiting forever, and the fallback answer would never
-      // run. They are answered on the next turn once the held body is collected.
       const answerCallback = (args) => {
         for (let at = args.length - 1; at >= 0; at -= 1) {
           if (typeof args[at] === 'function') {
@@ -1358,26 +1350,48 @@ function serveBundlesAtCurrentRevision(ctx) {
           }
         }
       }
-      if (typeof realWrite === 'function') {
-        res.write = (chunk, ...rest) => {
-          if (held !== null) {
-            if (typeof chunk === 'string' || Buffer.isBuffer(chunk)) parts.push(Buffer.from(chunk))
-            answerCallback(rest)
-            return true
+      /**
+       * Installing the hold means writing to the response object. A response that refuses that is
+       * answered as the table left it instead of thrown at, because this runs in an async route
+       * handler where a rejection would be an unhandled one.
+       */
+      if (canHold) {
+        try {
+          if (typeof realWrite === 'function') {
+            res.write = (chunk, ...rest) => {
+              if (held !== null) {
+                if (typeof chunk === 'string' || Buffer.isBuffer(chunk)) parts.push(Buffer.from(chunk))
+                answerCallback(rest)
+                return true
+              }
+              return realWrite.call(res, chunk, ...rest)
+            }
           }
-          return realWrite.call(res, chunk, ...rest)
-        }
-      }
-      if (typeof realEnd === 'function') {
-        res.end = (...args) => {
-          if (held !== null) {
-            const last = args[0]
-            if (typeof last === 'string' || Buffer.isBuffer(last)) parts.push(Buffer.from(last))
-            body = parts.length === 0 ? '' : Buffer.concat(parts)
-            answerCallback(args)
-            return res
+          if (typeof realEnd === 'function') {
+            res.end = (...args) => {
+              if (held !== null) {
+                const last = args[0]
+                if (typeof last === 'string' || Buffer.isBuffer(last)) parts.push(Buffer.from(last))
+                body = parts.length === 0 ? '' : Buffer.concat(parts)
+                answerCallback(args)
+                return res
+              }
+              return realEnd.apply(res, args)
+            }
           }
-          return realEnd.apply(res, args)
+          if (typeof realWriteHead === 'function') {
+            res.writeHead = (status, ...rest) => {
+              if (status === 404) {
+                held = { status, headers: rest[0] }
+                return res
+              }
+              return realWriteHead.call(res, status, ...rest)
+            }
+          }
+        } catch (error) {
+          canHold = false
+          held = null
+          log(`cannot hold a 404 for a moment: ${oneLine(error?.message ?? error)}`)
         }
       }
       try {
@@ -1387,9 +1401,11 @@ function serveBundlesAtCurrentRevision(ctx) {
         log(`cannot answer a bundle request: ${error?.message ?? error}`)
       } finally {
         try {
-          res.writeHead = realWriteHead
-          if (realWrite !== undefined) res.write = realWrite
-          res.end = realEnd
+          if (canHold) {
+            res.writeHead = realWriteHead
+            if (realWriteRef !== undefined) res.write = realWriteRef
+            res.end = realEnd
+          }
         } catch {
           /* the response object owns its own shape */
         }

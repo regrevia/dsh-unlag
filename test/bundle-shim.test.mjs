@@ -455,6 +455,28 @@ check('a table that never answers does not hold the request', lateAnswer.status 
 check('and the log says the table was silent', readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('the module table did not answer in time'))
 delete process.env.DSH_UNLAG_FETCH_TIMEOUT_MS
 
+// --- a response that refuses to be held --------------------------------------------------------
+// Installing the hold writes to the response object. A response that refuses must leave the table's
+// own answer standing rather than reject out of an async route handler, where nobody would catch it.
+const frozen = mount()
+const frozenRes = fakeRes()
+for (const name of ['writeHead', 'end', 'write']) {
+  Object.defineProperty(frozenRes, name, { value: frozenRes[name], writable: false, configurable: true })
+}
+let rejected = null
+try {
+  await frozen.route.handler({ method: 'GET', url: '/plugins/??@local/a/client.js&rev=old' }, frozenRes)
+} catch (error) {
+  rejected = error
+}
+check('a response that cannot be held is answered, not thrown at', rejected === null, String(rejected?.message ?? ''))
+check('and the table answer stands', frozenRes.status === 404 && frozenRes.body === 'original', `${frozenRes.status} ${frozenRes.body}`)
+check(
+  'and the log says why the 404 was not held',
+  readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('cannot hold a 404 for a moment'),
+  'the log does not name it',
+)
+
 console.log(out.join('\n'))
 if (log.includes('plugin reload did not start')) {
   console.log('FAIL  apply threw instead of starting')
