@@ -295,7 +295,8 @@ check('a replacement the app refused is not an update', verdictOf({ status: 'fai
 check('changed code that needs a restart is not an update', verdictOf({ status: 'done', pending: ['@local/a'] }) === 'restart')
 check('an update in flight is not an update yet', verdictOf({ status: 'applying' }) === 'applying')
 check('an update the app put on hold is not an update', verdictOf({ status: 'queued' }) === 'queued')
-check('an entry the app could not replace is not an update', verdictOf({ status: 'done', warnings: ['cannot load @local/a'], failedEntries: ['@local/a'] }) === 'failed')
+check('a leftover entry the app names does not fail the press', verdictOf({ status: 'done', warnings: ['@local/a: failed to import'], failedEntries: ['@local/a'] }) === 'done')
+check('an entry waiting for a restart is still not an update', verdictOf({ status: 'done', pending: [{ url: 'x' }] }) === 'restart')
 check('a replacement the running page cannot take is not an update', verdictOf({ status: 'done', restartReason: 'native' }) === 'failed')
 check('no answer at all is not an update', verdictOf(null) === 'failed')
 

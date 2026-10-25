@@ -206,8 +206,10 @@ const withWarning = mount({}, { reloadWarnings: ['dsh-sibling (dsh-sibling): fai
 const warnRes = fakeRes()
 await withWarning.routes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1', host: '127.0.0.1:62542', origin: 'http://127.0.0.1:62542' } }, warnRes)
 await new Promise((resolve) => setTimeout(resolve, 30))
-check('a plugin that did not come back is named in the log', readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('a plugin did not come back: dsh-sibling (dsh-sibling): failed to import: boom'))
-check('and the press still reports what it did', verdict(warnRes.body) === 'failed' || warnRes.status === 200, warnRes.body)
+check('a plugin that was already not running is named in the log', readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('a plugin was already not running and still is not: dsh-sibling (dsh-sibling): failed to import: boom'))
+// The app rejects a reload that newly breaks an entry, so a leftover inactive entry is not the
+// press's result: it is written down, and the press still replaces the set.
+check('and it does not turn the press into a failure', verdict(warnRes.body) === 'done', warnRes.body)
 
 // --- switches --------------------------------------------------------------------------------
 const onlyPage = mount({ reloadPlugins: false })

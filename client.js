@@ -173,9 +173,9 @@ window.__ModuleLoader__.load({
     function reloadVerdict(data) {
       if (data === null || typeof data !== 'object') return 'failed';
       const status = typeof data.status === 'string' ? data.status : 'failed';
-      // A plugin that did not start makes the set unusable for a rebuild, whatever the status says.
-      if (Array.isArray(data.failedEntries) && data.failedEntries.length > 0) return 'failed';
       // `pending` is not a queued update: the changed modules need a restart to load at all.
+      // Entries that were already not running before the press are not its result: the app rejects
+      // a reload that newly breaks one, so the press stands whatever that leftover list says.
       if (Array.isArray(data.pending) && data.pending.length > 0) return 'restart';
       if (typeof data.restartReason === 'string' && data.restartReason !== '') return 'failed';
       return status;

@@ -401,17 +401,19 @@ function pluginReloader(ctx, config) {
      * out of harmless prose. The warning itself is the app saying an entry is not serving the page, so
      * every warning counts and the sentence is passed on as it reads.
      */
-    const failedEntries = warnings.map((warning) => (typeof warning === 'string' ? warning : String(warning?.message ?? warning)))
-    log(
-      `plugins reloaded (warnings=${warnings.length} pending=${pending.length}${restartReason === null ? '' : ` restart=${restartReason}`})`,
-    )
     /**
-     * The count alone cannot say which plugin is not serving now, and that is what a person sees
-     * afterwards. The app's own sentence is passed on, cut short so one entry cannot fill the log.
+     * These are the entries that were already not running before this press: the app rejects a
+     * reload that newly breaks an entry, so nothing in this list is a result of the press. They are
+     * written down because a person sees them afterwards, and they must not stop the page from
+     * coming up on the set that is running now.
      */
-    for (const entry of failedEntries.slice(0, 5)) log(`a plugin did not come back: ${entry.slice(0, 200)}`)
-    if (failedEntries.length > 5) log(`and ${failedEntries.length - 5} more did not come back`)
-    return { status: 'done', warnings, pending, restartReason, failedEntries }
+    const inactiveEntries = warnings.map((warning) => (typeof warning === 'string' ? warning : String(warning?.message ?? warning)))
+    log(
+      `plugins reloaded (inactive before this press=${inactiveEntries.length} pending=${pending.length}${restartReason === null ? '' : ` restart=${restartReason}`})`,
+    )
+    for (const entry of inactiveEntries.slice(0, 5)) log(`a plugin was already not running and still is not: ${entry.slice(0, 200)}`)
+    if (inactiveEntries.length > 5) log(`and ${inactiveEntries.length - 5} more were already not running`)
+    return { status: 'done', warnings, pending, restartReason, inactiveEntries, failedEntries: [] }
   }
 
   const flush = async () => {
@@ -581,15 +583,6 @@ function pluginReloader(ctx, config) {
           warnings: outcome.warnings, // ui-copy-ignore
           pending: outcome.pending, // ui-copy-ignore
           restartReason: outcome.restartReason,
-          failedEntries: outcome.failedEntries,
-        }
-      }
-      if (outcome.failedEntries.length > 0) {
-        return {
-          status: 'failed', // ui-copy-ignore
-          warnings: outcome.warnings, // ui-copy-ignore
-          pending: [], // ui-copy-ignore
-          restartReason: null,
           failedEntries: outcome.failedEntries,
         }
       }
