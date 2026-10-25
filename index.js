@@ -107,6 +107,18 @@ const MAX_TOTAL_SCRIPT_BYTES = 32 * 1024 * 1024
  */
 const MAX_BUNDLE_IDS = 128
 /**
+ * How long one stale-bundle answer may spend before it gives the request back to the app's own
+ * route. Each row is bounded on its own, but a request can name many rows and the route answers
+ * whatever a socket asks: without a whole-request bound one made-up address holds a connection for
+ * as long as its rows add up.
+ */
+const MAX_ANSWER_MS = 15_000
+/** The same bound for a test that must reach it quickly. */
+function answerBudgetMs() {
+  const set = Number(process.env.DSH_UNLAG_STALE_MS ?? '')
+  return set > 0 ? set : MAX_ANSWER_MS
+}
+/**
  * How long one startup check may spend reading the list. Each address is bounded on its own, but a
  * list of them is not: dozens of slow addresses would otherwise hold a press past the moment the
  * page gives up waiting, and the person would see a button that did nothing.
@@ -974,10 +986,11 @@ async function currentEntryBody(clientModules, graph, id) {
  * answering with them in the requested order registers exactly the plugins the document expects,
  * so a boot that would otherwise 404 and end the app comes up instead.
  */
-async function regroupedBundleAnswer(clientModules, graph, request) {
+async function regroupedBundleAnswer(clientModules, graph, request, deadline = Date.now() + answerBudgetMs()) {
   if (request.sourceMap) return null
   const parts = []
   for (const id of request.ids) {
+    if (Date.now() > deadline) return null
     const body = await currentEntryBody(clientModules, graph, id)
     if (body === null) return null
     parts.push(body)
@@ -1005,7 +1018,7 @@ async function regroupedBundleAnswer(clientModules, graph, request) {
  * booting from an old startup list that meets one ends the whole app: a boot that comes up without
  * a plugin it no longer has beats that.
  */
-async function survivingBundleAnswer(clientModules, graph, request) {
+async function survivingBundleAnswer(clientModules, graph, request, deadline = Date.now() + answerBudgetMs()) {
   if (request.sourceMap) return null
   const entries = Array.isArray(graph?.entries) ? graph.entries : []
   const served = new Set(entries.filter((row) => typeof row?.id === 'string').map((row) => row.id))
@@ -1013,6 +1026,7 @@ async function survivingBundleAnswer(clientModules, graph, request) {
   if (gone.length === 0) return null
   const parts = []
   for (const id of request.ids) {
+    if (Date.now() > deadline) return null
     if (served.has(id)) {
       const body = await currentEntryBody(clientModules, graph, id)
       if (body === null) return null
@@ -1031,7 +1045,7 @@ async function survivingBundleAnswer(clientModules, graph, request) {
  * that really contains every plugin it claims is handed back; anything unsure answers null, so the
  * route then behaves exactly as before and an unknown id still ends as a plain 404.
  */
-async function currentBundleAnswer(clientModules, method, url) {
+async function currentBundleAnswer(clientModules, method, url, deadline = Date.now() + answerBudgetMs()) {
   const request = bundleRequest(url)
   if (request === null) return null
   const graph = clientModules.graph()
@@ -1057,7 +1071,7 @@ async function currentBundleAnswer(clientModules, method, url) {
       }
     }
   }
-  return (await regroupedBundleAnswer(clientModules, graph, request)) ?? survivingBundleAnswer(clientModules, graph, request)
+  return (await regroupedBundleAnswer(clientModules, graph, request, deadline)) ?? survivingBundleAnswer(clientModules, graph, request, deadline)
 }
 
 /** Answer one stale request over the plain request/response route an app registers. */

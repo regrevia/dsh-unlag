@@ -56,7 +56,7 @@ function fakeRes() {
 }
 
 /** Mount the plugin over a stand-in module table and hand back the wrapped route. */
-function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.get(path), keep = null, late = false, shape = 'handler', breaksMidWrite = false, hang = false, hmr = null } = {}) {
+function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.get(path), keep = null, late = false, shape = 'handler', breaksMidWrite = false, hang = false, delay = 0, hmr = null } = {}) {
   const original = (req, res) => {
     if (breaksMidWrite) {
       res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' })
@@ -107,6 +107,7 @@ function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.
               },
               fetchBundle: async (asked) => {
                 if (hang) return new Promise(() => {})
+                if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay))
                 seen.push(asked)
                 const { method, url } = asked
                 const path = asPath(url)
@@ -395,6 +396,18 @@ check(
   `${repeated.status} ${repeated.body}`,
 )
 
+
+// One stale address can name many rows, and answering it reads one body per row. The route answers
+// whatever a socket asks, so the whole answer is bounded: once the bound is reached the request goes
+// back to the app's own route instead of holding the connection for as long as its rows add up.
+const slowRows = mount({ delay: 60 })
+const wasBudget = process.env.DSH_UNLAG_STALE_MS
+process.env.DSH_UNLAG_STALE_MS = '110'
+const held = await call(slowRows.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js,@local/b/client.js,@deepseek-ai/dsh-client-modules/client.js&rev=g1' })
+if (wasBudget === undefined) delete process.env.DSH_UNLAG_STALE_MS
+else process.env.DSH_UNLAG_STALE_MS = wasBudget
+check('a stale set that outlives the whole-answer bound is given back to the table', held.status === 404 && held.body === 'original', `${held.status} ${held.body}`)
+check('and it stops reading rows once the bound is reached', slowRows.seen.length < 3, String(slowRows.seen.length))
 
 // --- a table that takes the question and never answers ----------------------------------------
 // The document waits on this script, so the wait is bounded; the request then gets the table's own

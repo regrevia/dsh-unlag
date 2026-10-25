@@ -1,6 +1,6 @@
 {
   "name": "dsh-unlag",
-  "version": "1.9.37",
+  "version": "1.9.38",
   "type": "module",
   "description": "A press applies plugin edits right away and brings a laggy interface back; automatic reloading stays off unless you turn it on, so the press is the only trigger, and nothing restarts.",
   "license": "MIT",
