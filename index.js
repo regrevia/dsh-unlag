@@ -1,4 +1,5 @@
-import { appendFileSync, existsSync, readFileSync, statSync, watch } from 'node:fs'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { appendFileSync, existsSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -28,6 +29,13 @@ export const inject = ['webServer']
 
 /** A transaction that has not finished in this long is stuck; the press reports it instead of hanging. */
 const RELOAD_TIMEOUT_MS = 20_000
+
+/**
+ * A saved file reaches the app through the reload service's transaction context. If a later version
+ * of the app stops exposing that context, the queue cannot be entered from a save; the profile's
+ * patch file is used instead, because the loader watches it and re-imports the modules that changed.
+ */
+const PROFILE_MARKER = '# dsh-unlag: apply saved plugin code'
 
 const LOG_PATH = join(homedir(), '.dsh', 'unlag-reload.log')
 /** Tests point this at a scratch file, so a test run leaves the live log readable. */
@@ -147,6 +155,66 @@ function worthReloading(filename) {
  * The plugin half. One controller serves both callers: a saved file (debounced) and the header
  * button (immediate). A swap never waits for turns, never interrupts them, and never re-enters.
  */
+/**
+ * The service keeps its transaction context in an AsyncLocalStorage on the instance. Resolve it by
+ * type as well as by name, so a renamed field still works; the name stays the fast path.
+ */
+function transactionContext(service) {
+  try {
+    if (typeof service?.executing?.exit === 'function') return service.executing
+    for (const value of Object.values(service ?? {})) if (value instanceof AsyncLocalStorage) return value
+  } catch {}
+  return null
+}
+
+/** The patch file of the profile this plugin runs in, when the loader exposes the profile. */
+function profilePatch(ctx) {
+  try {
+    const dir = ctx.get('profileContext')?.dir
+    if (typeof dir !== 'string' || dir === '') return null
+    const file = join(dir, 'cordis.patch.yml')
+    return existsSync(file) ? file : null
+  } catch {
+    return null
+  }
+}
+
+/** Drop the marker line again without touching anything else the file holds. */
+function clearProfileMarker(file) {
+  try {
+    const text = readFileSync(file, 'utf8')
+    if (!text.includes(PROFILE_MARKER)) return
+    const withoutBlankLine = text.replace(`\n\n${PROFILE_MARKER}\n`, '\n')
+    writeFileSync(file, withoutBlankLine.replace(`\n${PROFILE_MARKER}\n`, '').replace(PROFILE_MARKER, ''))
+  } catch (error) {
+    log(`a reload marker is still in the profile: ${error?.message ?? error}`)
+  }
+}
+
+/**
+ * Last resort when a save cannot be queued: one comment line in the profile's patch file makes the
+ * loader re-import the modules that changed, the same outcome a queued reload gives. The line is
+ * taken back out as soon as the loader has read it, and a line a crash leaves behind is removed at
+ * the next start, so the profile is left as the user wrote it.
+ * @returns whether the profile was asked, so the caller can say why the save did not apply.
+ */
+function markProfileForReload(ctx) {
+  const file = profilePatch(ctx)
+  if (file === null) return false
+  try {
+    const text = readFileSync(file, 'utf8')
+    if (text.includes(PROFILE_MARKER)) return false
+    appendFileSync(file, `\n${PROFILE_MARKER}\n`)
+  } catch (error) {
+    log(`the profile could not be asked for a reload: ${error?.message ?? error}`)
+    return false
+  }
+  log('the saved plugin code is applied by a profile reload instead')
+  const timer = setTimeout(() => clearProfileMarker(file), 3000)
+  timer.unref?.()
+  return true
+}
+
 function pluginReloader(ctx, config) {
   /** HMR can start after this half, so ask per use instead of once at load. */
   const hmrService = () => {
@@ -155,6 +223,9 @@ function pluginReloader(ctx, config) {
     return hmr
   }
   const available = () => hmrService() !== null
+  /** A marker line this plugin left in the profile is not the user's; take it back out at start. */
+  const leftover = profilePatch(ctx)
+  if (leftover !== null) clearProfileMarker(leftover)
   /** Opt-in: wait for a quiet moment instead of swapping at once. Off by default. */
   const idleOnly = config?.idleOnly === true
   const debounce = Number.isFinite(config?.debounce) ? config.debounce : 300
@@ -192,10 +263,11 @@ function pluginReloader(ctx, config) {
      * that context first is what the service's own watcher does, and it keeps the request queued
      * instead of running a second recomposition beside the first.
      */
+    const context = transactionContext(hmr)
     const ask = (service) =>
-      typeof service.executing?.exit === 'function'
-        ? service.executing.exit(() => service.runExclusive(() => service.reconcileProfile([])))
-        : service.runExclusive(() => service.reconcileProfile([]))
+      context === null
+        ? service.runExclusive(() => service.reconcileProfile([]))
+        : context.exit(() => service.runExclusive(() => service.reconcileProfile([])))
     const abandoned = () =>
       new Promise((_resolve, reject) => {
         const limit = Number(process.env.DSH_UNLAG_TIMEOUT_MS ?? '') || RELOAD_TIMEOUT_MS
@@ -210,8 +282,13 @@ function pluginReloader(ctx, config) {
       } catch (error) {
         const message = String(error?.message ?? error)
         if (message.includes('nested') === false) throw error
-        if (attempt >= 9) throw error
-        await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)))
+        if (attempt >= 9) {
+          /** No context to leave means a save cannot be queued at all: hand the file to the loader. */
+          if (context === null) markProfileForReload(ctx)
+          throw error
+        }
+        const step = Number(process.env.DSH_UNLAG_RETRY_MS ?? '') || 250
+        await new Promise((resolve) => setTimeout(resolve, step * (attempt + 1)))
       }
     }
     const warnings = Array.isArray(result?.warnings) ? result.warnings : []

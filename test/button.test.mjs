@@ -1,6 +1,7 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { Config, apply, name, inject } from '../index.js'
 
 // Keep the live log readable: this run writes its own.
@@ -331,6 +332,82 @@ const stuck = fakeRes()
 await stuckRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, stuck)
 delete process.env.DSH_UNLAG_TIMEOUT_MS
 check('an update that never finishes is reported failed', verdict(stuck.body) === 'failed', stuck.body)
+
+
+// --- the app stops exposing the transaction context by name -------------------------------------
+// A later version may move the instance or rename the field. The reload resolves it by type, so a
+// save still queues instead of failing as nested.
+process.env.DSH_UNLAG_RETRY_MS = '1'
+const renamedStore = new AsyncLocalStorage()
+const renamedRoutes = (() => {
+  const routes = new Map()
+  const ctx = {
+    get: (key) => {
+      if (key === 'webServer') return { register: (r) => (routes.set(r.path, r.handler), () => routes.delete(r.path)) }
+      if (key === 'hmr')
+        return {
+          baseDir: '/tmp/x',
+          transactions: renamedStore,
+          runExclusive: (op) => (renamedStore.getStore() ? Promise.reject(new Error('HMR transactions cannot be nested')) : Promise.resolve(op())),
+          reconcileProfile: async () => ({ warnings: [], pending: [] }),
+        }
+      return undefined
+    },
+    on: () => {},
+  }
+  apply(ctx, {})
+  return routes
+})()
+const renamed = fakeRes()
+await renamedStore.run(true, () => renamedRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, renamed))
+check('a renamed transaction field still queues the reload', verdict(renamed.body) === 'done', renamed.body)
+
+// --- no context at all: the profile's patch file is asked instead -------------------------------
+// Last resort. The loader watches that file, so one comment line re-imports the changed modules;
+// the line is not the user's and must be gone from the file afterwards.
+const profileDir = mkdtempSync(join(tmpdir(), 'dsh-unlag-profile-'))
+const patchFile = join(profileDir, 'cordis.patch.yml')
+const originalPatch = 'plugins:\n  dsh-unlag:\n    reloadInterface: true\n'
+writeFileSync(patchFile, originalPatch)
+const strandedRoutes = (() => {
+  const routes = new Map()
+  const ctx = {
+    get: (key) => {
+      if (key === 'webServer') return { register: (r) => (routes.set(r.path, r.handler), () => routes.delete(r.path)) }
+      if (key === 'profileContext') return { dir: profileDir }
+      if (key === 'hmr') return { baseDir: '/tmp/x', runExclusive: () => Promise.reject(new Error('HMR transactions cannot be nested')), reconcileProfile: async () => ({}) }
+      return undefined
+    },
+    on: () => {},
+  }
+  apply(ctx, {})
+  return routes
+})()
+const stranded = fakeRes()
+await strandedRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, stranded)
+check('a save that cannot be queued is reported failed', verdict(stranded.body) === 'failed', stranded.body)
+check('the profile is asked to apply it instead', readFileSync(patchFile, 'utf8').includes('# dsh-unlag: apply saved plugin code'))
+await new Promise((resolve) => setTimeout(resolve, 3400))
+check('the marker line is taken back out', readFileSync(patchFile, 'utf8') === originalPatch, JSON.stringify(readFileSync(patchFile, 'utf8')))
+
+// --- a marker a crash left behind is cleaned at the next start ---------------------------------
+writeFileSync(patchFile, `${originalPatch}\n# dsh-unlag: apply saved plugin code\n`)
+const recoveryRoutes = (() => {
+  const routes = new Map()
+  const ctx = {
+    get: (key) => {
+      if (key === 'webServer') return { register: (r) => (routes.set(r.path, r.handler), () => routes.delete(r.path)) }
+      if (key === 'profileContext') return { dir: profileDir }
+      return undefined
+    },
+    on: () => {},
+  }
+  apply(ctx, {})
+  return routes
+})()
+check('a leftover marker is removed at start', readFileSync(patchFile, 'utf8') === originalPatch, JSON.stringify(readFileSync(patchFile, 'utf8')))
+check('the rest of the profile is untouched', readFileSync(patchFile, 'utf8').startsWith('plugins:'))
+delete process.env.DSH_UNLAG_RETRY_MS
 
 // --- hostile surroundings --------------------------------------------------------------------
 let survived = true
