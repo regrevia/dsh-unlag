@@ -72,6 +72,14 @@ window.__ModuleLoader__.load({
       }
     }
 
+    function stampClear() {
+      try {
+        window.sessionStorage.removeItem(STAMP_KEY);
+      } catch {
+        // Pacing is the only thing this stamp feeds: a store that refuses the clear costs nothing.
+      }
+    }
+
     function stampWrite() {
       try {
         window.sessionStorage.setItem(STAMP_KEY, String(Date.now()));
@@ -860,7 +868,6 @@ window.__ModuleLoader__.load({
             report('replaced');
             return stop(replaced ? 'replaced' : 'done');
           }
-          stampWrite();
           const reason = await prepareInterface();
           if (reason !== null) {
             // The log keeps the exact check that refused, so a held press can be explained later.
@@ -868,6 +875,9 @@ window.__ModuleLoader__.load({
             report('held', replaced ? `applied:${gate}` : gate);
             return stop(reason, replaced);
           }
+          // Written only now, when the document really is about to go: a press that was held changed
+          // nothing, so the next press must not be turned away as if this one had been answered.
+          stampWrite();
           report('rebuild');
           navigated = true;
           reloadFreshPage();
@@ -885,6 +895,9 @@ window.__ModuleLoader__.load({
               // Still here after asking for a rebuild: the page held the navigation. Say what
               // happened and take the press back, so the button is never left unresponsive.
               report('held', 'navigation');
+              // The document stayed, so no press was answered: clear the pacing stamp this press
+              // wrote, or the next press inside three seconds would be told it is already applying.
+              stampClear();
               setPending(false);
               // Only a press that really replaced the plugins may say so: a page-only press that
               // held the navigation changed no code.

@@ -81,12 +81,13 @@ function harness({ settings = { plugins: true, page: true }, reload = { status: 
       return openWindow ? {} : null
     },
   }
+  const store = new Map()
   const listeners = []
   const window = {
     __ModuleLoader__: { load: () => {} },
     __DSH_BOOT__: graph,
     dshDesktopBoot: { ready: async () => ({ injections: bootRows }) },
-    sessionStorage: { getItem: () => stamp, setItem: () => {} },
+    sessionStorage: { getItem: (key) => (store.has(key) ? store.get(key) : stamp), setItem: (key, value) => store.set(key, value), removeItem: (key) => store.delete(key) },
     location,
     dispatchEvent: (event) => {
       listeners.push(event.type)
@@ -207,6 +208,8 @@ function harness({ settings = { plugins: true, page: true }, reload = { status: 
     holdReload: () => { reloadAnswer = new Promise((resolve) => { setImmediate(resolve) }) },
     setReload: (value) => { reloadBody = value },
     notice: () => show(render().tree),
+    /** Whether this press left a pacing stamp behind, and what it says. */
+    stamp: () => (store.has('dsh-unlag:at') ? Number(store.get('dsh-unlag:at')) : 0),
   }
 }
 
@@ -439,6 +442,40 @@ check('and the pressed page still rebuilt', swapped.navigations.length === 1, sw
   const rebuilt = addressless.navigations.length + addressless.reloads.length
   check('a page whose address cannot be parsed still reloads', threw === null && rebuilt >= 1, String(threw?.message ?? JSON.stringify({ navigations: addressless.navigations, reloads: addressless.reloads })))
   check('and it reloads in place rather than leaving the old page', addressless.navigations.length === 0 && addressless.reloads.length === 1)
+}
+
+// --- a press that was held changed nothing, so it must not pace the next press ------------------
+// The stamp used to be written before the readiness checks ran: a press held by an open dialog or
+// unsaved work left "already applying" behind and turned the next press away for three seconds.
+{
+  const page = harness({ openWindow: true })
+  await page.press()
+  check('a press held by an open window records no answered press', page.stamp() === 0, String(page.stamp()))
+  check('a press held by an open window says what to do', /Close the open window/u.test(String(page.notice())), String(page.notice()))
+  const next = harness()
+  check('and a different page is not paced by it either', next.stamp() === 0)
+}
+{
+  const page = harness({ answers: 'unsaved work' })
+  await page.press()
+  check('a press held by unsaved work records no answered press', page.stamp() === 0, String(page.stamp()))
+}
+{
+  const page = harness({ settings: { plugins: true, page: false } })
+  await page.press()
+  check('a plugin-only press records no page answer', page.stamp() === 0, String(page.stamp()))
+}
+{
+  const page = harness()
+  await page.press()
+  check('a press that really rebuilds records itself', page.stamp() > 0, String(page.stamp()))
+}
+{
+  // The document stayed anyway: the press that was written down never happened, so it is taken back.
+  const page = harness()
+  await page.press()
+  page.scheduled.find((entry) => entry.ms === 6000).fn()
+  check('a rebuild the page held takes its pacing stamp back', page.stamp() === 0, String(page.stamp()))
 }
 
 console.log(out.join('\n'))
