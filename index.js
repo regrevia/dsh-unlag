@@ -64,7 +64,6 @@ const CODE_STAMP = (() => {
     return 'unknown'
   }
 })()
-let logWrites = 0
 /** Tests point this at a scratch file, so a test run leaves the live log readable. */
 const logTarget = () => process.env.DSH_UNLAG_LOG ?? LOG_PATH
 /** Survives a module replacement, so a reload cannot leave a second watcher behind. */
@@ -261,17 +260,17 @@ function ensureLogDir(target) {
 function log(line) {
   try {
     const target = logTarget()
-    // A file that only grows eventually costs the app its own memory budget: every 200 lines the
-    // size is checked once, and a log past the cap starts over instead of growing without end.
-    logWrites += 1
-    if (logWrites % 200 === 1) {
-      try {
-        if (statSync(target).size > LOG_MAX_BYTES) writeFileSync(target, '')
-      } catch {
-        /* a missing or unreadable log is created by the append below */
-      }
-    }
     const text = `${new Date().toISOString()} ${oneLine(line)}\n`
+    /**
+     * A file that only grows eventually costs the app its own memory budget, and a burst of lines
+     * can land between two periodic checks: the size is read before every write and the whole
+     * line has to fit, so the file never passes the cap even for one event.
+     */
+    try {
+      if (statSync(target).size + Buffer.byteLength(text) > LOG_MAX_BYTES) writeFileSync(target, '')
+    } catch {
+      /* a missing or unreadable log is created by the append below */
+    }
     try {
       appendFileSync(target, text)
     } catch {
