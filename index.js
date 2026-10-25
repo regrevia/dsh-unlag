@@ -893,14 +893,34 @@ function currentBundleUrls(graph, request) {
  */
 async function fetchBundleAt(clientModules, url, method) {
   const address = `http://unlag.invalid${url}`
-  if (typeof Request === 'function') {
-    try {
-      return await clientModules.fetchBundle(new Request(address, { method, headers: {} }))
-    } catch (error) {
-      if (error?.name !== 'TypeError') throw error
+  /**
+   * A table that accepts the question and then never answers would hold the request that asked it:
+   * the document waits on this script and the page stops. The wait is bounded, and a table that
+   * misses it is answered the same way as one that fails.
+   */
+  const limit = Number(process.env.DSH_UNLAG_FETCH_TIMEOUT_MS ?? '') > 0 ? Number(process.env.DSH_UNLAG_FETCH_TIMEOUT_MS) : 8000
+  let timer = null
+  const late = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('the module table did not answer in time')), limit)
+  })
+  const asked = (async () => {
+    if (typeof Request === 'function') {
+      try {
+        return await clientModules.fetchBundle(new Request(address, { method, headers: {} }))
+      } catch (error) {
+        if (error?.name !== 'TypeError') throw error
+      }
     }
+    return clientModules.fetchBundle({ method, url: address })
+  })()
+  // Whichever side loses the race must still be observed, or its rejection ends the process.
+  asked.catch(() => {})
+  late.catch(() => {})
+  try {
+    return await Promise.race([asked, late])
+  } finally {
+    if (timer !== null) clearTimeout(timer)
   }
-  return clientModules.fetchBundle({ method, url: address })
 }
 
 /**

@@ -56,7 +56,7 @@ function fakeRes() {
 }
 
 /** Mount the plugin over a stand-in module table and hand back the wrapped route. */
-function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.get(path), keep = null, late = false, shape = 'handler', breaksMidWrite = false } = {}) {
+function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.get(path), keep = null, late = false, shape = 'handler', breaksMidWrite = false, hang = false } = {}) {
   const original = (req, res) => {
     if (breaksMidWrite) {
       res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' })
@@ -106,6 +106,7 @@ function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.
                 return graph
               },
               fetchBundle: async (asked) => {
+                if (hang) return new Promise(() => {})
                 seen.push(asked)
                 const { method, url } = asked
                 const path = asPath(url)
@@ -379,6 +380,16 @@ check(
   `${repeated.status} ${repeated.body}`,
 )
 
+
+// --- a table that takes the question and never answers ----------------------------------------
+// The document waits on this script, so the wait is bounded; the request then gets the table's own
+// answer instead of holding a connection open for as long as the table stays silent.
+process.env.DSH_UNLAG_FETCH_TIMEOUT_MS = '40'
+const hangMount = mount({ hang: true })
+const lateAnswer = await call(hangMount.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js,@local/b/client.js&rev=old' })
+check('a table that never answers does not hold the request', lateAnswer.status === 404 && lateAnswer.body === 'original', `${lateAnswer.status} ${lateAnswer.body}`)
+check('and the log says the table was silent', readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('the module table did not answer in time'))
+delete process.env.DSH_UNLAG_FETCH_TIMEOUT_MS
 
 console.log(out.join('\n'))
 if (log.includes('plugin reload did not start')) {
