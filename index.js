@@ -1089,7 +1089,15 @@ function serveBundlesAtCurrentRevision(ctx) {
    */
   const wrapped = async (req, res) => {
     const originalUrl = String(req?.url ?? '')
-    const retargeted = retargetRevision(originalUrl, entryRevisionFor(clientModules.graph(), originalUrl))
+    // Reading the table can throw while the plugin set is being swapped. This runs inside an async
+    // route handler, where a rejection is an unhandled one and takes the whole app with it, so the
+    // failure has to end here: answer the request as the table left it and say why in the log.
+    let retargeted = null
+    try {
+      retargeted = retargetRevision(originalUrl, entryRevisionFor(clientModules.graph(), originalUrl))
+    } catch (error) {
+      log(`cannot read the plugin table for a bundle request: ${error?.message ?? error}`)
+    }
     const realWriteHead = res.writeHead
     const realEnd = res.end
     const ask = async (url) => {

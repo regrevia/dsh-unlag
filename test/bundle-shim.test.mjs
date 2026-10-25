@@ -55,7 +55,7 @@ function fakeRes() {
 }
 
 /** Mount the plugin over a stand-in module table and hand back the wrapped route. */
-function mount({ graph = CURRENT, serve = (path) => bodies.get(path), keep = null, late = false, shape = 'handler' } = {}) {
+function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.get(path), keep = null, late = false, shape = 'handler' } = {}) {
   const original = (req, res) => {
     const kept = keep === null ? undefined : keep(asPath(req.url))
     if (kept !== undefined) {
@@ -96,7 +96,10 @@ function mount({ graph = CURRENT, serve = (path) => bodies.get(path), keep = nul
           }
         : key === 'clientModules'
           ? {
-              graph: () => graph,
+              graph: () => {
+                if (graphThrows) throw new Error('table gone')
+                return graph
+              },
               fetchBundle: async (asked) => {
                 seen.push(asked)
                 const { method, url } = asked
@@ -284,6 +287,17 @@ const resourceChunk = mount({
 const resourceAnswer = await resourceChunk.route.resource(new Request('http://x/plugins/@local/a/client.lazy.js?rev=a-old'))
 check('a chunk asked over the resource route is answered', resourceAnswer.status === 200 && (await resourceAnswer.text()) === '/* lazy resource */', String(resourceAnswer.status))
 check('the resource route asks at the entry revision', resourceAsks.includes('/plugins/@local/a/client.lazy.js?rev=ar2'), resourceAsks.join(' '))
+
+// --- a table that throws while it is being swapped --------------------------------------------
+// A rejection from inside an async route handler is an unhandled one, and Node ends the process
+// on that; the request is answered instead.
+const broken = mount({ graphThrows: true })
+const brokenAnswer = await call(broken.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js&rev=old' })
+check('a table that throws still answers the request', brokenAnswer.status === 404 && brokenAnswer.body === 'original', `${brokenAnswer.status} ${brokenAnswer.body}`)
+check(
+  'the failure is in the log',
+  readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('cannot read the plugin table for a bundle request: table gone'),
+)
 
 console.log(out.join('\n'))
 if (log.includes('plugin reload did not start')) {
