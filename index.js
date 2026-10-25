@@ -477,7 +477,9 @@ function pluginReloader(ctx, config) {
         return
       }
       if (busy()) log('reloading while turns are still running; they keep running')
-      void reloadNow(true).catch(() => {})
+      // A rejection here would otherwise vanish: the press already answered, so the log is the only
+      // place that can say the update stopped.
+      void reloadNow(true).catch((error) => log(`a queued reload could not finish: ${error?.message ?? error}`))
     }
     queued = unrefTimer(setTimeout(tick, 1000))
     return 'queued'
@@ -692,7 +694,10 @@ function buttonAllowed(req) {
       }
     }
     return true
-  } catch {
+  } catch (error) {
+    // The check itself failing is not the same as a refusal, and a silent one hides a bug behind
+    // a working-looking 403: leave the real reason in the log.
+    log(`cannot check where a press came from: ${error?.message ?? error}`)
     return false
   }
 }

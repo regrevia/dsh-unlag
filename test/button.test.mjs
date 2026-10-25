@@ -471,6 +471,13 @@ check('a press from another site is refused', elsewhere.status === 403, elsewher
 const opaque = fakeRes()
 await gate.routes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1', host: '127.0.0.1:62542', origin: 'null' } }, opaque)
 check('a press from an opaque origin is refused', opaque.status === 403, opaque.body)
+const unreadableHeaders = fakeRes()
+await gate.routes.get('/dsh-unlag/reload')({ method: 'POST', get headers() { throw new Error('boom') } }, unreadableHeaders)
+check('a request whose headers cannot be read is refused', unreadableHeaders.status === 403, unreadableHeaders.body)
+check(
+  'that refusal says why in the log instead of looking like a normal refusal',
+  readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('cannot check where a press came from: boom'),
+)
 const fromOutside = fakeRes()
 await gate.routes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1', host: '203.0.113.9:62542' } }, fromOutside)
 check('a press addressed from outside this machine is refused', fromOutside.status === 403, fromOutside.body)
