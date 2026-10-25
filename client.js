@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: '@local/dsh-unlag',
+  id: 'dsh-unlag',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
