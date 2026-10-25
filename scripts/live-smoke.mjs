@@ -89,6 +89,20 @@ contract.push(['reload without header', await status('/dsh-unlag/reload', { meth
 contract.push(['verify without header', await status('/dsh-unlag/verify', { method: 'POST' }), 403])
 const contractHeld = contract.every(([, got, want]) => got === want)
 
+// The shim's one promise, asked of the running app: a document that replays the startup list the
+// shell froze must be able to load every script in it, so a fabricated revision still answers the
+// current bytes. A 404 here is the crash this plugin exists to prevent; a plugin the set no longer
+// lists answers nothing, which is the module table's own answer and is left as it is.
+const staleUrl = `/${stale(graph.batches[0]?.url ?? '')}`
+const staleReply = await fetch(`${HOST}${staleUrl}`, { headers: { 'x-dsh-unlag': '1' } }).catch(() => null)
+const staleBytes = staleReply === null ? 0 : (await staleReply.arrayBuffer().catch(() => new ArrayBuffer(0))).byteLength
+const oldestReply = await fetch(`${HOST}/plugins/not-a-plugin/client.js?rev=0000000000ff`, { headers: { 'x-dsh-unlag': '1' } }).catch(() => null)
+const shimBehaviour = {
+  staleRev: { status: staleReply?.status ?? 0, bytes: staleBytes },
+  unknownPlugin: oldestReply?.status ?? 0,
+}
+const shimHeld = shimBehaviour.staleRev.status === 200 && shimBehaviour.staleRev.bytes > 0 && shimBehaviour.unknownPlugin === 404
+
 // Rehearsal, not a press: run the bytes the next document would load for the startup list the
 // desktop shell froze, with the same loader surface a document gives them, and see whether every
 // plugin in the list registers. Nothing is swapped here; when this passes, the press's own page
@@ -188,8 +202,9 @@ console.log(JSON.stringify({
   verdict,
   holdReason: verdict ? null : probe.startupHoldReason(),
   pressPath,
+  shim: shimBehaviour,
   rehearsal: { ok: rehearsalOk, ...rehearsal },
   asked: requests,
   contract: Object.fromEntries(contract.map(([label, got, want]) => [label, `${got}${got === want ? '' : ` (wanted ${want})`}`])),
 }, null, 2))
-process.exitCode = verdict === true && contractHeld && rehearsalOk ? 0 : 1
+process.exitCode = verdict === true && contractHeld && shimHeld && rehearsalOk ? 0 : 1

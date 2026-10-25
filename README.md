@@ -72,7 +72,7 @@ dsh plugin install dsh-unlag
 ## 排错
 
 - 日志：`~/.dsh/unlag-reload.log`，换代码／跳过／被拦各一行，含原因。
-- 演练：`npm run live-smoke` 不按按钮，只按当前启动清单把下一个文档要加载的字节在沙箱里跑一遍，看每个插件是否都注册（`rehearsal.ok`）——它证明的是「按下去之后新页面能起来」，不换任何代码。
+- 演练：`npm run live-smoke` 不按按钮，只按当前启动清单把下一个文档要加载的字节在沙箱里跑一遍，看每个插件是否都注册（`rehearsal.ok`），并当场核对两件事：写死的旧版本号仍然拿得到现在的字节（`shim.staleRev`），按下前会做的那个判断此刻是否放行（`pressPath`）——它证明的是「按下去之后新页面能起来、按钮现在真的可按」，不换任何代码。
 - 状态：`GET /dsh-unlag/state` → `{"version":"<当前版本>","code":"<index.js 写入时间>","plugins":true,"page":true,"shim":{...}}`。`code` 用来分清「版本号没刷」和「旧代码真的还在跑」。
 - 重建后的日志带起页面代次：`interface rebuilt; the page runs the plugins as served now (page <rev>)`，据此判断新文档加载的是新脚本还是旧脚本。
 

@@ -26,6 +26,10 @@ createServer((req, res) => {
   if (req.url === '/dsh-unlag/state') return req.method === 'GET' ? send(200, { version: 'x', code: 'c', shim: { wrapped: true } }) : send(405, { status: 'method' })
   if (req.url === '/dsh-unlag/graph') return req.method === 'GET' ? send(200, graph) : send(405, { status: 'method' })
   if (req.url === '/dsh-unlag/verify') return req.headers['x-dsh-unlag'] ? send(200, { status: 'blocked', reason: 'list' }) : send(403, { status: 'forbidden' })
+  // The bundle shim answers a frozen revision with the current bytes, and an unlisted plugin with
+  // nothing: the smoke asks both of a host, so the stand-in host has to answer both shapes.
+  if (req.url.startsWith('/plugins/not-a-plugin/')) return send(404, {})
+  if (req.url.startsWith('/plugins/')) { res.writeHead(200, { 'content-type': 'text/javascript' }); return res.end('/* current bytes */') }
   send(403, { status: 'forbidden' })
 }).listen(${HOST_PORT}, '127.0.0.1')
 `
@@ -61,6 +65,11 @@ if (!checked) process.exitCode = 1
 
 // The smoke also runs the decision a press would make before it swaps anything, so a reader learns
 // whether the button would go ahead right now instead of only whether the app answers.
+const shim = printed?.shim ?? null
+const shimRight = shim?.staleRev?.status === 200 && shim?.staleRev?.bytes > 0 && shim?.unknownPlugin === 404
+console.log(`${shimRight ? 'PASS' : 'FAIL'}  the smoke proves a frozen revision still loads (${JSON.stringify(shim)})`)
+if (!shimRight) process.exitCode = 1
+
 const pressPath = printed?.pressPath ?? null
 const pressPathRight = pressPath?.ready === false && pressPath?.held === 'blocked:list'
 console.log(`${pressPathRight ? 'PASS' : 'FAIL'}  the smoke prints what a press would decide (${JSON.stringify(pressPath)})`)
