@@ -319,12 +319,15 @@ check('and the pressed page still rebuilt', swapped.navigations.length === 1, sw
   check('an applied hold is logged as applied', page.requests.some((request) => request.path.includes('event=held') && request.path.includes('applied%3Adialog')))
 }
 
-// --- the app half does not answer: the press still rebuilds, as it always did ---------------
+// --- the switches cannot be read: the press must not claim an update it never made ------------
 {
   const page = harness({ settings: null })
   await page.press()
-  check('a missing app half still rebuilds the page', page.navigations.length === 1, String(page.navigations.length))
-  check('a missing app half asks no replacement it cannot track', count(page.requests, '/dsh-unlag/reload') === 0)
+  check('unreadable switches leave the page alone', page.navigations.length === 0, String(page.navigations.length))
+  check('unreadable switches ask no replacement', count(page.requests, '/dsh-unlag/reload') === 0)
+  check('unreadable switches never say the code is current', !/already up to date/.test(String(page.notice())), String(page.notice()))
+  check('unreadable switches say it cannot rebuild yet', /Cannot rebuild/.test(String(page.notice())), String(page.notice()))
+  check('unreadable switches are logged as such', page.requests.some((request) => request.path.includes('event=held') && request.path.includes('gate=settings')))
 }
 
 // --- a page check throws: no crash, no navigation, the button is usable again ---------------

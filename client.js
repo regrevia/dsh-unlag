@@ -650,8 +650,17 @@ window.__ModuleLoader__.load({
         };
         try {
           const settings = await readSettings();
-          const replace = settings === null ? false : settings.plugins;
-          const rebuild = settings === null ? true : settings.page;
+          /**
+           * Without the switches the press cannot know what it was asked for. Rebuilding anyway would
+           * reload the page and leave the code untouched while the notice claimed the code was
+           * current, so the press holds instead and says why.
+           */
+          if (settings === null) {
+            report('held', 'settings');
+            return stop('blocked');
+          }
+          const replace = settings.plugins;
+          const rebuild = settings.page;
           // Nothing is switched on: the press says so instead of looking broken.
           if (!replace && !rebuild) {
             report('off');
