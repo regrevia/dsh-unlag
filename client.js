@@ -6,8 +6,8 @@ window.__ModuleLoader__.load({
 
     const zh = /^zh/i.test(navigator.language || '');
     const COPY = zh
-      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '界面暂时无法重载，请重启应用', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '已排队：任务跑完自动重载' } // ui-copy-ignore
-      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot reload right now; restart the app', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Queued; it reloads once the turn ends' };
+      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '已排队：任务跑完自动重载' } // ui-copy-ignore
+      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Queued; it reloads once the turn ends' };
 
     // Desktop shell only: the macOS and Windows desktop build owns the page and the running
     // app, so this is where the button belongs. A browser tab can reload freely on its own.
@@ -68,8 +68,7 @@ window.__ModuleLoader__.load({
     }
 
     /** Read every bundle the next boot would load and prove each listed plugin is inside. */
-    async function bundlesCoverStartup() {
-      const graph = window.__DSH_BOOT__;
+    async function bundlesCoverStartup(graph) {
       if (graph === null || typeof graph !== 'object') return false;
       const entries = Array.isArray(graph.entries) ? graph.entries : [];
       const batches = Array.isArray(graph.batches) ? graph.batches : [];
@@ -106,19 +105,67 @@ window.__ModuleLoader__.load({
       return true;
     }
 
+    /** The first balanced JSON object after `__DSH_BOOT__` in a served document. */
+    function graphFromHtml(html) {
+      const at = html.indexOf('__DSH_BOOT__'); // ui-copy-ignore
+      if (at < 0) return null;
+      const start = html.indexOf('{', at);
+      if (start < 0) return null;
+      let depth = 0;
+      let quoted = false;
+      let escaped = false;
+      for (let index = start; index < html.length; index += 1) {
+        const ch = html[index];
+        if (quoted) {
+          if (escaped) escaped = false;
+          else if (ch === '\\') escaped = true;
+          else if (ch === '"') quoted = false;
+          continue;
+        }
+        if (ch === '"') quoted = true;
+        else if (ch === '{') depth += 1;
+        else if (ch === '}') {
+          depth -= 1;
+          if (depth === 0) {
+            try {
+              return JSON.parse(html.slice(start, index + 1));
+            } catch {
+              return null;
+            }
+          }
+        }
+      }
+      return null;
+    }
+
     /**
-     * Whether a rebuild can re-run the interface at all. The boot of this page activates one
-     * module per plugin in the startup list and stops the desktop app when any of them is
-     * missing, so a list row whose module is absent from the bundles it points at would end
-     * the app and every running turn along with it. Reading the bundles back proves each row
-     * still resolves before the interface is rebuilt; one repeat covers a bundle swapped
-     * while the app was re-composing.
+     * The startup list a rebuild would actually get. This page's own list is only true of the
+     * page already running: a plugin swapped since then is listed there under its old module,
+     * so asking it first would refuse a rebuild that is in fact safe.
+     */
+    async function servedBootGraph() {
+      try {
+        const response = await fetch(location.href, { cache: 'no-store', credentials: 'same-origin' });
+        if (!response.ok) return null;
+        return graphFromHtml(await response.text());
+      } catch {
+        return null;
+      }
+    }
+
+    /**
+     * Whether a rebuild can re-run the interface at all. A boot activates one module per plugin
+     * in the startup list and stops the desktop app when any of them is missing, so a list row
+     * whose module is absent from the bundles it points at would end the app and every running
+     * turn along with it. Reading the bundles back proves each row still resolves before the
+     * interface is rebuilt; one repeat covers a bundle swapped while the app was re-composing.
      * @returns true when every listed plugin's module is present in the served bundles.
      */
     async function startupLooksServable() {
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        if (await bundlesCoverStartup()) return true;
-        if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 300));
+        const graph = (await servedBootGraph()) ?? window.__DSH_BOOT__;
+        if (await bundlesCoverStartup(graph)) return true;
+        if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 300)); // ui-copy-ignore
       }
       return false;
     }
