@@ -2032,7 +2032,7 @@ function serveButton(ctx, controller, config) {
   const disposers = []
   for (const [path, handler] of handlers) {
     try {
-      const dispose = server.register({ kind: 'exact', path, handler })
+      const dispose = server.register({ kind: 'exact', path, handler: guardRoute(path, handler) })
       if (typeof dispose === 'function') disposers.push(dispose)
     } catch (error) {
       log(`cannot answer ${path}: ${error?.message ?? error}`)
@@ -2040,6 +2040,44 @@ function serveButton(ctx, controller, config) {
   }
   return () => {
     for (const dispose of disposers) closeAll(dispose)
+  }
+}
+
+/**
+ * Nothing a route body does may reach the server as a rejection or a throw: an answer that never
+ * settles is a page that waits forever, and a rejected handler can take down the request instead of
+ * saying what happened. Each body already answers from its own guard; this one is the floor under
+ * them, so a future edit that misses a path still costs a status rather than the answer.
+ */
+export function guardRoute(path, handler) {
+  /**
+   * Nothing a route body does may reach the server as a rejection or a throw: an answer that never
+   * settles is a page that waits forever, and a rejected handler can take the request down instead
+   * of saying what happened. Each body answers from its own guard already; this is the floor under
+   * them, so a future edit that misses a path costs a status rather than the answer.
+   */
+  return (req, res) => {
+    const fallback = (error) => {
+      log(`cannot answer ${path}: ${error?.message ?? error}`)
+      try {
+        if (res?.headersSent !== true) sendJson(res, 503, { status: 'error' })
+        else if (res?.writableEnded !== true && res?.destroyed !== true) res.end()
+      } catch {
+        /* the response is already gone; the log line is what is left to say */
+      }
+    }
+    try {
+      const answer = handler(req, res)
+      // The answer is handed back as it came: a caller that waits on the body still waits on it,
+      // and the rejection is watched here as well rather than instead.
+      if (answer !== null && typeof answer === 'object' && typeof answer.then === 'function') {
+        answer.then(undefined, fallback)
+      }
+      return answer
+    } catch (error) {
+      fallback(error)
+      return undefined
+    }
   }
 }
 
