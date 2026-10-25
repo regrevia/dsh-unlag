@@ -129,6 +129,34 @@ const busyRes = fakeRes()
 await busyMount.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, busyRes)
 check('a running turn queues the press, never replaces code', busyRes.body === '{"status":"queued"}', busyRes.body)
 
+// A machine whose turns never all go idle still gets the reload once the grace is spent.
+let graceRan = 0
+const graceRoutes = (() => {
+  const routes = new Map()
+  const ctx = {
+    get: (key) => {
+      if (key === 'webServer') return { register: (r) => (routes.set(r.path, r.handler), () => routes.delete(r.path)) }
+      if (key === 'hmr')
+        return {
+          baseDir: '/tmp/x',
+          runExclusive: async (op) => op(),
+          reconcileProfile: async () => {
+            graceRan += 1
+          },
+        }
+      if (key === 'agents') return { list: () => [{ status: 'working' }] }
+      return undefined
+    },
+    on: () => {},
+  }
+  apply(ctx, { busyWaitMs: 80 })
+  return routes
+})()
+const graceRes = fakeRes()
+await graceRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, graceRes)
+await new Promise((resolve) => setTimeout(resolve, 2500))
+check('a busy machine still reloads after the grace', graceRes.body === '{"status":"queued"}' && graceRan === 1, `ran=${graceRan}`)
+
 // --- hostile surroundings --------------------------------------------------------------------
 let survived = true
 try {

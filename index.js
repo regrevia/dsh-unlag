@@ -222,23 +222,28 @@ function pluginReloader(ctx, config) {
     }
   }
 
-  /** One press is enough: a reload that lands on a running turn waits for the next idle moment. */
-  const PENDING_MAX_MS = 30 * 60 * 1000
+  /**
+   * One press is enough. A press that lands during a running turn waits for a quiet moment, and
+   * after a short grace reloads anyway: swapping code never interrupts a turn, it only hands the
+   * next step newer code. Waiting forever would leave busy machines with a dead button.
+   */
+  const WAIT_MAX_MS = Number.isFinite(config?.busyWaitMs) ? Math.max(0, config.busyWaitMs) : 60_000
   let queued = null
   const queueReload = () => {
     if (queued !== null) return 'queued'
-    const deadline = Date.now() + PENDING_MAX_MS
+    const started = Date.now()
     const tick = () => {
       queued = null
-      if (running || busy()) {
-        if (Date.now() > deadline) {
-          log('queued reload gave up: agents never went idle')
-          return
-        }
+      if (running) {
+        queued = setTimeout(tick, 500)
+        return
+      }
+      if (busy() && Date.now() - started < WAIT_MAX_MS) {
         queued = setTimeout(tick, 1000)
         return
       }
-      void reloadNow()
+      if (busy()) log('reloading while turns are still running; they keep running')
+      void reloadNow(true)
     }
     queued = setTimeout(tick, 1000)
     return 'queued'
@@ -249,13 +254,13 @@ function pluginReloader(ctx, config) {
    * press did not replace anything instead of looking broken.
    * @returns 'done' | 'queued' | 'unavailable' | 'failed'
    */
-  const reloadNow = async () => {
+  const reloadNow = async (force = false) => {
     const hmr = hmrService()
     if (hmr === null) return 'unavailable'
-    if (running || busy()) return queueReload()
+    if (running || (force === false && busy())) return queueReload()
     const wait = lastRun + MIN_INTERVAL_MS - Date.now()
     if (wait > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(wait, 2000)))
-    if (running || busy()) return queueReload()
+    if (running || (force === false && busy())) return queueReload()
     if (timer !== null) {
       clearTimeout(timer)
       timer = null
