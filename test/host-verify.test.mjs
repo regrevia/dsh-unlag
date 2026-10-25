@@ -214,5 +214,21 @@ const failed = checks.filter((row) => !row.pass)
 check('a row the set still serves names no stand-in', atCurrent.standInRows === undefined, JSON.stringify(atCurrent))
 check('the lost-plugin row is counted as a stand-in', gone.standInRows === 1, JSON.stringify(gone))
 
+// The list is the running app's own object, re-composed while a swap runs: a row whose fields
+// cannot be read is a list this check cannot read, and it says so rather than throwing out of the
+// route that carries the press.
+let entryRead = null
+let entryThrew = null
+try {
+  entryRead = await verifyStartup({
+    graph: () => ({ rev: 'new', entries: [{ get id() { throw new Error('mid-swap') } }], batches: [] }),
+    fetchBundle: async () => new Response('', { status: 200 }),
+  }, ['/plugins/??@local/a/client.js&rev=new'])
+} catch (error) {
+  entryThrew = error
+}
+check('a row that cannot be read is refused, not thrown', entryThrew === null && entryRead?.status === 'blocked', String(entryThrew?.message ?? entryRead?.status))
+check('and the refusal names the list', entryRead?.reason === 'list', String(entryRead?.reason))
+
 console.log(`\n${checks.length - failed.length}/${checks.length} passed`)
 if (failed.length > 0) process.exitCode = 1

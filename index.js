@@ -1629,11 +1629,19 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
   if (graph === null || typeof graph !== 'object' || !Array.isArray(graph.entries)) {
     return { status: 'blocked', reason: 'list', detail: 'the plugin list cannot be read, so no startup row can be checked against it' }
   }
-  const entries = new Map(
-    (Array.isArray(graph?.entries) ? graph.entries : [])
-      .filter((row) => typeof row?.id === 'string' && row.id !== '')
-      .map((row) => [row.id, row]),
-  )
+  // The list is the running app's own object and it is re-composed while a swap runs, so reading a
+  // row is a step that can fail like any other: a row that cannot be read leaves the list unread,
+  // which is a refusal with a reason, not an exception out of the route.
+  let entries
+  try {
+    entries = new Map(
+      (Array.isArray(graph.entries) ? graph.entries : [])
+        .filter((row) => typeof row?.id === 'string' && row.id !== '')
+        .map((row) => [row.id, row]),
+    )
+  } catch (error) {
+    return { status: 'blocked', reason: 'list', detail: `the plugin list cannot be read: ${String(error?.message ?? error)}` }
+  }
   // A startup list is a handful of addresses. Anything past that bound is not a list this app could
   // boot from, and reading it would turn one request into unbounded work on the process that owns
   // every running turn.
