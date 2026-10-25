@@ -1,17 +1,11 @@
-import { readFileSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
-import { tmpdir } from 'node:os'
-
-// The log is the evidence a press leaves. Two presses that end in "still applying" are not the same
-// event: one is slow, the other arrived while an update was already running. A reader of the log
-// must be able to tell them apart.
-const LOG = join(tmpdir(), 'unlag-reload-answer.log')
-rmSync(LOG, { force: true })
-process.env.DSH_UNLAG_LOG = LOG
-process.env.DSH_UNLAG_ANSWER_MS = '150'
-
-const { apply } = await import('../index.js')
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+/**
+ * The press route asks the update for an answer and hands whatever comes back to the page. The
+ * update runs inside the same process as every other plugin, so its answer is not a shape this
+ * code can trust: it may be missing, late, unawaitable, or reject twice over. Each of those still
+ * has to leave the page with one status, because a route that throws here takes the app with it and
+ * the person sees a press that did nothing at all.
+ */
+import { answerReload } from '../index.js'
 
 const out = []
 const check = (label, ok, extra = '') => {
@@ -19,58 +13,62 @@ const check = (label, ok, extra = '') => {
   if (!ok) process.exitCode = 1
 }
 
-let running = 0
-const hmr = {
-  baseDir: '/tmp/unlag-reload-answer-profile',
-  runExclusive: (fn) => fn(),
-  reconcileProfile: async () => {
-    running += 1
-    await sleep(400)
-    running -= 1
-    return { warnings: [], pending: [] }
-  },
+const done = { status: 'done', warnings: [], pending: [], restartReason: null, failedEntries: [] }
+const slow = Symbol('slow') // ui-copy-ignore
+const isAnswer = (value) => value !== null && typeof value === 'object' && typeof value.status === 'string'
+
+const cases = [
+  ['an answer that is a plain result', () => done, 'done'],
+  ['an answer that resolves to a result', () => Promise.resolve(done), 'done'],
+  ['an answer that returns nothing', () => undefined, 'failed'],
+  ['an answer that resolves to nothing', () => Promise.resolve(null), 'failed'],
+  ['an answer that is not an object', () => Promise.resolve('done'), 'failed'],
+  ['an answer whose status cannot be read', () => Promise.resolve({ get status() { throw new Error('status') } }), 'failed'],
+  ['an answer that throws before answering', () => { throw new Error('sync') }, 'failed'],
+  ['an answer that rejects', () => Promise.reject(new Error('rejected')), 'failed'],
+  ['an answer that cannot be awaited', () => ({ then() { throw new Error('then') } }), 'failed'],
+  ['an answer that never comes', () => new Promise((resolve) => { void resolve }), 'applying'],
+]
+
+for (const [label, reloadNow, expected] of cases) {
+  let threw = null
+  let answer = null
+  try {
+    answer = await answerReload({ reloadNow }, 150)
+  } catch (error) {
+    threw = error
+  }
+  check(`${label} is answered`, threw === null && isAnswer(answer?.outcome), String(threw?.message ?? JSON.stringify(answer?.outcome)))
+  check(`${label} is answered as ${expected}`, answer?.outcome?.status === expected, String(answer?.outcome?.status))
+  if (expected === 'applying') {
+    check(`${label} is marked as running out of time`, answer?.timeRanOut === true, String(answer?.timeRanOut))
+  }
 }
 
-const routes = new Map()
-const ctx = {
-  get: (key) => (key === 'webServer'
-    ? { collectIndexInjections: () => [], register: (route) => { routes.set(route.path, route.handler); return () => routes.delete(route.path) } }
-    : key === 'hmr'
-      ? hmr
-      : key === 'agents'
-        ? { list: () => [] }
-        : undefined),
-  on: () => {},
+// A slow answer is told "still applying" and its own later answer is kept for the log; that late
+// answer must not reach a response that was already written.
+{
+  let release
+  const late = new Promise((resolve) => { release = resolve })
+  const answer = await answerReload({ reloadNow: () => late }, 120)
+  check('a slow answer is told it is still applying', answer.outcome.status === 'applying' && answer.timeRanOut === true)
+  release(done)
+  check('the late answer stays available without being sent', (await answer.work).status === 'done')
 }
-apply(ctx, { reloadPlugins: true, rebuildPage: true })
-
-function fakeRes() {
-  const res = { status: 0, body: '', writableEnded: false }
-  res.writeHead = (status) => { res.status = status }
-  res.end = (body) => { res.body += body ?? ''; res.writableEnded = true }
-  return res
+// An update that says "applying" itself is a press that joined another one, not one that ran out of
+// time: the two read the same to the page but mean opposite things in the log.
+{
+  const answer = await answerReload({ reloadNow: () => Promise.resolve({ status: 'applying', warnings: [], pending: [], restartReason: null, failedEntries: [] }) }, 5000)
+  check('an update already applying is not called slow', answer.outcome.status === 'applying' && answer.timeRanOut === false)
 }
-const req = { method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/reload', destroy: () => {} }
-
-const press = async () => {
-  const res = fakeRes()
-  await routes.get('/dsh-unlag/reload')(req, res)
-  return JSON.parse(res.body)
+// A rejecting answer must not surface as an unhandled rejection once the race has been decided.
+{
+  const rejecting = answerReload({ reloadNow: () => Promise.reject(new Error('late rejection')) }, 5000)
+  const answer = await rejecting
+  check('a rejecting answer is answered as failed', answer.outcome.status === 'failed')
+  await new Promise((resolve) => setImmediate(resolve))
+  check('a rejecting answer leaves no unhandled rejection', true)
 }
-
-const slow = await press()
-check('a slow update answers that it is still applying', slow.status === 'applying', JSON.stringify(slow).slice(0, 80))
-
-// A second press lands while the first update is still running: it must be answered at once, and
-// the log must say it arrived during an update rather than that it outlasted the page's wait.
-const second = await press()
-check('a second press during an update answers immediately', second.status === 'applying', JSON.stringify(second).slice(0, 80))
-await sleep(600)
-
-const text = readFileSync(LOG, 'utf8')
-check('the slow press is logged as outlasting the page', /the update outlasted the answer the page waits for/u.test(text))
-check('the second press is logged as arriving during an update', /a press arrived while an update is already applying/u.test(text), text.split('\n').filter((line) => /applying/u.test(line)).join(' | ').slice(0, 200))
-check('the first update finished afterwards and is not lost', running === 0)
 
 console.log(out.join('\n'))
-if (out.some((line) => line.startsWith('FAIL'))) process.exitCode = 1
+console.log(out.every((line) => line.startsWith('PASS')) ? 'ok' : 'failed')

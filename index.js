@@ -1754,6 +1754,45 @@ export async function verifyStartup(clientModules, rows) {
   return verifyStartupRows(graph, (url) => readStartupScript(clientModules, url), rows)
 }
 
+/** What one press is told when the update it waits for did not answer in time. */
+const STILL_APPLYING = Object.freeze({ status: 'applying', warnings: [], pending: [], restartReason: null, failedEntries: [] });
+
+/**
+ * The answer a press waits for, bounded in time. The update is asked for at most once and its
+ * answer is settled the same way whether it is a promise, a plain value, or a promise that cannot
+ * even be awaited: the page is always told one status, and nothing a plugin swap answers can turn
+ * the route into an error.
+ * @returns {{ outcome: object, timeRanOut: boolean, work: Promise<unknown> }}
+ */
+export async function answerReload(controller, limitMs) {
+  let work = null
+  try {
+    work = Promise.resolve(controller.reloadNow())
+  } catch (error) {
+    log(`a press could not be started: ${error?.message ?? error}`)
+    return { outcome: { status: 'failed', warnings: [], pending: [], restartReason: null, failedEntries: [] }, timeRanOut: false, work: Promise.resolve() }
+  }
+  let timer = null
+  let timeRanOut = false
+  const ranOut = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      timeRanOut = true
+      resolve(STILL_APPLYING)
+    }, limitMs)
+  })
+  try {
+    const outcome = await Promise.race([work.catch(() => null), ranOut])
+    // Reading the status can throw too; an answer that cannot be read is not one the page can use.
+    try {
+      if (outcome !== null && typeof outcome === 'object' && typeof outcome.status === 'string') return { outcome, timeRanOut, work }
+    } catch {}
+    // An update that answers nothing usable is still a press that has to be answered.
+    return { outcome: { status: 'failed', warnings: [], pending: [], restartReason: null, failedEntries: [] }, timeRanOut, work }
+  } finally {
+    if (timer !== null) clearTimeout(timer)
+  }
+}
+
 /**
  * The entry points the header button calls. Each answers with the current switches so the page
  * never guesses: with both off it does nothing, and a turn still running is reported rather than
@@ -1888,42 +1927,21 @@ function serveButton(ctx, controller, config) {
           if (buttonAllowed(req) === false) return sendJson(res, 403, { status: 'forbidden' })
           if (!settings.reloadPlugins) return sendJson(res, 200, { status: 'off' })
           const limit = Number(process.env.DSH_UNLAG_ANSWER_MS ?? '') || RELOAD_ANSWER_MS
-          let timer = null
-          let timedOut = false
-          const stillApplying = new Promise((resolve) => {
-            timer = setTimeout(() => {
-              // Only the timer's own answer means the update outlasted the page: an update that
-              // says "applying" itself is a press that arrived during another one, not a slow one.
-              timedOut = true
-              resolve({ status: 'applying', warnings: [], pending: [], restartReason: null, failedEntries: [] })
-            }, limit)
-          })
-          let answeredEarly = false
-          try {
-            const work = controller.reloadNow()
-            /**
-             * The answer the page waits for is bounded, but the update is not. Whatever the update
-             * did after the page was told it is still applying is written down here: a replacement
-             * that failed a moment later must not look like one that succeeded.
-             */
+          const { outcome, timeRanOut, work } = await answerReload(controller, limit)
+          /**
+           * The answer the page waits for is bounded, but the update is not. Whatever the update
+           * did after the page was told it is still applying is written down here: a replacement
+           * that failed a moment later must not look like one that succeeded.
+           */
+          if (outcome.status === 'applying') {
+            if (timeRanOut) log('the update outlasted the answer the page waits for: the press is told it is still applying')
+            else log('a press arrived while an update is already applying: the press is told it is still applying')
             work.then(
-              (late) => {
-                if (answeredEarly) log(`the update finished after the page was told it is still applying: ${String(late?.status ?? 'no status')}`)
-              },
-              (error) => {
-                if (answeredEarly) log(`the update failed after the page was told it is still applying: ${error?.message ?? error}`)
-              },
+              (late) => log(`the update finished after the page was told it is still applying: ${String(late?.status ?? 'no status')}`),
+              (error) => log(`the update failed after the page was told it is still applying: ${error?.message ?? error}`),
             )
-            const outcome = await Promise.race([work, stillApplying])
-            if (outcome?.status === 'applying') {
-              answeredEarly = true
-              if (timedOut) log('the update outlasted the answer the page waits for: the press is told it is still applying')
-              else log('a press arrived while an update is already applying: the press is told it is still applying')
-            }
-            sendJson(res, 200, outcome)
-          } finally {
-            if (timer !== null) clearTimeout(timer)
           }
+          sendJson(res, 200, outcome)
         } catch (error) {
           log(`cannot apply a plugin reload: ${error?.message ?? error}`)
           sendJson(res, 500, { status: 'failed', detail: String(error?.message ?? error) })
