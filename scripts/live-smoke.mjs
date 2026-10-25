@@ -89,6 +89,87 @@ contract.push(['reload without header', await status('/dsh-unlag/reload', { meth
 contract.push(['verify without header', await status('/dsh-unlag/verify', { method: 'POST' }), 403])
 const contractHeld = contract.every(([, got, want]) => got === want)
 
+// Rehearsal, not a press: run the bytes the next document would load for the startup list the
+// desktop shell froze, with the same loader surface a document gives them, and see whether every
+// plugin in the list registers. Nothing is swapped here; when this passes, the press's own page
+// load is the only unproven step.
+async function rehearseBoot() {
+  const stamped = (url) => {
+    const path = String(url).startsWith('/') ? String(url) : `/${String(url)}`
+    return `${HOST}${path}`
+  }
+  const registered = new Set()
+  const load = (row) => {
+    if (row !== null && typeof row === 'object' && typeof row.id === 'string') registered.add(row.id)
+  }
+  const noop = () => {}
+  const element = () => ({ style: {}, setAttribute: noop, append() {}, appendChild() {}, remove() {}, addEventListener: noop, removeEventListener: noop, classList: { add: noop, remove: noop }, querySelector: () => null })
+  const rehearsalWindow = {
+    __ModuleLoader__: { load, ensure: () => ({}) },
+    document: { head: element(), body: element(), createElement: element, querySelector: () => null, querySelectorAll: () => [], getElementById: () => null, addEventListener: noop, removeEventListener: noop },
+    location: { href: `${HOST}/`, origin: HOST, pathname: '/', search: '', hash: '', replace: noop, assign: noop, reload: noop },
+    navigator: { language: 'en-US', userAgent: 'Mozilla/5.0 (Macintosh) Electron/44.7.0', platform: 'MacIntel' },
+    sessionStorage: { getItem: () => null, setItem: noop, removeItem: noop },
+    localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
+    matchMedia: () => ({ matches: false, addEventListener: noop, removeEventListener: noop }),
+    requestAnimationFrame: (fn) => { try { fn(0) } catch {} return 0 },
+    cancelAnimationFrame: noop,
+    MutationObserver: class { observe() {} disconnect() {} takeRecords() { return [] } },
+    IntersectionObserver: class { observe() {} disconnect() {} unobserve() {} },
+    ResizeObserver: class { observe() {} disconnect() {} unobserve() {} },
+    addEventListener: noop,
+    removeEventListener: noop,
+    dispatchEvent: () => true,
+    fetch: async (url, init) => fetch(stamped(url), init),
+    URL,
+    Response,
+    Request,
+    Headers,
+    AbortController,
+    Blob,
+    TextEncoder,
+    TextDecoder,
+    URLSearchParams,
+    console,
+    setTimeout,
+    clearTimeout,
+    queueMicrotask,
+    performance,
+    Event,
+    CustomEvent,
+    JSON,
+    Math,
+    Date,
+    Promise,
+    RegExp,
+    Error,
+    Buffer,
+  }
+  rehearsalWindow.window = rehearsalWindow
+  rehearsalWindow.globalThis = rehearsalWindow
+  rehearsalWindow.self = rehearsalWindow
+  rehearsalWindow.document.defaultView = rehearsalWindow
+  const ran = []
+  for (const batch of graph.batches) {
+    const path = String(batch.url).startsWith('/') ? String(batch.url) : `/${String(batch.url)}`
+    const response = await fetch(`${HOST}${path}`, { headers: { 'x-dsh-unlag': '1' } })
+    const body = await response.text()
+    ran.push({ url: path, status: response.status, bytes: body.length })
+    if (!response.ok) continue
+    try {
+      runInNewContext(body, rehearsalWindow, { timeout: 5000 })
+    } catch (error) {
+      ran[ran.length - 1].threw = String(error?.message ?? error)
+    }
+  }
+  const wanted = graph.entries.map((entry) => (typeof entry === 'string' ? entry : entry?.id)).filter((id) => typeof id === 'string')
+  const missing = wanted.filter((id) => !registered.has(id))
+  return { registered: registered.size, wanted: wanted.length, missing, ran }
+}
+
+const rehearsal = await rehearseBoot().catch((error) => ({ threw: String(error?.message ?? error) }));
+const rehearsalOk = rehearsal.threw === undefined && rehearsal.missing !== undefined && rehearsal.missing.length === 0 && rehearsal.ran.every((row) => row.threw === undefined)
+
 const running = { version: stated.version, code: stated.code, shim: stated.shim }
 const verdict = await probe.startupLooksServable()
 console.log(JSON.stringify({
@@ -99,7 +180,8 @@ console.log(JSON.stringify({
   rows: rows.length,
   verdict,
   holdReason: verdict ? null : probe.startupHoldReason(),
+  rehearsal: { ok: rehearsalOk, ...rehearsal },
   asked: requests,
   contract: Object.fromEntries(contract.map(([label, got, want]) => [label, `${got}${got === want ? '' : ` (wanted ${want})`}`])),
 }, null, 2))
-process.exitCode = verdict === true && contractHeld ? 0 : 1
+process.exitCode = verdict === true && contractHeld && rehearsalOk ? 0 : 1

@@ -1,3 +1,9 @@
+## 1.9.86
+
+- `scripts/live-smoke.mjs` 加了一步真正意义上的演练（仍然只读、绝不按按钮）：取运行中应用当前的启动清单，把下一个文档会加载的那几段组合脚本按旧修订取回来，在带 `__ModuleLoader__` 的沙箱里执行，统计每个插件是否都注册。实测：3 段脚本全部 200（46 KB + 9.1 MB + 6.4 MB），88 个插件全部注册，`missing: []`，`rehearsal.ok: true`。这是目前最接近「按一下」的证据——剩下的唯一未被证明的步骤只有那一次页面载入本身。
+- 演练本身失败时打印 `threw` 与 `missing`，排错时一眼看出是哪一段字节的问题。
+- README 排错一节补上这条命令的用法；全套 553 PASS / 0 FAIL。
+
 ## 1.9.85
 
 - 给页面这一半补上随机敌意输入的实证：8 种坏页面（读不出的 sessionStorage / location / 文档、抛错的事件派发、抛错的桥、抛错的 fetch、抛错的 rAF）× 多种清单形状（含读取字段就抛的清单）扫过 `prepareInterface` / `startupLooksServable` / `reloadVerdict` / `readSettings` / `desktopStartupPayload` / `desktopShellPresent` / `reloadFreshPage`，没有一次异常穿出，结论是 `fuzz clean`。也就是说按压路径上已有护栏是真的兜住了，不是靠外层 catch。
