@@ -219,8 +219,20 @@ const count = (requests, piece) => requests.filter((request) => request.path.sta
   wait.fn()
   const view = page.render()
   check('a held navigation leaves the button usable', view.button.props.style.opacity === 0.75, String(view.button.props.style.opacity))
-  check('a held navigation says the page stayed', /page stayed/.test(String(page.notice())), String(page.notice()))
+  check('a held navigation says the page did not rebuild', /page did not rebuild/.test(String(page.notice())), String(page.notice()))
+  // The notice may only claim the plugins changed when this press really replaced them.
+  check('a held navigation says the code went live too', /Plugin code updated/.test(String(page.notice())), String(page.notice()))
   check('a held navigation says why', page.requests.some((request) => request.path.includes('event=held') && request.path.includes('gate=navigation')))
+}
+
+// --- a page-only press that holds the navigation must not claim the code changed ----------------
+{
+  const page = harness({ settings: { plugins: false, page: true } })
+  await page.press()
+  const wait = page.scheduled.find((entry) => entry.ms === 6000)
+  wait.fn()
+  check('a page-only press that held says only that the page stayed', String(page.notice()) === 'The page did not rebuild; press again shortly', String(page.notice()))
+  check('a page-only press that held leaves the button usable', page.render().button.props.style.opacity === 0.75)
 }
 
 // --- both switches off: the press says so instead of doing nothing -----------------------------

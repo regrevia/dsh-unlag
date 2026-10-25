@@ -6,8 +6,8 @@ window.__ModuleLoader__.load({
 
     const zh = /^zh/i.test(navigator.language || '');
     const COPY = zh
-      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', off: '两个开关都关着，先在设置里打开一个', replaced: '插件代码已更新，页面保持不动', done: '插件代码已是最新', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次' } // ui-copy-ignore
-      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', off: 'Both switches are off; turn one on in settings', replaced: 'Plugin code updated; the page stayed as it is', done: 'Plugin code is already up to date', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later' };
+      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', off: '两个开关都关着，先在设置里打开一个', replaced: '插件代码已更新，页面保持不动', stayedReplaced: '插件代码已更新，页面没有重建；稍后再按一次', stayed: '页面没有重建；稍后再按一次', done: '插件代码已是最新', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次' } // ui-copy-ignore
+      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', off: 'Both switches are off; turn one on in settings', replaced: 'Plugin code updated; the page stayed as it is', stayedReplaced: 'Plugin code updated; the page did not rebuild; press again shortly', stayed: 'The page did not rebuild; press again shortly', done: 'Plugin code is already up to date', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later' };
 
     /**
      * Why the interface was left as it is, in words a person can act on. The checks below record
@@ -642,6 +642,8 @@ window.__ModuleLoader__.load({
         setPending(true);
         setNotice(null);
         let navigated = false;
+        // Read by the fallback below, which runs after the try block's own scope is gone.
+        let replaced = false;
         const stop = (key, applied = false) => {
           setPending(false);
           setNotice(noticeFor(key, applied));
@@ -650,7 +652,6 @@ window.__ModuleLoader__.load({
           const settings = await readSettings();
           const replace = settings === null ? false : settings.plugins;
           const rebuild = settings === null ? true : settings.page;
-          let replaced = false;
           // Nothing is switched on: the press says so instead of looking broken.
           if (!replace && !rebuild) {
             report('off');
@@ -726,7 +727,9 @@ window.__ModuleLoader__.load({
               // happened and take the press back, so the button is never left unresponsive.
               report('held', 'navigation');
               setPending(false);
-              setNotice(noticeFor('replaced'));
+              // Only a press that really replaced the plugins may say so: a page-only press that
+              // held the navigation changed no code.
+              setNotice(replaced ? COPY.stayedReplaced : COPY.stayed);
             }, 6000); // ui-copy-ignore
           }
         }
