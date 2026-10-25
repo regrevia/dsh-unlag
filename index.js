@@ -222,19 +222,40 @@ function pluginReloader(ctx, config) {
     }
   }
 
+  /** One press is enough: a reload that lands on a running turn waits for the next idle moment. */
+  const PENDING_MAX_MS = 30 * 60 * 1000
+  let queued = null
+  const queueReload = () => {
+    if (queued !== null) return 'queued'
+    const deadline = Date.now() + PENDING_MAX_MS
+    const tick = () => {
+      queued = null
+      if (running || busy()) {
+        if (Date.now() > deadline) {
+          log('queued reload gave up: agents never went idle')
+          return
+        }
+        queued = setTimeout(tick, 1000)
+        return
+      }
+      void reloadNow()
+    }
+    queued = setTimeout(tick, 1000)
+    return 'queued'
+  }
+
   /**
    * The button path: run now and report what happened, so the page can tell the user why the
    * press did not replace anything instead of looking broken.
-   * @returns 'done' | 'busy' | 'unavailable' | 'failed'
+   * @returns 'done' | 'queued' | 'unavailable' | 'failed'
    */
   const reloadNow = async () => {
     const hmr = hmrService()
     if (hmr === null) return 'unavailable'
-    if (running) return 'busy'
-    if (busy()) return 'busy'
+    if (running || busy()) return queueReload()
     const wait = lastRun + MIN_INTERVAL_MS - Date.now()
     if (wait > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(wait, 2000)))
-    if (running) return 'busy'
+    if (running || busy()) return queueReload()
     if (timer !== null) {
       clearTimeout(timer)
       timer = null
@@ -281,7 +302,12 @@ function pluginReloader(ctx, config) {
     }
   }
 
-  return { reloadNow, startWatching, available }
+  const stop = () => {
+    if (queued !== null) clearTimeout(queued)
+    queued = null
+  }
+
+  return { reloadNow, startWatching, available, stop }
 }
 
 /** Write one JSON answer; a response already gone must not throw into the caller. */
@@ -375,6 +401,7 @@ export function apply(ctx, config) {
     globalThis[ROUTES_KEY] = serveButton(ctx, controller, config ?? {})
 
     ctx.on('dispose', () => {
+      controller.stop()
       closeAll(globalThis[WATCHER_KEY])
       closeAll(globalThis[ROUTES_KEY])
       globalThis[WATCHER_KEY] = null

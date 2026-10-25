@@ -6,8 +6,8 @@ window.__ModuleLoader__.load({
 
     const zh = /^zh/i.test(navigator.language || '');
     const COPY = zh
-      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '界面暂时无法重载，请重启应用', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', busy: '任务还在跑，等它结束后再试' } // ui-copy-ignore
-      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot reload right now; restart the app', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', busy: 'A turn is still running; try again once it ends' };
+      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '界面暂时无法重载，请重启应用', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '已排队：任务跑完自动重载' } // ui-copy-ignore
+      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot reload right now; restart the app', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Queued; it reloads once the turn ends' };
 
     // Desktop shell only: the macOS and Windows desktop build owns the page and the running
     // app, so this is where the button belongs. A browser tab can reload freely on its own.
@@ -261,7 +261,7 @@ window.__ModuleLoader__.load({
         let pluginNote = null;
         if (replace) {
           const status = await replacePlugins();
-          if (status === 'busy') pluginNote = 'busy';
+          if (status === 'queued') pluginNote = 'queued';
           else if (status !== 'done' && status !== 'off') pluginNote = 'blocked';
         }
         if (!rebuild) {

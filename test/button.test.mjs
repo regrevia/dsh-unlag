@@ -127,7 +127,7 @@ const busyMount = (() => {
 })()
 const busyRes = fakeRes()
 await busyMount.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, busyRes)
-check('a running turn is reported, not replaced', busyRes.body === '{"status":"busy"}', busyRes.body)
+check('a running turn queues the press, never replaces code', busyRes.body === '{"status":"queued"}', busyRes.body)
 
 // --- hostile surroundings --------------------------------------------------------------------
 let survived = true
