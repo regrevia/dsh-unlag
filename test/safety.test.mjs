@@ -167,7 +167,8 @@ const slow = {
   },
   reconcileProfile: async () => ({ warnings: [], pending: [] }),
 }
-mod.apply(makeCtx({ hmrValue: slow }), { autoReload: true, debounce: 10 })
+const slowCtx = makeCtx({ hmrValue: slow })
+mod.apply(slowCtx, { autoReload: true, debounce: 10 })
 await sleep(200)
 writeFileSync(join(root, 'a.js'), 'export const c = 1\n')
 writeFileSync(join(root, 'b.js'), 'export const d = 1\n')
@@ -175,8 +176,20 @@ writeFileSync(join(root, 'c.js'), 'export const e = 1\n')
 await sleep(600)
 check('no re-entrant reload', peak === 1, `peak=${peak}`)
 
-// 7. Disposing closes the watchers and leaves no handle behind.
-for (const c of [ctx, busyCtx, hostileCtx]) c.disposeAll()
+// 7. A dispose that lands after a later instance took over must not stop that instance: the
+// watcher belongs to whoever installed it last.
+const liveCtx = makeCtx()
+mod.apply(liveCtx, { autoReload: true, debounce: 10 })
+await sleep(100)
+const beforeStale = reloads
+ctx.disposeAll()
+writeFileSync(join(root, 'stale-dispose.js'), 'export const g = 1\n')
+await sleep(400)
+check('a stale dispose leaves the watcher running', reloads > beforeStale, `reloads=${reloads - beforeStale}`)
+liveCtx.disposeAll()
+
+// 8. Disposing closes the watchers and leaves no handle behind.
+for (const c of [ctx, busyCtx, hostileCtx, slowCtx, liveCtx]) c.disposeAll()
 await sleep(150)
 const beforeDispose = reloads
 writeFileSync(join(root, 'after-dispose.js'), 'export const f = 1\n')

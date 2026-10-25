@@ -6,8 +6,8 @@ window.__ModuleLoader__.load({
 
     const zh = /^zh/i.test(navigator.language || '');
     const COPY = zh
-      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次' } // ui-copy-ignore
-      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later' };
+      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', off: '两个开关都关着，先在设置里打开一个', replaced: '插件代码已更新，页面保持不动', done: '插件代码已是最新', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次' } // ui-copy-ignore
+      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', off: 'Both switches are off; turn one on in settings', replaced: 'Plugin code updated; the page stayed as it is', done: 'Plugin code is already up to date', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later' };
 
     /**
      * Why the interface was left as it is, in words a person can act on. The checks below record
@@ -33,6 +33,10 @@ window.__ModuleLoader__.load({
      * is said so: the update is live either way, and only the new document was skipped.
      */
     function noticeFor(key, applied = false) {
+      // The plugin half already went live; whatever held the page is said on top of that.
+      if (applied && key !== 'blocked') {
+        return zh ? `插件已更新，页面未重开：${COPY[key]}。` : `Plugins updated; the page stayed: ${COPY[key]}.`;
+      }
       if (key !== 'blocked' || holdReason === null) return COPY[key];
       const why = REASONS[holdReason] ?? REASONS.list;
       if (applied) return zh ? `插件已更新，页面未重开：${why}。` : `Plugins updated; the page stayed: ${why}.`;
@@ -51,8 +55,43 @@ window.__ModuleLoader__.load({
      */
     const PREPARE_EVENT = 'dsh-unlag:before';
 
-    /** Set while a rebuild is pending, so a repeated click cannot start a second one. */
+    /** What this document remembers about its last press, so two presses cannot overlap. */
     const STAMP_KEY = 'dsh-unlag:at'; // ui-copy-ignore
+    let pressInFlight = false;
+
+    /**
+     * Session storage is denied in some profiles and full in others. A press must not be lost to
+     * that: the stamp only paces repeated presses, so an unreadable stamp reads as "no press yet".
+     */
+    function stampRead() {
+      try {
+        const at = Number(window.sessionStorage.getItem(STAMP_KEY) ?? 0);
+        return Number.isFinite(at) ? at : 0;
+      } catch {
+        return 0;
+      }
+    }
+
+    function stampWrite() {
+      try {
+        window.sessionStorage.setItem(STAMP_KEY, String(Date.now()));
+      } catch {
+        // Pacing is the only thing this stamp feeds; a denied store costs nothing else.
+      }
+    }
+
+    /**
+     * One bound for every call a press makes: a stalled answer ends the press with a notice
+     * instead of holding the button until the page is reloaded by hand.
+     */
+    const HOST_TIMEOUT_MS = 12000; // ui-copy-ignore
+    function withTimeout(promise, ms = HOST_TIMEOUT_MS) {
+      let id = null;
+      const timer = new Promise((_resolve, reject) => {
+        id = setTimeout(() => reject(new Error('timeout')), ms); // ui-copy-ignore
+      });
+      return Promise.race([promise, timer]).finally(() => clearTimeout(id));
+    }
 
     /**
      * What a press does is decided by the plugin's settings row, read from the running app, so
@@ -63,9 +102,9 @@ window.__ModuleLoader__.load({
 
     async function readSettings() {
       try {
-        const response = await fetch(`${HOST_BASE}/state`, { cache: 'no-store', credentials: 'same-origin' });
+        const response = await withTimeout(fetch(`${HOST_BASE}/state`, { cache: 'no-store', credentials: 'same-origin' }));
         if (!response.ok) return null;
-        const data = await response.json();
+        const data = await withTimeout(response.json());
         if (data === null || typeof data !== 'object') return null;
         return { plugins: data.plugins !== false, page: data.page !== false };
       } catch {
@@ -93,14 +132,14 @@ window.__ModuleLoader__.load({
     /** Ask the running app to replace changed plugins now; a running turn is reported, never cut. */
     async function replacePlugins() {
       try {
-        const response = await fetch(`${HOST_BASE}/reload`, {
+        const response = await withTimeout(fetch(`${HOST_BASE}/reload`, {
           method: 'POST', // ui-copy-ignore
           credentials: 'same-origin',
           headers: { 'content-type': 'application/json', 'x-dsh-unlag': '1' }, // ui-copy-ignore
           body: '{}', // ui-copy-ignore
-        });
+        }));
         if (!response.ok) return 'failed';
-        const data = await response.json();
+        const data = await withTimeout(response.json());
         return reloadVerdict(data);
       } catch {
         return 'failed';
@@ -129,25 +168,36 @@ window.__ModuleLoader__.load({
     function bundledIds(url) {
       const match = /\?\?([^&]+)/.exec(url);
       if (match === null) return [];
-      return match[1].split(',').map((part) => decodeURIComponent(part).replace(/\/client\.js.*$/u, '')).filter((id) => id !== '');
+      const ids = [];
+      for (const part of match[1].split(',')) {
+        let decoded = part;
+        try {
+          decoded = decodeURIComponent(part);
+        } catch {
+          decoded = part;
+        }
+        decoded = decoded.replace(/\/client\.js.*$/u, '');
+        if (decoded !== '') ids.push(decoded);
+      }
+      return ids;
     }
 
     /**
-     * Ask the host half whether the scripts the next document would run can start it. The page has no
+     * Ask the running app whether the scripts the next document would run can start it. The page has no
      * parser that agrees with a script tag, and compiling a candidate body here would execute the
-     * plugin inside the page that carries the turn, so the verdict is the host's real parse bound to
+     * plugin inside the page that carries the turn, so the verdict is the app's real parse bound to
      * the bytes it read.
      * @returns 'ok' | 'blocked'
      */
     async function hostVerifyStartup(scripts) {
       let response;
       try {
-        response = await fetch(`${HOST_BASE}/verify`, {
+        response = await withTimeout(fetch(`${HOST_BASE}/verify`, {
           method: 'POST', // ui-copy-ignore
           credentials: 'same-origin',
           headers: { 'content-type': 'application/json', 'x-dsh-unlag': '1' }, // ui-copy-ignore
           body: JSON.stringify({ rows: scripts }), // ui-copy-ignore
-        });
+        }));
       } catch {
         held('verify');
         return 'blocked';
@@ -158,7 +208,7 @@ window.__ModuleLoader__.load({
       }
       let data = null;
       try {
-        data = await response.json();
+        data = await withTimeout(response.json());
       } catch {
         data = null;
       }
@@ -171,15 +221,15 @@ window.__ModuleLoader__.load({
       return 'blocked';
     }
 
-    // What the host's refusal means to the person pressing: the same gates the checks above use.
+    // What the app's refusal means to the person pressing: the same gates the checks above use.
     const VERIFY_GATES = {
-      empty: 'empty',
-      missing: 'script',
-      network: 'script',
-      parse: 'parse',
-      register: 'plugin',
+      empty: 'empty', // ui-copy-ignore
+      missing: 'script', // ui-copy-ignore
+      network: 'script', // ui-copy-ignore
+      parse: 'parse', // ui-copy-ignore
+      register: 'plugin', // ui-copy-ignore
       dependencies: 'covers',
-      list: 'list',
+      list: 'list', // ui-copy-ignore
     };
 
     /** Read every bundle the next boot would load and prove each listed plugin is inside. */
@@ -196,8 +246,14 @@ window.__ModuleLoader__.load({
         const listed = Array.isArray(batch.entries) && batch.entries.every((id) => typeof id === 'string') ? batch.entries : [];
         const ids = listed.length > 0 ? listed : bundledIds(url);
         if (ids.length === 0) return held('row');
+        let resolved = null;
+        try {
+          resolved = new URL(url, location.href);
+        } catch {
+          return held('row');
+        }
         for (const id of ids) covered.add(id);
-        sources.push({ url: new URL(url, location.href), ids });
+        sources.push({ url: resolved, ids });
       }
       if (sources.length === 0) return held('graph');
       for (const entry of entries) {
@@ -205,7 +261,7 @@ window.__ModuleLoader__.load({
         if (typeof id !== 'string' || !covered.has(id)) return held('covers');
       }
       // Reading these bodies here would need a parser the page does not have and would not prove
-      // what the new document registers; the host half compiles the same bytes with the real parser.
+      // what the new document registers; the app compiles the same bytes with the real parser.
       const verdict = await hostVerifyStartup(sources.map((source) => source.url.toString()));
       if (verdict !== 'ok') return false;
       holdReason = null;
@@ -231,7 +287,7 @@ window.__ModuleLoader__.load({
       const bridge = window.dshDesktopBoot;
       if (bridge === undefined || bridge === null || typeof bridge.ready !== 'function') return null;
       try {
-        const payload = await bridge.ready();
+        const payload = await withTimeout(bridge.ready(), 8000);
         const rows = Array.isArray(payload?.injections) ? payload.injections : [];
         return rows.length === 0 ? null : rows;
       } catch {
@@ -342,9 +398,9 @@ window.__ModuleLoader__.load({
      */
     async function hostBootGraph() {
       try {
-        const response = await fetch(`${HOST_BASE}/graph`, { cache: 'no-store', credentials: 'same-origin' });
+        const response = await withTimeout(fetch(`${HOST_BASE}/graph`, { cache: 'no-store', credentials: 'same-origin' }));
         if (!response.ok) return null;
-        const data = await response.json();
+        const data = await withTimeout(response.json());
         const graph = data?.graph;
         return graph !== null && typeof graph === 'object' ? graph : null;
       } catch {
@@ -356,9 +412,9 @@ window.__ModuleLoader__.load({
       const fromHost = await hostBootGraph();
       if (fromHost !== null) return fromHost;
       try {
-        const response = await fetch(location.href, { cache: 'no-store', credentials: 'same-origin' });
+        const response = await withTimeout(fetch(location.href, { cache: 'no-store', credentials: 'same-origin' }));
         if (!response.ok) return null;
-        return graphFromHtml(await response.text());
+        return graphFromHtml(await withTimeout(response.text()));
       } catch {
         return null;
       }
@@ -426,7 +482,22 @@ window.__ModuleLoader__.load({
     async function commitFocusedField() {
       const active = document.activeElement;
       if (active !== null && typeof active.blur === 'function') active.blur();
-      await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+      // One frame lets the field write what it holds. A page that is not painting (a background
+      // window, a dropped frame) never answers a frame request, so the wait is also bounded.
+      await new Promise((resolve) => {
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          resolve();
+        };
+        try {
+          requestAnimationFrame(finish);
+        } catch {
+          finish();
+        }
+        setTimeout(finish, 250); // ui-copy-ignore
+      });
     }
 
     /** Re-enter the interface on a fresh document, keeping the current view in the address. */
@@ -452,7 +523,7 @@ window.__ModuleLoader__.load({
     function stillHeldBack() {
       const probe = new Event('beforeunload', { cancelable: true }); // ui-copy-ignore
       window.dispatchEvent(probe);
-      return probe.defaultPrevented === true;
+      return probe.defaultPrevented === true || probe.returnValue === false;
     }
 
     /**
@@ -517,60 +588,77 @@ window.__ModuleLoader__.load({
           : BUTTON_STYLE;
 
       const onClick = async () => {
-        if (pending) return;
-        const previous = Number(window.sessionStorage.getItem(STAMP_KEY) ?? 0);
-        if (Number.isFinite(previous) && Date.now() - previous < 3000) return; // ui-copy-ignore
+        if (pending || pressInFlight) return;
+        // A press the page already answered is not answered twice. Saying so beats a dead button.
+        if (Date.now() - stampRead() < 3000) { // ui-copy-ignore
+          setNotice(COPY.applying);
+          return;
+        }
+        pressInFlight = true;
         setPending(true);
         setNotice(null);
+        let navigated = false;
         const stop = (key, applied = false) => {
           setPending(false);
           setNotice(noticeFor(key, applied));
         };
-        const settings = await readSettings();
-        const replace = settings === null ? false : settings.plugins;
-        const rebuild = settings === null ? true : settings.page;
-        let replaced = false;
-        // Both switches off: a press does nothing at all.
-        if (!replace && !rebuild) {
-          setPending(false);
-          return;
-        }
-        // Replace first: a plugin that only changed the interface is then covered by the rebuild.
-        // A replacement that did not finish stops the press here: rebuilding the page anyway would
-        // start a document against a plugin set the app has not finished applying.
-        if (replace) {
-          const status = await replacePlugins();
-          if (status !== 'done' && status !== 'off') {
-            const key =
-              status === 'queued'
-                ? 'queued'
-                : status === 'applying'
-                  ? 'applying'
-                  : status === 'restart'
-                    ? 'restart'
-                    : status === 'unavailable'
-                      ? 'blocked'
-                      : 'failed';
-            report('plugin-held', key);
-            return stop(key);
+        try {
+          const settings = await readSettings();
+          const replace = settings === null ? false : settings.plugins;
+          const rebuild = settings === null ? true : settings.page;
+          let replaced = false;
+          // Nothing is switched on: the press says so instead of looking broken.
+          if (!replace && !rebuild) {
+            report('off');
+            return stop('off');
           }
-          replaced = status === 'done';
+          // Replace first: a plugin that only changed the interface is then covered by the rebuild.
+          // A replacement that did not finish stops the press here: rebuilding the page anyway would
+          // start a document against a plugin set the app has not finished applying.
+          if (replace) {
+            const status = await withTimeout(replacePlugins()).catch(() => 'failed');
+            if (status !== 'done' && status !== 'off') {
+              const key =
+                status === 'queued'
+                  ? 'queued'
+                  : status === 'applying'
+                    ? 'applying'
+                    : status === 'restart'
+                      ? 'restart'
+                      : status === 'unavailable'
+                        ? 'blocked'
+                        : 'failed';
+              report('plugin-held', key);
+              return stop(key);
+            }
+            replaced = status === 'done';
+          }
+          if (!rebuild) {
+            // The plugin half is on and the page half is off: what the press did is worth saying.
+            report('replaced');
+            return stop(replaced ? 'replaced' : 'done');
+          }
+          stampWrite();
+          const reason = await prepareInterface();
+          if (reason !== null) {
+            // The log keeps the exact check that refused, so a held press can be explained later.
+            const gate = reason === 'blocked' && holdReason !== null ? `blocked:${holdReason}` : reason;
+            report('held', replaced ? `applied:${gate}` : gate);
+            return stop(reason, replaced);
+          }
+          report('rebuild');
+          navigated = true;
+          reloadFreshPage();
+          return undefined;
+        } catch (error) {
+          report('failed', 'press');
+          stop('failed');
+          return undefined;
+        } finally {
+          pressInFlight = false;
+          // The document goes away on a rebuild, so the button only needs re-enabling when it does not.
+          if (!navigated) setPending(false);
         }
-        if (!rebuild) {
-          setPending(false);
-          return;
-        }
-        window.sessionStorage.setItem(STAMP_KEY, String(Date.now()));
-        const reason = await prepareInterface();
-        if (reason !== null) {
-          // The log keeps the exact check that refused, so a held press can be explained later.
-          const gate = reason === 'blocked' && holdReason !== null ? `blocked:${holdReason}` : reason;
-          report('held', replaced ? `applied:${gate}` : gate);
-          return stop(reason, replaced);
-        }
-        report('rebuild');
-        reloadFreshPage();
-        setTimeout(() => setPending(false), 4000); // ui-copy-ignore
       };
 
       return h('span', { style: WRAP_STYLE },

@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
-import { appendFileSync, existsSync, readFileSync, readdirSync, statSync, watch } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, readdirSync, statSync, watch, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { Script } from 'node:vm'
@@ -34,6 +34,9 @@ const RELOAD_TIMEOUT_MS = 20_000
 
 
 const LOG_PATH = join(homedir(), '.dsh', 'unlag-reload.log')
+/** Past this many bytes the log starts over: it records recent presses, not an archive. */
+const LOG_MAX_BYTES = 1_000_000 // ui-copy-ignore
+let logWrites = 0
 /** Tests point this at a scratch file, so a test run leaves the live log readable. */
 const logTarget = () => process.env.DSH_UNLAG_LOG ?? LOG_PATH
 /** Survives a module replacement, so a reload cannot leave a second watcher behind. */
@@ -48,6 +51,8 @@ const BUTTON_HEADER = 'x-dsh-unlag'
 const CODE_EXTENSIONS = new Set(['.js', '.mjs', '.cjs'])
 /** Build output and dependency trees change without the source a developer edits changing. */
 const IGNORED_PATH = /(^|\/)(node_modules|\.git|\.cache|dist|build|coverage)([./]|$)/u
+/** The same trees by directory name, so they are not walked at all instead of walked and skipped. */
+const IGNORED_DIR = /^(node_modules|\.git|\.cache|dist|build|coverage|\.next|\.turbo)$/u
 /**
  * A test edit does not change what a running plugin does, so it is not a reason to restart the
  * plugin set. A development session runs its tests far more often than it changes source.
@@ -63,6 +68,8 @@ const BUNDLE_ROUTE = '/plugins'
 const SHIM_MARK = Symbol.for('dsh-unlag.bundle-shim')
 /** Holds the wrapper across a module replacement, so a reload can put the route back. */
 const SHIM_KEY = Symbol.for('dsh-unlag.shim')
+/** The instance that currently owns the routes and the shim; a late dispose checks it first. */
+const INSTANCE_KEY = Symbol.for('dsh-unlag.instance')
 
 /**
  * The three rows this plugin shows in Settings, in the schema dialect the settings form reads.
@@ -124,7 +131,18 @@ function settingsOf(config) {
 
 function log(line) {
   try {
-    appendFileSync(logTarget(), `${new Date().toISOString()} ${line}\n`)
+    const target = logTarget()
+    // A file that only grows eventually costs the app its own memory budget: every 200 lines the
+    // size is checked once, and a log past the cap starts over instead of growing without end.
+    logWrites += 1
+    if (logWrites % 200 === 1) {
+      try {
+        if (statSync(target).size > LOG_MAX_BYTES) writeFileSync(target, '')
+      } catch {
+        /* a missing or unreadable log is created by the append below */
+      }
+    }
+    appendFileSync(target, `${new Date().toISOString()} ${line}\n`)
   } catch {}
 }
 
@@ -155,6 +173,9 @@ function fingerprintOf(roots) {
     for (const item of names) {
       const path = join(dir, item.name)
       if (item.isDirectory()) {
+        // A dependency or build tree can hold tens of thousands of files, and stat-ing them on
+        // every watch event blocks the event loop every running turn needs.
+        if (IGNORED_DIR.test(item.name)) continue
         walk(path, depth + 1)
         continue
       }
@@ -240,7 +261,7 @@ function pluginReloader(ctx, config) {
   let running = false
   /**
    * The queue request this plugin is still waiting on, so a timeout is not reported as a cancel.
-   * It lives on the host instead of in this closure: replacing this plugin builds a new closure, and
+   * It lives outside this closure: replacing this plugin builds a new closure, and
    * a press landing after that must still join the update the first press started rather than queue
    * a second one beside it.
    */
@@ -398,7 +419,7 @@ function pluginReloader(ctx, config) {
             running = false
             if (again) {
               again = false
-              if (timer === null) timer = setTimeout(() => void flush(), debounce)
+              if (timer === null) timer = unrefTimer(setTimeout(() => void flush(), debounce))
             }
           }
           workState.current.then(release, release)
@@ -409,18 +430,25 @@ function pluginReloader(ctx, config) {
     } finally {
       if (again) {
         again = false
-        if (timer === null) timer = setTimeout(() => void flush(), debounce)
+        if (timer === null) timer = unrefTimer(setTimeout(() => void flush(), debounce))
       }
     }
   }
 
+  /** A timer here must not keep the app alive on its own once this plugin is done. */
+  const unrefTimer = (handle) => {
+    handle?.unref?.()
+    return handle
+  }
+
   const schedule = (filename) => {
     try {
+      if (stopped) return
       if (!worthReloading(filename)) return
       fromWatch = true
       lastChange = String(filename).split('/').pop() ?? ''
       if (timer !== null) clearTimeout(timer)
-      timer = setTimeout(() => void flush(), settle)
+      timer = unrefTimer(setTimeout(() => void flush(), settle))
     } catch (error) {
       log(`ignored a watch event: ${error?.message ?? error}`)
     }
@@ -432,23 +460,26 @@ function pluginReloader(ctx, config) {
    */
   const WAIT_MAX_MS = Number.isFinite(config?.busyWaitMs) ? Math.max(0, config.busyWaitMs) : 60_000
   let queued = null
+  let stopped = false
   const queueReload = () => {
+    if (stopped) return 'unavailable'
     if (queued !== null) return 'queued'
     const started = Date.now()
     const tick = () => {
       queued = null
+      if (stopped) return
       if (running) {
-        queued = setTimeout(tick, 500)
+        queued = unrefTimer(setTimeout(tick, 500))
         return
       }
       if (busy() && Date.now() - started < WAIT_MAX_MS) {
-        queued = setTimeout(tick, 1000)
+        queued = unrefTimer(setTimeout(tick, 1000))
         return
       }
       if (busy()) log('reloading while turns are still running; they keep running')
-      void reloadNow(true)
+      void reloadNow(true).catch(() => {})
     }
-    queued = setTimeout(tick, 1000)
+    queued = unrefTimer(setTimeout(tick, 1000))
     return 'queued'
   }
 
@@ -469,7 +500,7 @@ function pluginReloader(ctx, config) {
    * press did not replace anything instead of looking broken.
    * @returns {{status: string, warnings: string[], pending: string[], restartReason: string|null}}
    */
-  const reloadNow = async (force = false) => {
+  const runNow = async (force = false) => {
     const hmr = hmrService()
     if (hmr === null) return { status: 'unavailable', warnings: [], pending: [], restartReason: null, failedEntries: [] }
     log('manual reload: the refresh button was pressed')
@@ -495,18 +526,18 @@ function pluginReloader(ctx, config) {
         // The app accepted the update but has not finished starting the new plugin set. Rebuilding
         // the page now would start a document against a set that is still settling.
         return {
-          status: 'failed',
-          warnings: outcome.warnings,
-          pending: outcome.pending,
+          status: 'failed', // ui-copy-ignore
+          warnings: outcome.warnings, // ui-copy-ignore
+          pending: outcome.pending, // ui-copy-ignore
           restartReason: outcome.restartReason,
           failedEntries: outcome.failedEntries,
         }
       }
       if (outcome.failedEntries.length > 0) {
         return {
-          status: 'failed',
-          warnings: outcome.warnings,
-          pending: [],
+          status: 'failed', // ui-copy-ignore
+          warnings: outcome.warnings, // ui-copy-ignore
+          pending: [], // ui-copy-ignore
           restartReason: null,
           failedEntries: outcome.failedEntries,
         }
@@ -529,11 +560,24 @@ function pluginReloader(ctx, config) {
           running = false
           if (again) {
             again = false
-            if (timer === null) timer = setTimeout(() => void flush(), debounce)
+            if (timer === null) timer = unrefTimer(setTimeout(() => void flush(), debounce))
           }
         }
         workState.current.then(release, release)
       }
+    }
+  }
+
+  /**
+   * The press path never rejects: a rejection here would be unhandled and end the app, and the page
+   * would wait for an answer that never comes.
+   */
+  const reloadNow = async (force = false) => {
+    try {
+      return await runNow(force)
+    } catch (error) {
+      log(`a press could not be answered: ${error?.message ?? error}`)
+      return { status: 'failed', warnings: [], pending: [], restartReason: null, failedEntries: [] }
     }
   }
 
@@ -567,8 +611,11 @@ function pluginReloader(ctx, config) {
   }
 
   const stop = () => {
+    stopped = true
     if (queued !== null) clearTimeout(queued)
     queued = null
+    if (timer !== null) clearTimeout(timer)
+    timer = null
   }
 
   return { reloadNow, startWatching, available, stop }
@@ -578,37 +625,123 @@ function pluginReloader(ctx, config) {
 function sendJson(res, status, payload) {
   try {
     if (res.writableEnded === true || res.destroyed === true) return
-    const body = JSON.stringify(payload)
+    let body = ''
+    try {
+      body = JSON.stringify(payload)
+    } catch {
+      body = '{"status":"error","detail":"unserializable"}' // ui-copy-ignore
+    }
+    /**
+     * A live graph can hold cycles and a socket can already carry a status: neither may leave the
+     * response open, because the page waits on this request and a press would never finish.
+     */
+    if (res.headersSent === true) {
+      res.end()
+      return
+    }
     res.writeHead(status, {
       'content-type': 'application/json; charset=utf-8',
       'cache-control': 'no-store',
       'content-length': Buffer.byteLength(body),
     })
     res.end(body)
-  } catch {}
+  } catch {
+    try {
+      if (res.writableEnded !== true && res.destroyed !== true) res.end()
+    } catch {
+      /* the socket is already gone */
+    }
+  }
+}
+
+/**
+ * A page this machine may have opened: loopback, a private network address, or a `.local` name.
+ * A public name that resolves here is the rebinding case, where another site becomes
+ * same-origin by pointing at this machine.
+ */
+const LOCAL_ADDRESS = /^(127\.\d+\.\d+\.\d+|localhost|\[::1\]|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|169\.254\.\d+\.\d+|[a-z0-9-]+\.local)(:\d+)?$/u
+
+/**
+ * Whether one request may act for the button. The page sets a header a cross-site form cannot set,
+ * a browser sends it only after a preflight this server never allows, and the address check covers
+ * the case that bypasses preflight: a page on a public name that resolves to this machine.
+ */
+function buttonAllowed(req) {
+  try {
+    const header = req?.headers?.[BUTTON_HEADER]
+    if (typeof header !== 'string' || header === '') return false
+    const site = typeof req?.headers?.host === 'string' ? req.headers.host.trim().toLowerCase() : '' // ui-copy-ignore
+    // No address at all is not a browser request; nothing about it can be checked, so the header is
+    // the whole gate, exactly as it was for earlier versions.
+    if (site !== '' && LOCAL_ADDRESS.test(site) === false) {
+      log(`refused a press from ${site}`)
+      return false
+    }
+    const origin = typeof req?.headers?.origin === 'string' ? req.headers.origin.trim().toLowerCase() : ''
+    if (origin === 'null') return false
+    if (origin !== '') {
+      let originHost = ''
+      try {
+        originSite = new URL(origin).host.toLowerCase() // ui-copy-ignore
+      } catch {
+        return false
+      }
+      if (originSite !== site) {
+        log(`refused a press from ${origin}`)
+        return false
+      }
+    }
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** Read one small JSON request body; anything unreadable answers null instead of hanging. */
 function readJsonBody(req, limit = 64 * 1024) {
+
   return new Promise((resolve) => {
     let size = 0
+    let done = false
     const parts = []
+    const finish = (value) => {
+      if (done === true) return
+      done = true
+      clearTimeout(timer)
+      resolve(value)
+    }
+    // A request that opens a body and never finishes it would hold this handler forever.
+    const timer = setTimeout(() => {
+      finish(null)
+      try {
+        req.destroy?.()
+      } catch {
+        /* the request is already gone */
+      }
+    }, 10000) // ui-copy-ignore
+    // A body that never ends must not keep the process alive on its own.
+    timer.unref?.()
     try {
       req.on('data', (chunk) => {
         size += chunk.length
-        if (size <= limit) parts.push(chunk)
+        if (size > limit) {
+          finish(null)
+          return
+        }
+        parts.push(chunk)
       })
       req.on('end', () => {
-        if (size > limit) return resolve(null)
+        if (done === true) return
         try {
-          resolve(JSON.parse(Buffer.concat(parts).toString('utf8')))
+          finish(JSON.parse(Buffer.concat(parts).toString('utf8')))
         } catch {
-          resolve(null)
+          finish(null)
         }
       })
-      req.on('error', () => resolve(null))
+      req.on('error', () => finish(null))
+      req.on('aborted', () => finish(null))
     } catch {
-      resolve(null)
+      finish(null)
     }
   })
 }
@@ -761,11 +894,14 @@ async function regroupedBundleAnswer(clientModules, graph, request) {
   /**
    * Each entry body is a script of its own and need not end where another can begin: an entry
    * that ends in `})` followed by one that starts with an identifier is a syntax error, and a
-   * document would run neither. A line holding just `;` between them keeps every body its own
+   * document runs neither. A line holding only `;` between them keeps every body its own
    * statement whatever the two sides end and start with, and leaves each body itself untouched.
    */
   const body = Buffer.concat(parts.flatMap((part, index) => (index === parts.length - 1 ? [part] : [part, Buffer.from('\n;\n')])))
-  if (!request.ids.every((id) => body.includes(id))) return null
+  // A substring proves nothing: an id like "ui" is inside a body registering "ui-conversation".
+  // Only ids the assembled script really registers through the loader count as an answer.
+  const text = body.toString('utf8')
+  if (!request.ids.every((id) => bodyNamesId(text, id))) return null
   return { body, contentType: 'text/javascript; charset=utf-8', ids: request.ids }
 }
 
@@ -787,7 +923,12 @@ async function currentBundleAnswer(clientModules, method, url) {
       if (response.status !== 200) continue
       const body = Buffer.from(await response.arrayBuffer())
       if (body.length === 0) continue
-      if (!request.sourceMap && !request.ids.every((id) => body.includes(id))) continue
+      if (!request.sourceMap) {
+        // Every plugin the request names has to appear in the body as a whole id, not as part of
+        // a longer one.
+        const text = body.toString('utf8')
+        if (!request.ids.every((id) => bodyNamesId(text, id))) continue
+      }
       return {
         body,
         contentType: String(response.headers.get('content-type') ?? 'text/javascript; charset=utf-8'),
@@ -889,7 +1030,11 @@ function serveBundlesAtCurrentRevision(ctx) {
   if (server?.prefixes?.get === undefined) return null
   if (typeof clientModules?.fetchBundle !== 'function' || typeof clientModules?.graph !== 'function') return null
   const route = server.prefixes.get(BUNDLE_ROUTE)
-  if (route === null || route === undefined || route[SHIM_MARK] === true) return null
+  if (route === null || route === undefined) return null
+  // The mark names the wrapper it belongs to: a route copied from a wrapped one carries a stale
+  // mark, and only a mark pointing at the function installed right now means "already wrapped".
+  const installed = typeof route.resource === 'function' ? route.resource : route.handler
+  if (route[SHIM_MARK] === installed && installed !== undefined) return null
   if (typeof route.resource === 'function') {
     const original = route.resource
     const wrapped = async (request) => {
@@ -925,8 +1070,8 @@ function serveBundlesAtCurrentRevision(ctx) {
       }
       return answer
     }
-    route[SHIM_MARK] = true
     route.resource = wrapped
+    route[SHIM_MARK] = wrapped
     log('bundles asked for under an older revision are answered at the current one')
     return { route, slot: 'resource', original, wrapped }
   }
@@ -1002,15 +1147,25 @@ function serveBundlesAtCurrentRevision(ctx) {
     }
     if (served === true) return undefined
     try {
+      // A body that already wrote a status cannot take another one; ending is what the document
+      // needs, and leaving the socket open is what hangs it.
+      if (res.headersSent === true) {
+        if (res.writableEnded !== true && res.destroyed !== true) realEnd.call(res, outcome.body)
+        return undefined
+      }
       realWriteHead.call(res, outcome.held.status, outcome.held.headers)
       realEnd.call(res, outcome.body)
     } catch {
-      /* the response is gone; nothing left to answer */
+      try {
+        if (res.writableEnded !== true && res.destroyed !== true) realEnd.call(res)
+      } catch {
+        /* the response is gone; nothing left to answer */
+      }
     }
     return undefined
   }
-  route[SHIM_MARK] = true
   route.handler = wrapped
+  route[SHIM_MARK] = wrapped
   log('bundles asked for under an older revision are answered at the current one')
   return { route, slot: 'handler', original, wrapped }
 }
@@ -1019,10 +1174,18 @@ function serveBundlesAtCurrentRevision(ctx) {
 function releaseBundleShim(shim) {
   try {
     if (shim === null || shim === undefined) return
-    if (shim.slot === 'resource') {
-      if (shim.route.resource === shim.wrapped) shim.route.resource = shim.original
-    } else if (shim.route.handler === shim.wrapped) shim.route.handler = shim.original
-    if (shim.route[SHIM_MARK] === true) delete shim.route[SHIM_MARK]
+    /**
+     * Only the wrapper this record installed may be removed. Without the identity check a dispose
+     * that lands after the next apply would put the original back over a newer wrapper, or strip the
+     * mark off one it does not own and let the route be wrapped twice around one response.
+     */
+    const current = shim.slot === 'resource' ? shim.route.resource : shim.route.handler
+    if (current === shim.wrapped) {
+      if (shim.slot === 'resource') shim.route.resource = shim.original
+      else shim.route.handler = shim.original
+    }
+    // The mark belongs to this wrapper only; a mark left by a newer one stays on the route.
+    if (shim.route[SHIM_MARK] === shim.wrapped) delete shim.route[SHIM_MARK]
   } catch {}
 }
 
@@ -1035,7 +1198,7 @@ function ensureBundleShim(ctx) {
   const shim = globalThis[SHIM_KEY]
   if (shim !== null && shim !== undefined) {
     const route = ctx.get('webServer')?.prefixes?.get?.(BUNDLE_ROUTE)
-    if (route === shim.route && route[shim.slot] === shim.wrapped && route[SHIM_MARK] === true) return shim
+    if (route === shim.route && route[shim.slot] === shim.wrapped && route[SHIM_MARK] === shim.wrapped) return shim
     releaseBundleShim(shim)
     globalThis[SHIM_KEY] = null
   }
@@ -1052,10 +1215,24 @@ function bundleShimStatus(ctx) {
   return {
     route: route !== null && route !== undefined,
     kind: shape,
-    wrapped: route?.[SHIM_MARK] === true && typeof route?.[shape === 'none' ? 'handler' : shape] === 'function',
+    wrapped: route?.[SHIM_MARK] !== undefined && route?.[SHIM_MARK] === route?.[shape === 'none' ? 'handler' : shape],
     fetch: typeof clientModules?.fetchBundle === 'function',
     graph: typeof clientModules?.graph === 'function',
   }
+}
+
+/**
+ * Whether a served body names one plugin as a whole word. A bare substring is not enough: "ui" is
+ * inside "ui-conversation", and a body for the wrong generation would then be served as if sound.
+ */
+function bodyNamesId(body, id) {
+  let at = body.indexOf(id)
+  while (at >= 0) {
+    const next = body[at + id.length]
+    if (next === undefined || /[-\w$./@]/u.test(next) === false) return true
+    at = body.indexOf(id, at + 1)
+  }
+  return false
 }
 
 /** Ids a classic-script body registers through the module loader's public entry point. */
@@ -1074,7 +1251,7 @@ function requiredIds(body) {
 
 /**
  * Compile one body the way the document compiles it, and never run it: running a plugin body here
- * would execute its top level inside the host that owns every running turn.
+ * would execute its top level inside the app that owns every running turn.
  * @returns the parser's complaint, or null when the body compiles as a classic script.
  */
 function parseAsScript(body, name) {
@@ -1161,14 +1338,14 @@ export async function verifyStartupRows(graph, fetchBody, rows) {
   }
   if (absent.size > 0) {
     return {
-      status: 'blocked',
-      reason: 'dependencies',
+      status: 'blocked', // ui-copy-ignore
+      reason: 'dependencies', // ui-copy-ignore
       detail: `not registered by the startup list: ${[...absent].slice(0, 4).join(', ')}`,
     }
   }
   return {
-    status: 'ok',
-    reason: 'ok',
+    status: 'ok', // ui-copy-ignore
+    reason: 'ok', // ui-copy-ignore
     revision: typeof graph?.rev === 'string' ? graph.rev : null,
     scripts: bodies.map((body) => ({ url: body.url, digest: body.digest, ids: body.ids })),
   }
@@ -1225,59 +1402,81 @@ function serveButton(ctx, controller, config) {
     [
       `${BASE_PATH}/graph`,
       (_req, res) => {
-        ensureBundleShim(ctx)
-        sendJson(res, 200, { graph: liveBootGraph(ctx) })
+        // The page reads this before a rebuild; an answer that throws would leave the press with
+        // no verdict at all, so the whole body is bounded and answers either way.
+        try {
+          ensureBundleShim(ctx)
+          sendJson(res, 200, { graph: liveBootGraph(ctx) })
+        } catch (error) {
+          sendJson(res, 500, { status: 'error', detail: String(error?.message ?? error) })
+        }
       },
     ],
     [
       `${BASE_PATH}/verify`,
       async (req, res) => {
-        const method = String(req?.method ?? 'GET').toUpperCase()
-        if (method !== 'POST') return sendJson(res, 405, { status: 'method' })
-        const header = req?.headers?.[BUTTON_HEADER]
-        if (typeof header !== 'string' || header === '') return sendJson(res, 403, { status: 'forbidden' })
-        const clientModules = ctx.get('clientModules')
-        if (typeof clientModules?.fetchBundle !== 'function' || typeof clientModules?.graph !== 'function') {
-          return sendJson(res, 200, { status: 'blocked', reason: 'list', detail: 'the plugin table is not running' })
-        }
-        const body = await readJsonBody(req)
-        let verdict = null
+        // Nothing a request does may reject: an unhandled rejection ends the whole app, and with
+        // it every turn running in it.
         try {
-          verdict = await verifyStartup(clientModules, Array.isArray(body?.rows) ? body.rows : [])
+          const method = String(req?.method ?? 'GET').toUpperCase()
+          if (method !== 'POST') return sendJson(res, 405, { status: 'method' })
+          if (buttonAllowed(req) === false) return sendJson(res, 403, { status: 'forbidden' })
+          const clientModules = ctx.get('clientModules')
+          if (typeof clientModules?.fetchBundle !== 'function' || typeof clientModules?.graph !== 'function') {
+            return sendJson(res, 200, { status: 'blocked', reason: 'list', detail: 'the plugin table is not running' })
+          }
+          const body = await readJsonBody(req)
+          let verdict = null
+          try {
+            verdict = await verifyStartup(clientModules, Array.isArray(body?.rows) ? body.rows : [])
+          } catch (error) {
+            verdict = { status: 'blocked', reason: 'list', detail: String(error?.message ?? error) }
+          }
+          sendJson(res, 200, verdict)
         } catch (error) {
-          verdict = { status: 'blocked', reason: 'list', detail: String(error?.message ?? error) }
+          log(`cannot answer ${BASE_PATH}/verify: ${error?.message ?? error}`)
+          sendJson(res, 500, { status: 'error' })
         }
-        sendJson(res, 200, verdict)
       },
     ],
     [
       `${BASE_PATH}/report`,
       (req, res) => {
-        const method = String(req?.method ?? 'GET').toUpperCase()
-        if (method !== 'POST') return sendJson(res, 405, { status: 'method' })
-        let query = ''
         try {
-          query = new URL(String(req?.url ?? ''), 'http://x').searchParams.toString()
-        } catch {}
-        const params = new URLSearchParams(query)
-        const event = params.get('event') ?? ''
-        const gate = params.get('gate') ?? ''
-        if (event === 'mounted') log('interface rebuilt; the page runs the plugins as served now')
-        else if (event === 'rebuild') log('rebuild allowed: the page re-enters on the served modules')
-        else if (event === 'held') log(`rebuild held back: ${gate === '' ? 'unknown' : gate}`)
-        sendJson(res, 200, { status: 'done' })
+          const method = String(req?.method ?? 'GET').toUpperCase()
+          if (method !== 'POST') return sendJson(res, 405, { status: 'method' })
+          let query = ''
+          try {
+            query = new URL(String(req?.url ?? ''), 'http://x').searchParams.toString()
+          } catch {}
+          const params = new URLSearchParams(query)
+          const event = params.get('event') ?? ''
+          // A query comes from outside: one shaped gate keeps a forged line out of the log.
+          const gate = (params.get('gate') ?? '').replace(/[^a-z-]/gu, '').slice(0, 24)
+          if (event === 'mounted') log('interface rebuilt; the page runs the plugins as served now')
+          else if (event === 'rebuild') log('rebuild allowed: the page re-enters on the served modules')
+          else if (event === 'held') log(`rebuild held back: ${gate === '' ? 'unknown' : gate}`)
+          sendJson(res, 200, { status: 'done' })
+        } catch (error) {
+          log(`cannot record a press report: ${error?.message ?? error}`)
+          sendJson(res, 500, { status: 'error' })
+        }
       },
     ],
     [
       `${BASE_PATH}/reload`,
       async (req, res) => {
-        const method = String(req?.method ?? 'GET').toUpperCase()
-        if (method !== 'POST') return sendJson(res, 405, { status: 'method' })
-        const header = req?.headers?.[BUTTON_HEADER]
-        if (typeof header !== 'string' || header === '') return sendJson(res, 403, { status: 'forbidden' })
-        if (!settings.reloadPlugins) return sendJson(res, 200, { status: 'off' })
-        const outcome = await controller.reloadNow()
-        sendJson(res, 200, outcome)
+        try {
+          const method = String(req?.method ?? 'GET').toUpperCase()
+          if (method !== 'POST') return sendJson(res, 405, { status: 'method' })
+          if (buttonAllowed(req) === false) return sendJson(res, 403, { status: 'forbidden' })
+          if (!settings.reloadPlugins) return sendJson(res, 200, { status: 'off' })
+          const outcome = await controller.reloadNow()
+          sendJson(res, 200, outcome)
+        } catch (error) {
+          log(`cannot apply a plugin reload: ${error?.message ?? error}`)
+          sendJson(res, 500, { status: 'failed', detail: String(error?.message ?? error) })
+        }
       },
     ],
   ]
@@ -1297,6 +1496,7 @@ function serveButton(ctx, controller, config) {
 
 export function apply(ctx, config) {
   try {
+    const instance = {}
     closeAll(globalThis[WATCHER_KEY])
     closeAll(globalThis[ROUTES_KEY])
     releaseBundleShim(globalThis[SHIM_KEY])
@@ -1345,8 +1545,15 @@ export function apply(ctx, config) {
     }
     globalThis[ROUTES_KEY] = serveButton(ctx, controller, config ?? {})
     syncBundles()
+    globalThis[INSTANCE_KEY] = instance
 
     ctx.on('dispose', () => {
+      /**
+       * A dispose that lands after the next apply belongs to an instance that no longer owns
+       * anything; tearing the routes or the shim down here would break the newer one, and a page
+       * that then cannot read a startup script ends the app.
+       */
+      if (globalThis[INSTANCE_KEY] !== instance) return
       controller.stop()
       closeAll(globalThis[WATCHER_KEY])
       closeAll(globalThis[ROUTES_KEY])
@@ -1354,6 +1561,7 @@ export function apply(ctx, config) {
       globalThis[WATCHER_KEY] = null
       globalThis[ROUTES_KEY] = null
       globalThis[SHIM_KEY] = null
+      globalThis[INSTANCE_KEY] = null
     })
   } catch (error) {
     log(`plugin reload did not start: ${error?.message ?? error}`)
