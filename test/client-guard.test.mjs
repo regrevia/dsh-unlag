@@ -398,5 +398,15 @@ check('and the notice says the list answered too slowly', String(slowCheck.probe
   check('and it comes back on an address of its own', loaded.navigations.length === 1 && String(loaded.navigations[0]).includes('interface='), loaded.navigations.join(' | '))
 }
 
+// The startup list is a live object the app re-composes. A list whose fields cannot be read must
+// hold the press and name the list, not surface as a broken-page notice.
+{
+  const hostile = Object.defineProperty({ batches: [] }, 'entries', { get() { throw new Error('mid-swap') }, enumerable: true })
+  const loaded = harness({ frozen: hostile, live: null })
+  const verdict = await loaded.plugin.probe.prepareInterface()
+  check('a startup list that cannot be read holds the press', verdict === 'blocked', String(verdict))
+  check('and names the list as what stopped it', loaded.plugin.probe.startupHoldReason() === 'graph', String(loaded.plugin.probe.startupHoldReason()))
+}
+
 console.log(out.join('\n'))
 if (out.some((line) => line.startsWith('FAIL'))) process.exitCode = 1

@@ -270,8 +270,16 @@ window.__ModuleLoader__.load({
     /** Read every bundle the next boot would load and prove each listed plugin is inside. */
     async function bundlesCoverStartup(graph) {
       if (graph === null || typeof graph !== 'object') return held('graph');
-      const entries = Array.isArray(graph.entries) ? graph.entries : [];
-      const batches = Array.isArray(graph.batches) ? graph.batches : [];
+      // The list is a live object the app re-composes: reading its fields can fail mid-swap, and a
+      // list that cannot be read is a held press, not a broken page.
+      let entries = [];
+      let batches = [];
+      try {
+        entries = Array.isArray(graph.entries) ? graph.entries : [];
+        batches = Array.isArray(graph.batches) ? graph.batches : [];
+      } catch {
+        return held('graph');
+      }
       if (entries.length === 0 || batches.length === 0) return held('graph');
       const covered = new Set();
       const sources = [];
@@ -507,10 +515,19 @@ window.__ModuleLoader__.load({
         if (saved === null && desktopShellPresent()) {
           held('list');
         } else {
-          const servable =
-            saved === null
-              ? await bundlesCoverStartup((await servedBootGraph()) ?? window.__DSH_BOOT__)
-              : await frozenStartupLooksServable(saved);
+          // The document's own boot value is a page value: one that cannot be read leaves the list
+          // unread rather than turning a held press into a broken-page notice.
+          let own = null;
+          try {
+            own = window.__DSH_BOOT__ ?? null;
+          } catch {
+            own = null;
+          }
+          const fromHost = saved === null ? await servedBootGraph() : null;
+          let servable = false;
+          if (saved !== null) servable = await frozenStartupLooksServable(saved);
+          else if (fromHost === null && own === null) held('list');
+          else servable = await bundlesCoverStartup(fromHost ?? own);
           if (servable) return true;
         }
         if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 300 + attempt * 300)); // ui-copy-ignore
