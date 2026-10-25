@@ -481,6 +481,7 @@ check(
 const state = fakeRes()
 await gate.routes.get('/dsh-unlag/state')({ method: 'GET', headers: {} }, state)
 const stateBody = JSON.parse(state.body)
+check('the state names which code this half runs', typeof stateBody.code === 'string' && stateBody.code !== '', String(stateBody.code))
 check('the state names the version this half runs', /^\d+\.\d+\.\d+$/u.test(String(stateBody.version)), String(stateBody.version))
 
 const fromOutside = fakeRes()
