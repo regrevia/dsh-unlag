@@ -121,7 +121,7 @@ function harness({ settings = { plugins: true, page: true }, reload = { status: 
   }
   const registration = { factory: null }
   sandbox.window.__ModuleLoader__.load = (value) => { registration.factory = value.factory }
-  runInNewContext(source, sandbox)
+  runInNewContext(`'use strict';\n${source}`, sandbox)
   const plugin = registration.factory(() => React)
   plugin.apply({ slots })
 

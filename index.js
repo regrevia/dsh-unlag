@@ -680,7 +680,7 @@ function buttonAllowed(req) {
     const origin = typeof req?.headers?.origin === 'string' ? req.headers.origin.trim().toLowerCase() : ''
     if (origin === 'null') return false
     if (origin !== '') {
-      let originHost = ''
+      let originSite = ''
       try {
         originSite = new URL(origin).host.toLowerCase() // ui-copy-ignore
       } catch {
