@@ -1,3 +1,8 @@
+## 1.9.70
+
+- 修复：按下按钮时若插件已经替换成功、随后在重建那一步被拦下，页面写的是 `gate=applied:blocked`；日志清洗把冒号一并去掉，于是那行变成 `rebuild held back: appliedblocked`——既读不出是两件事，也说错了原因。现在两半分开写：`rebuild held back: applied then blocked`（`index.js` `/report`）。
+- 新增 `test/button.test.mjs` 3 条：两半都被点名、带标记的 gate 不会把标记写进日志、超长 gate 被截断而不是拒收。全套 503 PASS / 0 FAIL。
+
 ## 1.9.69
 
 - 修复：每次按下都要写一行日志，而写日志前先读页面自己的版本号（`__DSH_BOOT__.rev`）。这个值是页面给的对象，不是插件自己的——它一旦读不出来，这一行写不成，`apply()` 也会在启动时抛出去，按钮直接不见。现在这一读包在保护里，读不到就写一行不带版本号的记录（`client.js` `report`）。

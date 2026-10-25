@@ -213,6 +213,35 @@ check(
   readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('(page forged1)') === false,
 )
 
+// A press that replaced the plugins and then stopped before rebuilding reports both halves. The
+// line has to name the thing that stopped it: the old shape glued the two halves into one word.
+const bothRes = fakeRes()
+liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/report?event=held&gate=applied%3Ablocked' }, bothRes)
+await new Promise((resolve) => setTimeout(resolve, 30))
+check(
+  'a press that applied and then stopped names both halves',
+  readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('rebuild held back: applied then blocked'),
+  readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').split('\n').filter((line) => line.includes('applied then')).slice(-1).join(''),
+)
+
+const junkRes = fakeRes()
+liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/report?event=held&gate=%3Cimg%20src%3Dx%3Eblocked' }, junkRes)
+await new Promise((resolve) => setTimeout(resolve, 30))
+check(
+  'a gate with markup in it cannot put markup in the log',
+  readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('<img') === false,
+)
+
+const longRes = fakeRes()
+liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: `/dsh-unlag/report?event=held&gate=${'a'.repeat(200)}` }, longRes)
+await new Promise((resolve) => setTimeout(resolve, 30))
+const longLine = readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').split('\n').filter((line) => line.includes('rebuild held back: aaaa')).slice(-1)[0] ?? ''
+check(
+  'a gate too long to read is cut, not refused',
+  longRes.status === 200 && longLine.length < 120,
+  `${longRes.status} ${longLine.length}`,
+)
+
 const reportGet = fakeRes()
 liveMount.routes.get('/dsh-unlag/report')({ method: 'GET' }, reportGet)
 check('report rejects GET', reportGet.status === 405)
@@ -639,6 +668,7 @@ check(
   'the log names the switch value it could not read as a boolean',
   readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('reloadPlugins=no'),
 )
+
 
 console.log(out.join('\n'))
 process.exit(process.exitCode ?? 0)

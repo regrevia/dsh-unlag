@@ -1913,8 +1913,14 @@ function serveButton(ctx, controller, config) {
           } catch {}
           const params = new URLSearchParams(query)
           const event = params.get('event') ?? ''
-          // A query comes from outside: one shaped gate keeps a forged line out of the log.
-          const gate = (params.get('gate') ?? '').replace(/[^a-z-]/gu, '').slice(0, 24)
+          // A query comes from outside: one shaped gate keeps a forged line out of the log. A press
+          // that got a plugin set applied and then stopped says which two things happened
+          // (`applied:<gate>`); keeping the two apart is what makes the line say what stopped it.
+          const askedGate = (params.get('gate') ?? '').replace(/[^a-z:]/gu, '').slice(0, 32)
+          const gate = askedGate
+            .split(':')
+            .filter((part) => part !== '')
+            .join(' then ')
           // Which generation of the page came up. A rebuild that lands on older bytes then says so.
           const pageRev = (params.get('rev') ?? '').replace(/[^a-z0-9]/gu, '').slice(0, 24)
           const from = pageRev === '' ? '' : ` (page ${pageRev})`
