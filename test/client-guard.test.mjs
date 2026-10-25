@@ -446,5 +446,22 @@ check('and the notice says the list answered too slowly', String(slowCheck.probe
   check('and names the saved list as what stopped it', loaded.plugin.probe.startupHoldReason() === 'list', String(loaded.plugin.probe.startupHoldReason()))
 }
 
+// The page's own boot object is page data. A batch whose address cannot be read leaves the address
+// unproven and names the row; an entry whose id cannot be read names coverage.
+{
+  const hostileBatch = Object.defineProperty({ entries: ['@local/a'] }, 'url', { get() { throw new Error('mid-swap') } })
+  const badBatch = harness({ boot: { rev: 'r1', entries: [{ id: '@local/a' }], batches: [hostileBatch] }, scripts: {} })
+  check('a batch whose address cannot be read holds the press', (await badBatch.plugin.probe.startupLooksServable()) === false)
+  check('and names the row as what stopped it', badBatch.plugin.probe.startupHoldReason() === 'row', String(badBatch.plugin.probe.startupHoldReason()))
+
+  const hostileEntry = Object.defineProperty({}, 'id', { get() { throw new Error('mid-swap') } })
+  const badEntry = harness({
+    boot: { rev: 'r1', entries: [hostileEntry], batches: [{ url: '/plugins/??@local/a/client.js', entries: ['@local/a'] }] },
+    scripts: { '/plugins/??@local/a/client.js': () => ok(registered('@local/a')) },
+  })
+  check('an entry whose id cannot be read holds the press', (await badEntry.plugin.probe.startupLooksServable()) === false)
+  check('and names coverage as what stopped it', badEntry.plugin.probe.startupHoldReason() === 'covers', String(badEntry.plugin.probe.startupHoldReason()))
+}
+
 console.log(out.join('\n'))
 if (out.some((line) => line.startsWith('FAIL'))) process.exitCode = 1

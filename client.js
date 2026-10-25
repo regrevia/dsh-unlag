@@ -287,9 +287,17 @@ window.__ModuleLoader__.load({
       const covered = new Set();
       const sources = [];
       for (const batch of batches) {
-        const url = typeof batch?.url === 'string' ? batch.url : '';
+        // A batch is read field by field: the list can be the page's own boot object, and a batch
+        // whose fields cannot be read leaves that address unproven rather than the page broken.
+        let url = '';
+        let listed = [];
+        try {
+          url = typeof batch?.url === 'string' ? batch.url : '';
+          listed = Array.isArray(batch?.entries) && batch.entries.every((id) => typeof id === 'string') ? batch.entries : [];
+        } catch {
+          return held('row');
+        }
         if (url === '') continue;
-        const listed = Array.isArray(batch.entries) && batch.entries.every((id) => typeof id === 'string') ? batch.entries : [];
         const ids = listed.length > 0 ? listed : bundledIds(url);
         if (ids.length === 0) return held('row');
         let resolved = null;
@@ -303,7 +311,12 @@ window.__ModuleLoader__.load({
       }
       if (sources.length === 0) return held('graph');
       for (const entry of entries) {
-        const id = typeof entry === 'string' ? entry : entry?.id;
+        let id = '';
+        try {
+          id = typeof entry === 'string' ? entry : entry?.id;
+        } catch {
+          return held('covers');
+        }
         if (typeof id !== 'string' || !covered.has(id)) return held('covers');
       }
       // Reading these bodies here would need a parser the page does not have and would not prove
