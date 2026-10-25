@@ -51,6 +51,13 @@ check('the old off switch still means off', v({ plugins: 'off', autoReload: true
 check('any other auto value stays off', v({ autoReload: 'yes' }).value.autoReload === false)
 check('validate omitted -> both on', v(undefined).value.reloadPlugins === true)
 check('validate null -> both on', v(null).value.reloadInterface === true)
+// A hand-edited config can hold any scalar in a switch row. Only a boolean yes enables one: the
+// word "no" must not swap plugin code just because it is not the boolean false.
+check('a string switch is off, not on', v({ reloadPlugins: 'no' }).value.reloadPlugins === false)
+check('a number switch is off', v({ reloadInterface: 1 }).value.reloadInterface === false)
+check('a list switch is off', v({ reloadPlugins: [] }).value.reloadPlugins === false)
+check('an empty string switch is off', v({ reloadInterface: '' }).value.reloadInterface === false)
+check('a real boolean still works', v({ reloadPlugins: false, reloadInterface: true }).value.reloadInterface === true)
 check('validate false sticks', v({ reloadPlugins: false }).value.reloadPlugins === false)
 check('validate keeps foreign keys', v({ roots: ['/x'], reloadInterface: false }).value.roots?.[0] === '/x')
 check('validate survives a string config', v('nope').value.reloadPlugins === true)
@@ -618,6 +625,20 @@ await new Promise((resolve) => setTimeout(resolve, 200))
 check('and the update it started still runs to the end', slowMount.handlers.reloads === 1, String(slowMount.handlers.reloads))
 check('and its late finish is written down', readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('the update finished after the page was told it is still applying'))
 delete process.env.DSH_UNLAG_ANSWER_MS
+
+// The state a page reads must match what a press would do: a switch read as off has to show off,
+// or the button asks for a replacement the host will refuse.
+const stringOff = mount({ reloadPlugins: 'no' })
+const stringState = fakeRes()
+stringOff.routes.get('/dsh-unlag/state')({ method: 'GET' }, stringState)
+check('a string switch shows off in the state the page reads', switches(stringState.body) === 'false|true', stringState.body)
+const stringPress = fakeRes()
+await stringOff.routes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1', host: '127.0.0.1:52847', origin: 'http://127.0.0.1:52847' } }, stringPress)
+check('and a press on it says the replacement is off', JSON.parse(stringPress.body).status === 'off', stringPress.body)
+check(
+  'the log names the switch value it could not read as a boolean',
+  readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('reloadPlugins=no'),
+)
 
 console.log(out.join('\n'))
 process.exit(process.exitCode ?? 0)

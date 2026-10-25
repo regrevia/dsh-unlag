@@ -200,15 +200,34 @@ export const Config = {
   },
 }
 
+/** Switches already reported, so a settings form read repeatedly writes one line, not many. */
+const STRANGE_SWITCHES = new Set()
+/**
+ * One switch. Absent means the default; a boolean means itself; anything else — a hand-edited
+ * string, a number, a list — is not a yes and is read as off, with one line saying so. A row that
+ * says "off" must not swap plugin code because the value happened to be the word "no".
+ */
+function booleanSwitch(config, key, fallback) {
+  const value = config?.[key]
+  if (value === undefined || value === null) return fallback
+  if (typeof value === 'boolean') return value
+  const seen = `${key}=${oneLine(value, 40)}`
+  if (!STRANGE_SWITCHES.has(seen) && STRANGE_SWITCHES.size < 32) {
+    STRANGE_SWITCHES.add(seen)
+    log(`a switch that is not a boolean was read as off: ${seen}`)
+  }
+  return false
+}
+
 /**
  * The three switches from any config shape. The press switches default on; automatic reloading
  * defaults off, and the undocumented `plugins: 'off'` from older configs keeps meaning off.
  */
 function settingsOf(config) {
   return {
-    reloadPlugins: config?.reloadPlugins !== false,
-    reloadInterface: config?.reloadInterface !== false,
-    autoReload: config?.plugins === 'off' ? false : config?.autoReload === true,
+    reloadPlugins: booleanSwitch(config, 'reloadPlugins', true),
+    reloadInterface: booleanSwitch(config, 'reloadInterface', true),
+    autoReload: config?.plugins === 'off' ? false : booleanSwitch(config, 'autoReload', false),
   }
 }
 
