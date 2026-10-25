@@ -198,5 +198,14 @@ check('an empty address refuses instead of throwing', junk.status === 'blocked' 
 }
 
 const failed = checks.filter((row) => !row.pass)
+// A plugin set that cannot be read at all leaves nothing to check a startup list against.
+{
+  for (const [what, graph] of [['missing', null], ['not an object', 'gone'], ['without a list', { rev: 'r1' }], ['with a list it cannot name', { rev: 'r1', entries: 'gone' }]]) {
+    const answer = await verifyStartupRows(graph, async () => ({ status: 200 }), ['/plugins/a/client.js'])
+    check(`verify refuses a startup list when the plugin set is ${what}`, answer.status === 'blocked', JSON.stringify(answer))
+    check(`and that refusal says the list could not be read (${what})`, answer.reason === 'list', String(answer.reason))
+  }
+}
+
 console.log(`\n${checks.length - failed.length}/${checks.length} passed`)
 if (failed.length > 0) process.exitCode = 1

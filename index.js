@@ -1616,6 +1616,13 @@ function parseAsScript(body, name) {
  * @param rows the startup script addresses, as the next document would request them.
  */
 export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_VERIFY_MS) {
+  // A startup list is checked against the plugin set, so a set that cannot be read at all leaves
+  // nothing to check against: approving anyway would vouch for addresses nothing backs, and the
+  // next document would die on the first one that answers 404. An empty set is still a readable
+  // one — a row it no longer names is served from the retained bundle and reported as left out.
+  if (graph === null || typeof graph !== 'object' || !Array.isArray(graph.entries)) {
+    return { status: 'blocked', reason: 'list', detail: 'the plugin list cannot be read, so no startup row can be checked against it' }
+  }
   const entries = new Map(
     (Array.isArray(graph?.entries) ? graph.entries : [])
       .filter((row) => typeof row?.id === 'string' && row.id !== '')

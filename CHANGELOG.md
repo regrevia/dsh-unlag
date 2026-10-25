@@ -1,3 +1,9 @@
+## 1.9.77
+
+- 修复：核对启动列表时，如果插件清单本身读不出来（`graph()` 返回空、没有 `entries`），旧的检查会把每一条注册校验都跳过，等于替一个「不知道服务什么」的清单背书；下一个文档会在其中一条 404 上直接退出。现在这种情况按住并记为「启动列表」。清单可读但已为空时照旧放行：那一行由保留下来的旧包作答，并在日志里记成「页面启动时没有它」（`index.js` `verifyStartupRows`）。
+- 与官方文档核对：`docs/subsystems/client-modules.md`（master，204 行，sha256 `c7a3dfd256e195d1`）确认 `batches[].entries`、`batches[].url`、`entries[].id` 就是 `WebBootBatch` / `WebBootEntry` 的字段，重建前的核对没有猜字段。
+- 新增 `test/host-verify.test.mjs` 8 条：清单缺失/不是对象/没有列表/列表读不出，都按住并记为列表。全套 525 PASS / 0 FAIL。
+
 ## 1.9.76
 
 - 修复：重建前核对启动列表时，批次地址（`batch.url` / `batch.entries`）和插件项（`entry.id`）都是直接取的；页面自己的启动对象里这些字段读不出来时，异常会传到最外层，被记成「页面状态读不到」。现在逐字段读出，读不到记为「这一行」或「覆盖不全」（`client.js` `bundlesCoverStartup`）。
