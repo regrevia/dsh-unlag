@@ -605,6 +605,7 @@ const slowTook = Date.now() - slowBegan
 check('a slow update answers applying instead of holding the request', verdict(slowRes.body) === 'applying' && slowTook < 100, `${slowRes.body} after ${slowTook}ms`)
 await new Promise((resolve) => setTimeout(resolve, 200))
 check('and the update it started still runs to the end', slowMount.handlers.reloads === 1, String(slowMount.handlers.reloads))
+check('and its late finish is written down', readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('the update finished after the page was told it is still applying'))
 delete process.env.DSH_UNLAG_ANSWER_MS
 
 console.log(out.join('\n'))

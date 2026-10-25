@@ -1678,9 +1678,27 @@ function serveButton(ctx, controller, config) {
           const stillApplying = new Promise((resolve) => {
             timer = setTimeout(() => resolve({ status: 'applying', warnings: [], pending: [], restartReason: null, failedEntries: [] }), limit)
           })
+          let answeredEarly = false
           try {
-            const outcome = await Promise.race([controller.reloadNow(), stillApplying])
-            if (outcome?.status === 'applying') log('the update outlasted the answer the page waits for: the press is told it is still applying')
+            const work = controller.reloadNow()
+            /**
+             * The answer the page waits for is bounded, but the update is not. Whatever the update
+             * did after the page was told it is still applying is written down here: a replacement
+             * that failed a moment later must not look like one that succeeded.
+             */
+            work.then(
+              (late) => {
+                if (answeredEarly) log(`the update finished after the page was told it is still applying: ${String(late?.status ?? 'no status')}`)
+              },
+              (error) => {
+                if (answeredEarly) log(`the update failed after the page was told it is still applying: ${error?.message ?? error}`)
+              },
+            )
+            const outcome = await Promise.race([work, stillApplying])
+            if (outcome?.status === 'applying') {
+              answeredEarly = true
+              log('the update outlasted the answer the page waits for: the press is told it is still applying')
+            }
             sendJson(res, 200, outcome)
           } finally {
             if (timer !== null) clearTimeout(timer)
