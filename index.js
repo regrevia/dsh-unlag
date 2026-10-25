@@ -26,6 +26,9 @@ export const name = 'dsh-unlag'
  */
 export const inject = ['webServer']
 
+/** A transaction that has not finished in this long is stuck; the press reports it instead of hanging. */
+const RELOAD_TIMEOUT_MS = 20_000
+
 const LOG_PATH = join(homedir(), '.dsh', 'unlag-reload.log')
 /** Tests point this at a scratch file, so a test run leaves the live log readable. */
 const logTarget = () => process.env.DSH_UNLAG_LOG ?? LOG_PATH
@@ -182,10 +185,27 @@ function pluginReloader(ctx, config) {
    * @returns what the service reported, so the caller can tell done from partly done.
    */
   const reload = async (hmr) => {
+    /**
+     * Queue the recomposition through the service's own queue. A watcher callback created while a
+     * reload was restarting this plugin inherits that reload's context, and the service reads any
+     * request made from that context as a nested one even though the transaction is over. Leaving
+     * that context first is what the service's own watcher does, and it keeps the request queued
+     * instead of running a second recomposition beside the first.
+     */
+    const ask = (service) =>
+      typeof service.executing?.exit === 'function'
+        ? service.executing.exit(() => service.runExclusive(() => service.reconcileProfile([])))
+        : service.runExclusive(() => service.reconcileProfile([]))
+    const abandoned = () =>
+      new Promise((_resolve, reject) => {
+        const limit = Number(process.env.DSH_UNLAG_TIMEOUT_MS ?? '') || RELOAD_TIMEOUT_MS
+        const timer = setTimeout(() => reject(new Error('the plugin update did not finish in time')), limit)
+        timer.unref?.()
+      })
     let result = null
     for (let attempt = 0; ; attempt += 1) {
       try {
-        result = await hmr.runExclusive(() => hmr.reconcileProfile([]))
+        result = await Promise.race([ask(hmr), abandoned()])
         break
       } catch (error) {
         const message = String(error?.message ?? error)

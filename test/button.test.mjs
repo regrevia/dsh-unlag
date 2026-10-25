@@ -270,6 +270,68 @@ const restartRoutes = outcomeRoutes({ restartReason: 'native' })
 await restartRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, needsRestart)
 check('an update the page cannot take is not reported done', JSON.parse(needsRestart.body).status === 'failed', needsRestart.body)
 
+// --- a reload asked for from a context a previous reload left behind ---------------------------
+// A watch callback made while a reload was restarting this plugin carries that reload's context;
+// the service reads a request from there as a nested one even though the transaction is over. The
+// reload leaves that context before queuing, so a save still lands instead of reporting failure.
+const inherited = fakeRes()
+const inheritedRoutes = (() => {
+  const routes = new Map()
+  let store = true
+  const executing = {
+    getStore: () => store,
+    exit: (run) => {
+      const previous = store
+      store = undefined
+      try {
+        return run()
+      } finally {
+        store = previous
+      }
+    },
+  }
+  const ctx = {
+    get: (key) => {
+      if (key === 'webServer') return { register: (r) => (routes.set(r.path, r.handler), () => routes.delete(r.path)) }
+      if (key === 'hmr')
+        return {
+          baseDir: '/tmp/x',
+          executing,
+          runExclusive: (op) => (executing.getStore() ? Promise.reject(new Error('HMR transactions cannot be nested')) : Promise.resolve(op())),
+          reconcileProfile: async () => ({ warnings: [], pending: [] }),
+        }
+      return undefined
+    },
+    on: () => {},
+  }
+  apply(ctx, {})
+  return routes
+})()
+await inheritedRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, inherited)
+check('a save from a context an earlier reload left behind still applies', verdict(inherited.body) === 'done', inherited.body)
+
+// --- a reload that never finishes ---------------------------------------------------------------
+// The page must not wait forever for an answer, and must not rebuild over a set the app has not
+// confirmed, so a stuck update is reported as failed instead of hanging the press.
+process.env.DSH_UNLAG_TIMEOUT_MS = '60'
+const stuckRoutes = (() => {
+  const routes = new Map()
+  const ctx = {
+    get: (key) => {
+      if (key === 'webServer') return { register: (r) => (routes.set(r.path, r.handler), () => routes.delete(r.path)) }
+      if (key === 'hmr') return { baseDir: '/tmp/x', runExclusive: () => new Promise(() => {}), reconcileProfile: async () => ({}) }
+      return undefined
+    },
+    on: () => {},
+  }
+  apply(ctx, {})
+  return routes
+})()
+const stuck = fakeRes()
+await stuckRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, stuck)
+delete process.env.DSH_UNLAG_TIMEOUT_MS
+check('an update that never finishes is reported failed', verdict(stuck.body) === 'failed', stuck.body)
+
 // --- hostile surroundings --------------------------------------------------------------------
 let survived = true
 try {
