@@ -422,5 +422,15 @@ check('and the notice says the list answered too slowly', String(slowCheck.probe
   check('and falls back to naming the list', loaded.plugin.probe.startupHoldReason() === 'list', String(loaded.plugin.probe.startupHoldReason()))
 }
 
+// The saved list crosses a boundary from the shell. A row whose fields cannot be read is a list this
+// page cannot vouch for: hold the press and name the row, not the page.
+{
+  const badRow = Object.defineProperty({ kind: 'script', src: '/plugins/a/client.js' }, 'kind', { get() { throw new Error('crossed') } })
+  const loaded = harness({ bridge: { ready: async () => ({ injections: [badRow] }), request: async () => true } })
+  const verdict = await loaded.plugin.probe.prepareInterface()
+  check('a saved row that cannot be read holds the press', verdict === 'blocked', String(verdict))
+  check('and names the row as what stopped it', loaded.plugin.probe.startupHoldReason() === 'row', String(loaded.plugin.probe.startupHoldReason()))
+}
+
 console.log(out.join('\n'))
 if (out.some((line) => line.startsWith('FAIL'))) process.exitCode = 1

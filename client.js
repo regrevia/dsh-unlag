@@ -354,17 +354,31 @@ window.__ModuleLoader__.load({
       let frozen = null;
       for (const row of rows) {
         if (row === null || typeof row !== 'object') continue;
-        if (typeof row.kind !== 'string' || !STARTUP_ROW_KINDS.has(row.kind)) return held('row');
+        // The saved list crosses a boundary from the shell: a row whose fields cannot be read is a
+        // list this page cannot vouch for, and naming the row beats a page-shaped notice.
+        let kind = '';
+        let runs = false;
+        let src = '';
+        let name = '';
+        let value = null;
+        try {
+          kind = typeof row.kind === 'string' ? row.kind : '';
+          runs = kind === 'script-src' || kind === 'script-preload';
+          src = typeof row.src === 'string' ? row.src : '';
+          name = typeof row.name === 'string' ? row.name : '';
+          value = row.value;
+        } catch {
+          return held('row');
+        }
+        if (!STARTUP_ROW_KINDS.has(kind)) return held('row');
         // Only the rows a document runs as scripts have to load as classic scripts. Style and
         // markup rows carry their own text and their address is not a script at all, so reading
         // them back would refuse a sound list over a false alarm.
-        const runs = row.kind === 'script-src' || row.kind === 'script-preload';
-        if (runs && (typeof row.src !== 'string' || row.src === '')) return held('src');
-        if (runs) scripts.push(row.src);
+        if (runs && src === '') return held('src');
+        if (runs) scripts.push(src);
         // Inline rows carry their own text and are not fetched; the queue script among them ends
         // in a nested return that a flat scan would misread, so their text is left to the document.
-        if (row.kind !== 'global' || row.name !== '__DSH_BOOT__') continue; // ui-copy-ignore
-        let value = row.value;
+        if (kind !== 'global' || name !== '__DSH_BOOT__') continue; // ui-copy-ignore
         if (typeof value === 'string') {
           try {
             value = JSON.parse(value);
