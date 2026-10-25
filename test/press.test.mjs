@@ -34,7 +34,7 @@ function show(tree) {
   return pill === undefined ? null : String(Array.isArray(pill.children) ? pill.children.join('') : pill.children)
 }
 
-function harness({ settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], revAfterReload } = {}) {
+function harness({ settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], revAfterReload, bootRows = rows } = {}) {
   const requests = []
   const navigations = []
   const current = { rev: graph.rev }
@@ -79,7 +79,7 @@ function harness({ settings = { plugins: true, page: true }, reload = { status: 
   const window = {
     __ModuleLoader__: { load: () => {} },
     __DSH_BOOT__: graph,
-    dshDesktopBoot: { ready: async () => ({ injections: rows }) },
+    dshDesktopBoot: { ready: async () => ({ injections: bootRows }) },
     sessionStorage: { getItem: () => stamp, setItem: () => {} },
     location,
     dispatchEvent: (event) => {
@@ -359,6 +359,30 @@ check('and the pressed page still rebuilt', swapped.navigations.length === 1, sw
   check('a failing page check says it failed', /did not finish/.test(String(page.notice())), String(page.notice()))
   check('a failing page check is logged', page.requests.some((request) => request.path.includes('event=failed') && request.path.includes('gate=press')))
   check('a failing page check leaves the button usable', view.button !== null && view.button.props.disabled !== true)
+}
+
+// --- the list a booting document really gets: one inline queue script, inline global, both kinds ---
+// `dsh-client-modules` emits exactly four row kinds (script, script-preload, script-src, global) and
+// the shell replays them for every document. The check must read the two script addresses out of that
+// shape without refusing the list over the inline rows it cannot fetch.
+{
+  const real = [
+    { kind: 'script', placement: 'head', text: 'window.__ModuleLoader__={};' },
+    { kind: 'script-preload', src: '/plugins/??@local/a/client.js,@local/b/client.js&rev=live' },
+    { kind: 'script-src', placement: 'head', src: '/plugins/??@deepseek-ai/dsh-client-modules/client.js&rev=live' },
+    { kind: 'style', text: ':root{--a:1}' },
+    { kind: 'global', name: '__DSH_BOOT__', value: JSON.stringify(graph) },
+  ]
+  const page = harness({ bootRows: real })
+  await page.press()
+  check('a real boot list shape is not refused', page.navigations.length === 1, JSON.stringify(page.navigations))
+  const sent = page.requests.find((request) => request.path.startsWith('/dsh-unlag/verify'))
+  const sentBody = String(sent?.init?.body ?? '')
+  check(
+    'a real boot list sends both script addresses to the check',
+    sentBody.includes('@local/a/client.js') && sentBody.includes('dsh-client-modules/client.js') && !sentBody.includes('__ModuleLoader__'),
+    sentBody.slice(0, 160),
+  )
 }
 
 console.log(out.join('\n'))

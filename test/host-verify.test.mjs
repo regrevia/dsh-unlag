@@ -153,6 +153,11 @@ const longRead = await verifyStartup(longTable, [longUrl('old')])
 check('an address naming a whole plugin set is read, not dropped', longRead.status === 'ok' && longTable.asked.length === 1, JSON.stringify(longRead).slice(0, 160))
 check('that address is longer than a thousand ids of slack', longUrl('old').length > 4096, String(longUrl('old').length))
 
+// A row too long to read is not silently skipped while the rest of the list is approved: the
+// unread address is exactly the script whose failure would end the app.
+const mixed = await verifyStartup(table(), ['/plugins/??@local/a/client.js&rev=old', '/plugins/??@local/a/client.js&rev=old&pad=' + 'x'.repeat(9000)])
+check('a list with one unreadably long address refuses the whole list', mixed.status === 'blocked' && mixed.reason === 'list', JSON.stringify(mixed).slice(0, 160))
+
 // Garbage in the row is a refusal, not a throw.
 const junk = await verifyStartup(table(), [''])
 check('an empty address refuses instead of throwing', junk.status === 'blocked' && junk.reason === 'list', JSON.stringify(junk))

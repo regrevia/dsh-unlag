@@ -1496,7 +1496,12 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
   const wanted = []
   for (const row of offered) {
     if (typeof row !== 'string' || row === '') continue
-    if (row.length > MAX_STARTUP_ROW_CHARS) continue
+    // A row past the bound is a script that will not be read, and a script this check does not read
+    // is one nothing proved the next document could load: refuse the list instead of approving the
+    // part that happened to be readable.
+    if (row.length > MAX_STARTUP_ROW_CHARS) {
+      return { status: 'blocked', reason: 'list', detail: 'the startup list names an address longer than a document loads' }
+    }
     const path = row.includes('://') ? row.replace(/^[a-z]+:\/\/[^/]+/iu, '') : row
     const url = path.startsWith('/') ? path : `/${path.replace(/^\.?\//u, '')}`
     const request = bundleRequest(url)
