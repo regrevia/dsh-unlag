@@ -85,6 +85,13 @@ const DEFAULT_ROOTS = [join(homedir(), '.dsh', 'plugins')]
 const MAX_DEFERRALS = 40
 const MAX_STARTUP_ROWS = 64
 const MAX_STARTUP_ROW_CHARS = 4096
+
+/**
+ * The most plugin ids one bundle address may name. A real startup list is far below this; a made-up
+ * address far above it would otherwise have the plugin read one body per id, and answering a request
+ * is work the request itself must not be able to grow without bound.
+ */
+const MAX_BUNDLE_IDS = 128
 const MIN_INTERVAL_MS = 1500
 /** The route the app publishes client bundles under; the same key the module table registers. */
 const BUNDLE_ROUTE = '/plugins'
@@ -848,8 +855,10 @@ function bundleRequest(rawUrl) {
     id = id.endsWith('/client.js') ? id.slice(0, -'/client.js'.length) : id
     if (id !== '') ids.push(id)
   }
-  if (ids.length === 0) return null
-  return { ids, sourceMap, rev: revAt < 0 ? '' : rest.slice(revAt + '&rev='.length) }
+  if (ids.length === 0 || ids.length > MAX_BUNDLE_IDS) return null
+  // The same plugin twice in one address is one plugin: read its body once.
+  const unique = [...new Set(ids)]
+  return { ids: unique, sourceMap, rev: revAt < 0 ? '' : rest.slice(revAt + '&rev='.length) }
 }
 
 /**

@@ -156,7 +156,7 @@ check('a stale source map is answered here', staleMap.status === 200 && staleMap
 const parts = (...bodies) => bodies.join('\n;\n')
 const regrouped = await call(first.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js,@deepseek-ai/dsh-client-modules/client.js&rev=g1' })
 check('a set the table no longer groups is answered entry by entry', regrouped.status === 200 && regrouped.body === '/* one entry */ @local/a\n;\n/* one entry */ @deepseek-ai/dsh-client-modules', `${regrouped.status} ${regrouped.body}`)
-
+// Two bodies joined without a separator do not parse as one script, and the document would run
 // neither; the line holding `;` between them is what keeps each one a statement of its own.
 check('joined bodies are separated by a statement boundary', regrouped.body === parts('/* one entry */ @local/a', '/* one entry */ @deepseek-ai/dsh-client-modules'), regrouped.body)
 check('the regrouped answer is not cached', regrouped.headers?.['cache-control'] === 'no-store', JSON.stringify(regrouped.headers))
@@ -332,13 +332,6 @@ check(
   readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('cannot read the plugin table for a bundle request: table gone'),
 )
 
-console.log(out.join('\n'))
-if (log.includes('plugin reload did not start')) {
-  console.log('FAIL  apply threw instead of starting')
-  process.exitCode = 1
-}
-
-
 // --- a stale set that names a plugin the profile no longer has --------------------------------
 // The app's own answer is 404, and a document booting from an old startup list that meets one ends
 // the whole app. The plugin is genuinely gone, so the set is answered without it.
@@ -362,4 +355,33 @@ check(
   String(removedAsked.body).includes('@local/a') && String(removedAsked.body).includes('is not part of the plugin set served now'),
   String(removedAsked.body),
 )
-check('and the log names what was left out', readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('left out @local/b'))// Two bodies joined without a separator do not parse as one script, and the document would run
+check('and the log names what was left out', readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('left out @local/b'))
+
+// --- how much work one address may ask for ---------------------------------------------------
+// Answering a stale set reads one body per plugin it names. The address is the request's own, so
+// its size must not decide how long the answer takes.
+const huge = Array.from({ length: 300 }, (_, i) => `@local/p${i}`)
+const capMount = mount()
+const tooMany = await call(capMount.route.handler, {
+  method: 'GET',
+  url: `/plugins/??${huge.map((id) => `${id}/client.js`).join(',')}&rev=old`,
+})
+check('an address naming more plugins than a list could hold is left to the table', tooMany.status === 404 && tooMany.body === 'original', tooMany.status)
+
+// The same plugin listed twice still names the set the table groups: the body is read once.
+const repeated = await call(capMount.route.handler, {
+  method: 'GET',
+  url: '/plugins/??@local/a/client.js,@local/a/client.js,@local/b/client.js&rev=older',
+})
+check(
+  'the same plugin repeated in one address is answered as one',
+  repeated.status === 200 && repeated.body.includes('@local/a') && repeated.body.includes('@local/b'),
+  `${repeated.status} ${repeated.body}`,
+)
+
+
+console.log(out.join('\n'))
+if (log.includes('plugin reload did not start')) {
+  console.log('FAIL  apply threw instead of starting')
+  process.exitCode = 1
+}
