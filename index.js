@@ -1437,7 +1437,13 @@ function serveButton(ctx, controller, config) {
     [
       `${BASE_PATH}/state`,
       (_req, res) => {
-        sendJson(res, 200, { version: VERSION, code: CODE_STAMP, plugins: settings.reloadPlugins, page: settings.reloadInterface, shim: bundleShimStatus(ctx) })
+        // A disposed context answers with a status instead of a throw the server has to guess at.
+        try {
+          sendJson(res, 200, { version: VERSION, code: CODE_STAMP, plugins: settings.reloadPlugins, page: settings.reloadInterface, shim: bundleShimStatus(ctx) })
+        } catch (error) {
+          log(`cannot describe this copy of the plugin: ${error?.message ?? error}`)
+          sendJson(res, 500, { status: 'error' })
+        }
       },
     ],
     [
