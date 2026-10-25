@@ -101,12 +101,22 @@ function mount(config, extra = {}) {
 }
 
 const both = mount({})
-check('four routes registered', both.routes.size === 4, [...both.routes.keys()].join(','))
+check('five routes registered', both.routes.size === 5, [...both.routes.keys()].join(','))
 
 const stateRes = fakeRes()
 both.routes.get('/dsh-unlag/state')({ method: 'GET' }, stateRes)
 check('state GET 200', stateRes.status === 200)
 check('state says both on', switches(stateRes.body) === 'true|true', stateRes.body)
+
+const verifyGet = fakeRes()
+await both.routes.get('/dsh-unlag/verify')({ method: 'GET' }, verifyGet)
+check('verify rejects GET', verifyGet.status === 405)
+const verifyNoHeader = fakeRes()
+await both.routes.get('/dsh-unlag/verify')({ method: 'POST', headers: {} }, verifyNoHeader)
+check('verify rejects a press from another page', verifyNoHeader.status === 403)
+const verifyOffline = fakeRes()
+await both.routes.get('/dsh-unlag/verify')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, verifyOffline)
+check('verify without the plugin table answers blocked', verifyOffline.status === 200 && verdict(verifyOffline.body) === 'blocked', verifyOffline.body)
 
 const viaGet = fakeRes()
 await both.routes.get('/dsh-unlag/reload')({ method: 'GET', headers: {} }, viaGet)
@@ -346,6 +356,10 @@ await stuckRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-u
 check('another press joins the same update', verdict(stuckAgain.body) === 'applying', stuckAgain.body)
 check('an update in flight is started once', stuckRuns === 1, String(stuckRuns))
 delete process.env.DSH_UNLAG_TIMEOUT_MS
+// That update never finishes, so its state stays in flight: a real app in that state is gone.
+// Clearing it here keeps the rest of this file measuring what a later press does on a live app.
+const workState = globalThis[Symbol.for('dsh-unlag.work')]
+if (workState !== undefined) workState.current = null
 
 // --- the app stops exposing the transaction context by name -------------------------------------
 // A later version may move the instance or rename the field. The reload resolves it by type, so a
@@ -431,7 +445,7 @@ check('no web server and no hmr is not fatal', survived)
 // --- replacing the module twice must not stack routes ----------------------------------------
 const first = mount({})
 const second = mount({})
-check('remount leaves one route set', first.routes.size === 0 && second.routes.size === 4, `${first.routes.size}/${second.routes.size}`)
+check('remount leaves one route set', first.routes.size === 0 && second.routes.size === 5, `${first.routes.size}/${second.routes.size}`)
 
 console.log(out.join('\n'))
 console.log(process.exitCode === 1 ? 'FAILURES' : 'ALL PASS')

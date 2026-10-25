@@ -15,8 +15,8 @@ window.__ModuleLoader__.load({
      * repeating one generic sentence.
      */
     const REASONS = zh
-      ? { list: '读不到启动信息', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整' }
-      : { list: 'startup info is unavailable', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete' };
+      ? { list: '读不到启动信息', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', verify: '插件后端没有应答' }
+      : { list: 'startup info is unavailable', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete', verify: 'the plugin is not answering' };
 
     /** The last reason a readiness check refused for, or null after a check that passed. */
     let holdReason = null;
@@ -127,6 +127,56 @@ window.__ModuleLoader__.load({
       return match[1].split(',').map((part) => decodeURIComponent(part).replace(/\/client\.js.*$/u, '')).filter((id) => id !== '');
     }
 
+    /**
+     * Ask the host half whether the scripts the next document would run can start it. The page has no
+     * parser that agrees with a script tag, and compiling a candidate body here would execute the
+     * plugin inside the page that carries the turn, so the verdict is the host's real parse bound to
+     * the bytes it read.
+     * @returns 'ok' | 'blocked'
+     */
+    async function hostVerifyStartup(scripts) {
+      let response;
+      try {
+        response = await fetch(`${HOST_BASE}/verify`, {
+          method: 'POST', // ui-copy-ignore
+          credentials: 'same-origin',
+          headers: { 'content-type': 'application/json', 'x-dsh-unlag': '1' }, // ui-copy-ignore
+          body: JSON.stringify({ rows: scripts }), // ui-copy-ignore
+        });
+      } catch {
+        held('verify');
+        return 'blocked';
+      }
+      if (!response.ok) {
+        held('verify');
+        return 'blocked';
+      }
+      let data = null;
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
+      if (data !== null && typeof data === 'object' && data.status === 'ok') {
+        holdReason = null;
+        return 'ok';
+      }
+      const reason = data !== null && typeof data === 'object' && typeof data.reason === 'string' ? data.reason : 'list';
+      held(VERIFY_GATES[reason] ?? 'list');
+      return 'blocked';
+    }
+
+    // What the host's refusal means to the person pressing: the same gates the checks above use.
+    const VERIFY_GATES = {
+      empty: 'empty',
+      missing: 'script',
+      network: 'script',
+      parse: 'parse',
+      register: 'plugin',
+      dependencies: 'covers',
+      list: 'list',
+    };
+
     /** Read every bundle the next boot would load and prove each listed plugin is inside. */
     async function bundlesCoverStartup(graph) {
       if (graph === null || typeof graph !== 'object') return held('graph');
@@ -149,20 +199,10 @@ window.__ModuleLoader__.load({
         const id = typeof entry === 'string' ? entry : entry?.id;
         if (typeof id !== 'string' || !covered.has(id)) return held('covers');
       }
-      for (const source of sources) {
-        try {
-          const response = await fetch(source.url.toString(), { cache: 'no-store', credentials: 'same-origin' });
-          if (!response.ok) return held('script');
-          const body = await response.text();
-          if (body.length === 0) return held('empty');
-          for (const id of source.ids) {
-            if (!body.includes(id)) return held(source.ids.length === 1 ? 'plugin' : 'covers');
-          }
-          if (!parsesAsClassicScript(body)) return held('parse');
-        } catch {
-          return held('script');
-        }
-      }
+      // Reading these bodies here would need a parser the page does not have and would not prove
+      // what the new document registers; the host half compiles the same bytes with the real parser.
+      const verdict = await hostVerifyStartup(sources.map((source) => source.url.toString()));
+      if (verdict !== 'ok') return false;
       holdReason = null;
       return true;
     }
@@ -170,127 +210,10 @@ window.__ModuleLoader__.load({
     // Every row kind a document boot understands; an unknown one ends the document.
     const STARTUP_ROW_KINDS = new Set(['global', 'script', 'script-src', 'script-preload', 'style', 'html']);
 
-    /**
-     * Whether a script body parses the way the document will parse it: as a classic script. A body
-     * that needs module syntax never runs, so the document that loads it fails to boot and the
-     * desktop shell ends. Compiling runs nothing, so nothing here has a side effect; a page that
-     * forbids compiling strings cannot answer, and then the checks already done stand.
-     * @param body - the served script.
-     * @returns true when the body parses, or when this page cannot compile one at all.
-     */
-    /** The source with comments and string contents blanked out, so a keyword scan sees code only. */
-    function codeOnly(source) {
-      let out = '';
-      let index = 0;
-      while (index < source.length) {
-        const here = source[index];
-        const next = source[index + 1];
-        if (here === '/' && next === '*') {
-          const end = source.indexOf('*/', index + 2);
-          index = end < 0 ? source.length : end + 2;
-          out += ' ';
-          continue;
-        }
-        if (here === '/' && next === '/') {
-          const end = source.indexOf('\n', index + 2);
-          index = end < 0 ? source.length : end;
-          continue;
-        }
-        if (here === '"' || here === "'" || here === '`') {
-          index += 1;
-          while (index < source.length && source[index] !== here) {
-            if (source[index] === '\\') index += 1;
-            index += 1;
-          }
-          index += 1;
-          out += '""';
-          continue;
-        }
-        out += here;
-        index += 1;
-      }
-      return out;
-    }
-
-    /**
-     * Whether a script has a `return` at the top level. A function body accepts one and a classic
-     * script does not, so that difference decides whether the document runs the body at all. Only
-     * depth zero counts: a return inside a callback, method or block is ordinary code, and reading
-     * one as a refusal held every real bundle back.
-     */
-    function hasTopLevelReturn(source) {
-      let depth = 0;
-      let index = 0;
-      let previous = '';
-      while (index < source.length) {
-        const here = source[index];
-        const next = source[index + 1];
-        if (here === '/' && next === '*') {
-          const end = source.indexOf('*/', index + 2);
-          index = end < 0 ? source.length : end + 2;
-          continue;
-        }
-        if (here === '/' && next === '/') {
-          const end = source.indexOf('\n', index + 2);
-          index = end < 0 ? source.length : end;
-          continue;
-        }
-        if (here === '"' || here === "'" || here === '`') {
-          index += 1;
-          while (index < source.length && source[index] !== here) {
-            if (source[index] === '\\') index += 1;
-            index += 1;
-          }
-          index += 1;
-          previous = 'a';
-          continue;
-        }
-        if (here === '/' && /(?:^|[(,=:[!&|?{};+\-*%<>~^])$/u.test(previous)) {
-          // A regular expression literal; its body is pattern text, not code.
-          index += 1;
-          let inClass = false;
-          while (index < source.length) {
-            const part = source[index];
-            if (part === '\\') index += 2;
-            else if (part === '[') {
-              inClass = true;
-              index += 1;
-            } else if (part === ']') {
-              inClass = false;
-              index += 1;
-            } else if (part === '/' && !inClass) {
-              index += 1;
-              break;
-            } else if (part === '\n') break;
-            else index += 1;
-          }
-          previous = 'a';
-          continue;
-        }
-        if (here === '(' || here === '[' || here === '{') depth += 1;
-        else if (here === ')' || here === ']' || here === '}') depth = Math.max(0, depth - 1);
-        else if (depth === 0 && here === 'r' && source.startsWith('return', index)) {
-          const before = source[index - 1] ?? '';
-          const after = source[index + 6] ?? '';
-          if (!/[\w$]/u.test(before) && !/[\w$]/u.test(after)) return true;
-        }
-        if (!/\s/u.test(here)) previous = here;
-        index += 1;
-      }
-      return false;
-    }
-
-    function parsesAsClassicScript(body) {
-      try {
-        // A top-level return parses in a function body but not as a classic script.
-        if (hasTopLevelReturn(body)) return false;
-        new Function(body); // eslint-disable-line no-new-func
-        return true;
-      } catch (error) {
-        const text = String(error?.message ?? error);
-        if (/unsafe-eval|Content Security Policy/iu.test(text)) return true;
-        return false;
-      }
+    /** Whether this document is owned by the desktop shell, whose saved list decides a boot. */
+    function desktopShellPresent() {
+      const bridge = window.dshDesktopBoot;
+      return bridge !== undefined && bridge !== null && typeof bridge.ready === 'function';
     }
 
     /**
@@ -299,12 +222,6 @@ window.__ModuleLoader__.load({
      * after that, so this is the only way to see what a rebuild would really boot from.
      * @returns the list rows, or null when this page is not running inside the desktop shell.
      */
-    /** Whether this document is owned by the desktop shell, whose saved list decides a boot. */
-    function desktopShellPresent() {
-      const bridge = window.dshDesktopBoot;
-      return bridge !== undefined && bridge !== null && typeof bridge.ready === 'function';
-    }
-
     async function desktopStartupPayload() {
       const bridge = window.dshDesktopBoot;
       if (bridge === undefined || bridge === null || typeof bridge.ready !== 'function') return null;
@@ -369,27 +286,8 @@ window.__ModuleLoader__.load({
           if (typeof id === 'string' && id !== '' && !liveIds.has(id)) return held('plugin');
         }
       }
-      for (const src of scripts) {
-        let target;
-        try {
-          target = new URL(src, location.href).toString();
-        } catch {
-          return held('src');
-        }
-        try {
-          const response = await fetch(target, { cache: 'no-store', credentials: 'same-origin' });
-          if (!response.ok) return held('script');
-          const body = await response.text();
-          if (body.length === 0) return held('empty');
-          const ids = bundledIds(target);
-          for (const id of ids) {
-            if (!body.includes(id)) return held(ids.length === 1 ? 'plugin' : 'covers');
-          }
-          if (!parsesAsClassicScript(body)) return held('parse');
-        } catch {
-          return held('script');
-        }
-      }
+      const verdict = await hostVerifyStartup(scripts);
+      if (verdict !== 'ok') return false;
       holdReason = null;
       return true;
     }

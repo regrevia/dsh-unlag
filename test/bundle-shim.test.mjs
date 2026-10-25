@@ -69,7 +69,15 @@ function mount({ graph = CURRENT, serve = (path) => bodies.get(path), keep = nul
   // A newer app registers this route as a request-in/response-out resource instead of a handler.
   const route =
     shape === 'resource'
-      ? { kind: 'prefix', path: '/plugins', resource: async () => new Response('original', { status: 404 }) }
+      ? {
+          kind: 'prefix',
+          path: '/plugins',
+          resource: async (request) => {
+            const kept = keep === null ? undefined : keep(asPath(request?.url))
+            if (kept === undefined) return new Response('original', { status: 404 })
+            return new Response(kept, { status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8' } })
+          },
+        }
       : { kind: 'prefix', path: '/plugins', handler: original }
   const prefixes = new Map(late ? [] : [['/plugins', route]])
   const routes = new Map()
@@ -238,6 +246,44 @@ const kept = mount({ keep: (path) => (path.includes('rev=old') && path.includes(
 const keptAnswer = await call(kept.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js,@local/b/client.js&rev=old' })
 check('an old-generation answer is used as it is', keptAnswer.status === 200 && keptAnswer.body.includes('old generation'), `${keptAnswer.status} ${keptAnswer.body}`)
 check('an old-generation answer is not replaced', kept.seen.length === 0, String(kept.seen.length))
+
+
+// --- one plugin's chunk is asked at that plugin's own revision --------------------------------
+// A document and every chunk it loads later ask with the revision they booted from. The table
+// serves a chunk at exactly the revision of its own entry: asking at the plugin set's revision,
+// or another plugin's, answers 404 and ends a document that already runs. The plugin path alone
+// decides the revision, so a chunk nobody has regrouped must never be rewritten to the set's.
+const chunkAsks = []
+const chunkRoute = mount({
+  keep: (path) => {
+    chunkAsks.push(path)
+    return path.includes('client.lazy.js') && path.includes('rev=ar2') ? '/* lazy @local/a */' : undefined
+  },
+})
+const chunkOld = await call(chunkRoute.route.handler, { method: 'GET', url: '/plugins/@local/a/client.lazy.js?rev=a-old' })
+check('a chunk asked at a stale revision is answered', chunkOld.status === 200 && chunkOld.body === '/* lazy @local/a */', `${chunkOld.status} ${chunkOld.body}`)
+check('the chunk is retried at the entry revision', chunkAsks.includes('/plugins/@local/a/client.lazy.js?rev=ar2'), chunkAsks.join(' '))
+check('the chunk is never asked at the plugin set revision', !chunkAsks.some((path) => path.includes('rev=newrev')), chunkAsks.join(' '))
+
+const chunkNoQuery = mount({ keep: (path) => (path === '/plugins/@local/b/client.lazy.js?rev=br2' ? '/* lazy @local/b */' : undefined) })
+const chunkMissing = await call(chunkNoQuery.route.handler, { method: 'GET', url: '/plugins/@local/b/client.lazy.js' })
+check('a chunk with no revision is asked at its entry revision', chunkMissing.status === 200 && chunkMissing.body === '/* lazy @local/b */', `${chunkMissing.status} ${chunkMissing.body}`)
+
+const chunkOther = mount({ keep: (path) => (path === '/plugins/@local/b/client.lazy.js?rev=br2' ? '/* lazy @local/b */' : undefined) })
+const chunkWrong = await call(chunkOther.route.handler, { method: 'GET', url: '/plugins/@local/b/client.lazy.js?rev=abrev' })
+check('a chunk naming another plugin set is answered at its entry revision', chunkWrong.status === 200 && chunkWrong.body === '/* lazy @local/b */', `${chunkWrong.status} ${chunkWrong.body}`)
+
+const resourceAsks = []
+const resourceChunk = mount({
+  shape: 'resource',
+  keep: (path) => {
+    resourceAsks.push(path)
+    return path === '/plugins/@local/a/client.lazy.js?rev=ar2' ? '/* lazy resource */' : undefined
+  },
+})
+const resourceAnswer = await resourceChunk.route.resource(new Request('http://x/plugins/@local/a/client.lazy.js?rev=a-old'))
+check('a chunk asked over the resource route is answered', resourceAnswer.status === 200 && (await resourceAnswer.text()) === '/* lazy resource */', String(resourceAnswer.status))
+check('the resource route asks at the entry revision', resourceAsks.includes('/plugins/@local/a/client.lazy.js?rev=ar2'), resourceAsks.join(' '))
 
 console.log(out.join('\n'))
 if (log.includes('plugin reload did not start')) {

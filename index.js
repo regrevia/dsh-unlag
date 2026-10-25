@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { appendFileSync, existsSync, readFileSync, readdirSync, statSync, watch } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { Script } from 'node:vm'
 
 /**
  * One header button, three ways new code reaches the running app:
@@ -39,6 +40,8 @@ const logTarget = () => process.env.DSH_UNLAG_LOG ?? LOG_PATH
 const WATCHER_KEY = Symbol.for('dsh-unlag.watchers')
 /** The same, for the HTTP entry points the header button calls. */
 const ROUTES_KEY = Symbol.for('dsh-unlag.routes')
+/** The queue request this plugin is waiting on, shared across a replacement of this plugin. */
+const WORK_KEY = Symbol.for('dsh-unlag.work')
 const BASE_PATH = '/dsh-unlag'
 /** A same-origin page sets this itself; a cross-site form post cannot, and fails the preflight. */
 const BUTTON_HEADER = 'x-dsh-unlag'
@@ -227,8 +230,13 @@ function pluginReloader(ctx, config) {
 
   let timer = null
   let running = false
-  /** The queue request this plugin is still waiting on, so a timeout is not reported as a cancel. */
-  let work = null
+  /**
+   * The queue request this plugin is still waiting on, so a timeout is not reported as a cancel.
+   * It lives on the host instead of in this closure: replacing this plugin builds a new closure, and
+   * a press landing after that must still join the update the first press started rather than queue
+   * a second one beside it.
+   */
+  const workState = (globalThis[WORK_KEY] ??= { current: null })
   let again = false
   let deferrals = 0
   let lastRun = 0
@@ -284,9 +292,9 @@ function pluginReloader(ctx, config) {
      * so a timeout is reported as still applying, never as a failed update that later fires anyway.
      */
     const tracked = (request) => {
-      work = request
+      workState.current = request
       const settle = () => {
-        if (work === request) work = null
+        if (workState.current === request) workState.current = null
       }
       request.then(settle, settle)
       return request
@@ -305,7 +313,7 @@ function pluginReloader(ctx, config) {
           continue
         }
         if (message.includes('did not finish in time')) {
-          error.stillRunning = work !== null
+          error.stillRunning = workState.current !== null
           throw error
         }
         throw error
@@ -315,13 +323,13 @@ function pluginReloader(ctx, config) {
     const pending = Array.isArray(result?.pending) ? result.pending : []
     const restartReason = typeof result?.restartReason === 'string' ? result.restartReason : null
     /**
-     * A reconciliation that returns without throwing can still have left a plugin unloaded: the app
-     * reports that as a warning. A set with an entry that did not start is not a set the page can be
-     * rebuilt against, so the press is reported as failed and names what did not start.
+     * A reconciliation that returns without throwing can still have left part of the set unready, and
+     * the app names each such entry in `warnings`. An earlier test decided by English words inside
+     * that sentence, which missed "pending (waiting for service: addonService)" and invented failures
+     * out of harmless prose. The warning itself is the app saying an entry is not serving the page, so
+     * every warning counts and the sentence is passed on as it reads.
      */
-    const failedEntries = warnings
-      .map((warning) => (typeof warning === 'string' ? warning : String(warning?.message ?? '')))
-      .filter((warning) => /fail|cannot|missing|invalid|error/iu.test(warning))
+    const failedEntries = warnings.map((warning) => (typeof warning === 'string' ? warning : String(warning?.message ?? warning)))
     log(
       `plugins reloaded (warnings=${warnings.length} pending=${pending.length}${restartReason === null ? '' : ` restart=${restartReason}`})`,
     )
@@ -330,7 +338,9 @@ function pluginReloader(ctx, config) {
 
   const flush = async () => {
     timer = null
-    if (running) {
+    // A queue request that outlived its wait is still applying: a second flush would ask the plugin
+    // set to recompose beside it, which can leave half of it stopped.
+    if (running || workState.current !== null) {
       again = true
       return
     }
@@ -372,7 +382,19 @@ function pluginReloader(ctx, config) {
         await reload(hmr)
         if (stamp !== null) lastStamp = stamp
       } finally {
-        running = false
+        // The wait can end while its queue request is still applying. Staying busy keeps a press
+        // from queueing a second update, and the release clears the flag when that request ends.
+        if (workState.current === null) running = false
+        else {
+          const release = () => {
+            running = false
+            if (again) {
+              again = false
+              if (timer === null) timer = setTimeout(() => void flush(), debounce)
+            }
+          }
+          workState.current.then(release, release)
+        }
       }
     } catch (error) {
       log(`reload did not finish; the plugin set may be partly applied: ${error?.message ?? error}`)
@@ -432,7 +454,7 @@ function pluginReloader(ctx, config) {
   })
 
   /** A press made while an update is still running joins that update instead of queueing another. */
-  const busyAnswer = () => (work !== null ? { status: 'applying', warnings: [], pending: [], restartReason: null, failedEntries: [] } : queuedAnswer(queueReload()))
+  const busyAnswer = () => (workState.current !== null ? { status: 'applying', warnings: [], pending: [], restartReason: null, failedEntries: [] } : queuedAnswer(queueReload()))
 
   /**
    * The button path: run now and report what happened, so the page can tell the user why the
@@ -443,10 +465,10 @@ function pluginReloader(ctx, config) {
     const hmr = hmrService()
     if (hmr === null) return { status: 'unavailable', warnings: [], pending: [], restartReason: null, failedEntries: [] }
     if (turnsRunning()) log('reloading while turns are still running; they keep running')
-    if (running || (force === false && busy())) return busyAnswer()
+    if (running || workState.current !== null || (force === false && busy())) return busyAnswer()
     const wait = lastRun + MIN_INTERVAL_MS - Date.now()
     if (wait > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(wait, 2000)))
-    if (running || (force === false && busy())) return busyAnswer()
+    if (running || workState.current !== null || (force === false && busy())) return busyAnswer()
     if (timer !== null) {
       clearTimeout(timer)
       timer = null
@@ -489,7 +511,7 @@ function pluginReloader(ctx, config) {
       log(`reload did not finish; the plugin set may be partly applied: ${error?.message ?? error}`)
       return { status: 'failed', warnings: [], pending: [], restartReason: null, failedEntries: [] }
     } finally {
-      if (work === null) {
+      if (workState.current === null) {
         running = false
         again = false
       } else {
@@ -501,7 +523,7 @@ function pluginReloader(ctx, config) {
             if (timer === null) timer = setTimeout(() => void flush(), debounce)
           }
         }
-        work.then(release, release)
+        workState.current.then(release, release)
       }
     }
   }
@@ -555,6 +577,31 @@ function sendJson(res, status, payload) {
     })
     res.end(body)
   } catch {}
+}
+
+/** Read one small JSON request body; anything unreadable answers null instead of hanging. */
+function readJsonBody(req, limit = 64 * 1024) {
+  return new Promise((resolve) => {
+    let size = 0
+    const parts = []
+    try {
+      req.on('data', (chunk) => {
+        size += chunk.length
+        if (size <= limit) parts.push(chunk)
+      })
+      req.on('end', () => {
+        if (size > limit) return resolve(null)
+        try {
+          resolve(JSON.parse(Buffer.concat(parts).toString('utf8')))
+        } catch {
+          resolve(null)
+        }
+      })
+      req.on('error', () => resolve(null))
+    } catch {
+      resolve(null)
+    }
+  })
 }
 
 /**
@@ -764,27 +811,38 @@ async function serveCurrentBundle(clientModules, req, res) {
   }
 }
 
-/** The revision the module table serves now, or null when it cannot be read. */
-function currentRevision(clientModules) {
+/** The revision the table serves one plugin at, or null when the set no longer holds it. */
+function entryRevisionFor(graph, rawUrl) {
+  let path = ''
   try {
-    const graph = clientModules.graph()
-    return typeof graph?.rev === 'string' && graph.rev !== '' ? graph.rev : null
+    path = new URL(String(rawUrl ?? ''), 'http://unlag.invalid').pathname
   } catch {
     return null
   }
+  if (!path.startsWith(`${BUNDLE_ROUTE}/`)) return null
+  const rows = Array.isArray(graph?.entries) ? graph.entries : []
+  for (const row of rows) {
+    if (typeof row?.id !== 'string' || row.id === '' || typeof row?.rev !== 'string' || row.rev === '') continue
+    if (path === `${BUNDLE_ROUTE}/${row.id}` || path.startsWith(`${BUNDLE_ROUTE}/${row.id}/`)) return row.rev
+  }
+  return null
 }
 
 /**
- * Point a bundle request at the current revision while keeping the plugin set it names. The table
- * only keeps the previous generation of whole documents, and dynamic chunks are served at the
- * current revision alone; a page that kept an old revision would get a main bundle it cannot load
- * chunks for. Rewriting the revision keeps one generation in the whole answer.
+ * Point a request for one plugin's file at the revision the table serves that plugin at.
+ *
+ * A document and every chunk it later loads ask with the revision they booted from. The table keeps
+ * whole documents from the previous generation only, and a chunk is served at exactly the revision of
+ * its own entry: asking for one plugin's chunk at the set's revision, or at another plugin's revision,
+ * answers 404 and ends a document that already runs. The plugin path alone decides the revision, so
+ * only the revision of the file named in the path is replaced; everything else is left alone.
  */
-function retargetRevision(url, current) {
-  if (current === null || typeof url !== 'string') return null
+function retargetRevision(url, revision) {
+  if (revision === null || typeof url !== 'string') return null
   const match = /([?&])rev=([^&#]*)/u.exec(url)
-  if (match === null || match[2] === current) return null
-  return `${url.slice(0, match.index)}${match[1]}rev=${current}${url.slice(match.index + match[0].length)}`
+  if (match !== null && match[2] === revision) return null
+  if (match !== null) return `${url.slice(0, match.index)}${match[1]}rev=${revision}${url.slice(match.index + match[0].length)}`
+  return `${url}${url.includes('?') ? '&' : '?'}rev=${revision}`
 }
 
 /** The same answer over the request-in/response-out route a newer app registers. */
@@ -828,10 +886,11 @@ function serveBundlesAtCurrentRevision(ctx) {
     const wrapped = async (request) => {
       /**
        * The table's own answer comes first: it still holds the document generation this page booted
-       * from. Only when it has nothing is the current one served, and the request is retargeted at
-       * the current revision so the answer and its chunks belong to the same generation.
+       * from. Only when it has nothing is the same request tried at the revision of the plugin it
+       * names, because a chunk is served at its entry's revision and nowhere else.
        */
-      const retargeted = retargetRevision(String(request?.url ?? ''), currentRevision(clientModules))
+      const url = String(request?.url ?? '')
+      const retargeted = retargetRevision(url, entryRevisionFor(clientModules.graph(), url))
       const method = String(request?.method ?? 'GET').toUpperCase()
       let answer = null
       try {
@@ -871,7 +930,7 @@ function serveBundlesAtCurrentRevision(ctx) {
    */
   const wrapped = async (req, res) => {
     const originalUrl = String(req?.url ?? '')
-    const retargeted = retargetRevision(originalUrl, currentRevision(clientModules))
+    const retargeted = retargetRevision(originalUrl, entryRevisionFor(clientModules.graph(), originalUrl))
     const realWriteHead = res.writeHead
     const realEnd = res.end
     const ask = async (url) => {
@@ -990,6 +1049,133 @@ function bundleShimStatus(ctx) {
   }
 }
 
+/** Ids a classic-script body registers through the module loader's public entry point. */
+function registeredIds(body) {
+  const ids = new Set()
+  for (const match of body.matchAll(/__ModuleLoader__\s*\.\s*load\s*\(\s*\{[\s\S]{0,8192}?\bid\s*:\s*(["'`])([^"'`]+)\1/gu)) ids.add(match[2])
+  return ids
+}
+
+/** Ids a body reads from the loader's table through `require`, which must already be registered. */
+function requiredIds(body) {
+  const ids = new Set()
+  for (const match of body.matchAll(/\brequire\s*\(\s*(["'])([^"']+)\1\s*\)/gu)) ids.add(match[2])
+  return ids
+}
+
+/**
+ * Compile one body the way the document compiles it, and never run it: running a plugin body here
+ * would execute its top level inside the host that owns every running turn.
+ * @returns the parser's complaint, or null when the body compiles as a classic script.
+ */
+function parseAsScript(body, name) {
+  try {
+    new Script(body, { filename: name })
+    return null
+  } catch (error) {
+    return String(error?.message ?? error)
+  }
+}
+
+/**
+ * Answer whether the next document would come up from the scripts a startup list names.
+ *
+ * The page cannot answer this itself: `new Function` is not the parser a script tag uses, and running
+ * a candidate body there would execute the plugin inside the page that carries the turn. Here every
+ * body is read from the address the document would use, compiled with the real parser, and checked
+ * for the ids it registers and the modules it reads. The desktop shell boots every document from one
+ * startup list captured at launch, so bytes that change after this answer stay outside what any check
+ * can promise: disagreement between the bytes and the plugin list is a hold, never a rebuild.
+ * @param graph the plugin table's live description.
+ * @param fetchBody reads one script address and answers a response-like, or null when it cannot.
+ * @param rows the startup script addresses, as the next document would request them.
+ */
+export async function verifyStartupRows(graph, fetchBody, rows) {
+  const entries = new Map(
+    (Array.isArray(graph?.entries) ? graph.entries : [])
+      .filter((row) => typeof row?.id === 'string' && row.id !== '')
+      .map((row) => [row.id, row]),
+  )
+  const wanted = []
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (typeof row !== 'string' || row === '') continue
+    const path = row.includes('://') ? row.replace(/^[a-z]+:\/\/[^/]+/iu, '') : row
+    const url = path.startsWith('/') ? path : `/${path.replace(/^\.?\//u, '')}`
+    const request = bundleRequest(url)
+    wanted.push({ url, ids: request === null ? [] : request.ids })
+  }
+  if (wanted.length === 0) return { status: 'blocked', reason: 'list', detail: 'the startup list names no script' }
+  const listed = new Set()
+  const bodies = []
+  for (const item of wanted) {
+    for (const id of item.ids) listed.add(id)
+    let response = null
+    try {
+      response = await fetchBody(item.url)
+    } catch (error) {
+      return { status: 'blocked', reason: 'network', detail: `${item.url}: ${String(error?.message ?? error)}` }
+    }
+    if (response === null || response === undefined || response.status !== 200) {
+      return { status: 'blocked', reason: 'missing', detail: `${item.url} answers ${String(response?.status ?? 'nothing')}` }
+    }
+    const bytes = Buffer.from(await response.arrayBuffer())
+    if (bytes.length === 0) return { status: 'blocked', reason: 'empty', detail: `${item.url} answers an empty body` }
+    const text = bytes.toString('utf8')
+    const complaint = parseAsScript(text, item.url)
+    if (complaint !== null) return { status: 'blocked', reason: 'parse', detail: `${item.url}: ${complaint}` }
+    const registered = registeredIds(text)
+    const missing = item.ids.filter((id) => !registered.has(id))
+    if (item.ids.length > 0 && missing.length > 0) {
+      return { status: 'blocked', reason: 'register', detail: `${item.url} does not register ${missing.join(', ')}` }
+    }
+    bodies.push({
+      url: item.url,
+      text,
+      ids: item.ids,
+      digest: createHash('sha256').update(bytes).digest('hex').slice(0, 16),
+    })
+  }
+  /**
+   * A body can read a plugin its own document does not list: the set changed after that document was
+   * composed, and the missing module only shows up inside the new page as a failed import. Every id
+   * that is one of the app's client entries and is neither registered by a listed script nor listed
+   * itself is that case, so the press is held rather than booting a page that dies half way.
+   */
+  const available = new Set(listed)
+  for (const body of bodies) for (const id of registeredIds(body.text)) available.add(id)
+  const absent = new Set()
+  for (const body of bodies) {
+    for (const id of requiredIds(body.text)) {
+      if (available.has(id) || !entries.has(id)) continue
+      absent.add(id)
+    }
+  }
+  if (absent.size > 0) {
+    return {
+      status: 'blocked',
+      reason: 'dependencies',
+      detail: `not registered by the startup list: ${[...absent].slice(0, 4).join(', ')}`,
+    }
+  }
+  return {
+    status: 'ok',
+    reason: 'ok',
+    revision: typeof graph?.rev === 'string' ? graph.rev : null,
+    scripts: bodies.map((body) => ({ url: body.url, digest: body.digest, ids: body.ids })),
+  }
+}
+
+/** Ask the same question of the plugin table the plugin itself talks to. */
+async function verifyStartup(clientModules, rows) {
+  let graph = null
+  try {
+    graph = clientModules.graph()
+  } catch (error) {
+    return { status: 'blocked', reason: 'list', detail: String(error?.message ?? error) }
+  }
+  return verifyStartupRows(graph, (url) => fetchBundleAt(clientModules, url, 'GET'), rows)
+}
+
 /**
  * The entry points the header button calls. Each answers with the current switches so the page
  * never guesses: with both off it does nothing, and a turn still running is reported rather than
@@ -1015,6 +1201,27 @@ function serveButton(ctx, controller, config) {
       (_req, res) => {
         ensureBundleShim(ctx)
         sendJson(res, 200, { graph: liveBootGraph(ctx) })
+      },
+    ],
+    [
+      `${BASE_PATH}/verify`,
+      async (req, res) => {
+        const method = String(req?.method ?? 'GET').toUpperCase()
+        if (method !== 'POST') return sendJson(res, 405, { status: 'method' })
+        const header = req?.headers?.[BUTTON_HEADER]
+        if (typeof header !== 'string' || header === '') return sendJson(res, 403, { status: 'forbidden' })
+        const clientModules = ctx.get('clientModules')
+        if (typeof clientModules?.fetchBundle !== 'function' || typeof clientModules?.graph !== 'function') {
+          return sendJson(res, 200, { status: 'blocked', reason: 'list', detail: 'the plugin table is not running' })
+        }
+        const body = await readJsonBody(req)
+        let verdict = null
+        try {
+          verdict = await verifyStartup(clientModules, Array.isArray(body?.rows) ? body.rows : [])
+        } catch (error) {
+          verdict = { status: 'blocked', reason: 'list', detail: String(error?.message ?? error) }
+        }
+        sendJson(res, 200, verdict)
       },
     ],
     [
