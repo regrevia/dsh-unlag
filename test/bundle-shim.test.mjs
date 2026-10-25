@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync } from 'node:fs'
+import { runInNewContext } from 'node:vm'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply } from '../index.js'
@@ -146,6 +147,16 @@ function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.
   return { route, original, ctx, handled, seen, prefixes, routes }
 }
 
+/** Run a body the way a document would: a loader records what it registers. */
+function registeredBy(body) {
+  const ids = []
+  const window = { __ModuleLoader__: { load: (row) => { if (typeof row?.id === 'string') ids.push(row.id) } } }
+  window.window = window
+  window.globalThis = window
+  runInNewContext(body, window, { timeout: 5000 })
+  return ids
+}
+
 const call = (handler, req) => {
   const res = fakeRes()
   return Promise.resolve(handler(req, res)).then(() => res)
@@ -223,6 +234,27 @@ check('a body missing a listed plugin falls through', missing.status === 404 && 
 
 // --- dispose puts the route back, and a reload wraps it again ---------------------------------
 const dispose = first.handled[0]?.dispose
+// --- a page booting a list that names a plugin the app dropped still boots ---------------------
+// This is the whole point of the stand-in answer, and only running the bytes proves it: the row for
+// the dropped plugin must register nothing, and every plugin still served must register.
+const dropped = mount({
+  graph: {
+    rev: 'newrev',
+    entries: [{ id: '@local/a', url: 'plugins/??@local/a/client.js&rev=ar2', rev: 'ar2' }],
+    batches: [{ phase: 'application', url: 'plugins/??@local/a/client.js,@local/b/client.js&rev=abrev', rev: 'abrev', entries: ['@local/a', '@local/b'] }],
+  },
+  serve: (path) => {
+    if (path === '/plugins/??@local/a/client.js&rev=ar2') return 'window.__ModuleLoader__.load({ id: "@local/a", factory() {} })'
+    if (path === '/plugins/??@local/a/client.js,@local/b/client.js&rev=abrev' || path === '/plugins/??@local/a/client.js&rev=ar2') return undefined
+    return undefined
+  },
+})
+const droppedAnswer = await call(dropped.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js,@local/b/client.js&rev=abrev', headers: {} })
+const boots = droppedAnswer.status === 200 ? registeredBy(droppedAnswer.body) : []
+check('a list naming a dropped plugin boots instead of failing', droppedAnswer.status === 200, String(droppedAnswer.status))
+check('a dropped plugin registers nothing', !boots.includes('@local/b'), boots.join(','))
+check('every plugin still served still registers', boots.includes('@local/a'), boots.join(','))
+
 check('an apply leaves a dispose hook', typeof dispose === 'function')
 dispose?.()
 check('dispose restores the table handler', first.route.handler === first.original)
