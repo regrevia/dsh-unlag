@@ -184,11 +184,11 @@ function pluginReloader(ctx, config) {
         deferrals += 1
         if (deferrals > MAX_DEFERRALS) {
           deferrals = 0
-          log('reload skipped: agents never went idle')
+          log('reloading while turns are still running; they keep running')
+        } else {
+          timer = setTimeout(() => void flush(), 500)
           return
         }
-        timer = setTimeout(() => void flush(), 500)
-        return
       }
       const wait = lastRun + MIN_INTERVAL_MS - Date.now()
       if (wait > 0) {

@@ -106,7 +106,7 @@ writeFileSync(join(devRoot, 'change.js'), 'export const c = 1\n')
 await sleep(300)
 check('an absolute link target is watched', reloads === beforeLinked + 1, `reloads=${reloads - beforeLinked}`)
 
-// 5. A busy agent defers instead of interrupting, and a stuck agent stops deferring.
+// 5. A busy agent defers instead of interrupting right away.
 const busyCtx = makeCtx({ status: 'running' })
 mod.apply(busyCtx, { debounce: 10 })
 await sleep(200)
