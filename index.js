@@ -36,6 +36,16 @@ const RELOAD_TIMEOUT_MS = 20_000
 const LOG_PATH = join(homedir(), '.dsh', 'unlag-reload.log')
 /** Past this many bytes the log starts over: it records recent presses, not an archive. */
 const LOG_MAX_BYTES = 1_000_000 // ui-copy-ignore
+
+/** Which version this half is running: the only way to tell a reloaded half from a stale one. */
+const VERSION = (() => {
+  try {
+    const raw = readFileSync(new URL('./package.json', import.meta.url), 'utf8') // ui-copy-ignore
+    return String(JSON.parse(raw)?.version ?? 'unknown')
+  } catch {
+    return 'unknown'
+  }
+})()
 let logWrites = 0
 /** Tests point this at a scratch file, so a test run leaves the live log readable. */
 const logTarget = () => process.env.DSH_UNLAG_LOG ?? LOG_PATH
@@ -1415,7 +1425,7 @@ function serveButton(ctx, controller, config) {
     [
       `${BASE_PATH}/state`,
       (_req, res) => {
-        sendJson(res, 200, { plugins: settings.reloadPlugins, page: settings.reloadInterface, shim: bundleShimStatus(ctx) })
+        sendJson(res, 200, { version: VERSION, plugins: settings.reloadPlugins, page: settings.reloadInterface, shim: bundleShimStatus(ctx) })
       },
     ],
     [
@@ -1548,6 +1558,7 @@ export function apply(ctx, config) {
     }
     // Printed on every start so a reader of the log knows which action applies a change: a person
     // pressing the button, never this plugin, and never a restart of the app.
+    log(`dsh-unlag ${VERSION} loaded`)
     log('plugin reload is manual: ask the user to press the refresh button; do not restart the app')
     if (settingsOf(config ?? {}).autoReload === true) {
       syncWatching()

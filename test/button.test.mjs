@@ -478,6 +478,11 @@ check(
   'that refusal says why in the log instead of looking like a normal refusal',
   readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('cannot check where a press came from: boom'),
 )
+const state = fakeRes()
+await gate.routes.get('/dsh-unlag/state')({ method: 'GET', headers: {} }, state)
+const stateBody = JSON.parse(state.body)
+check('the state names the version this half runs', /^\d+\.\d+\.\d+$/u.test(String(stateBody.version)), String(stateBody.version))
+
 const fromOutside = fakeRes()
 await gate.routes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1', host: '203.0.113.9:62542' } }, fromOutside)
 check('a press addressed from outside this machine is refused', fromOutside.status === 403, fromOutside.body)
