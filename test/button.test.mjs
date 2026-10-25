@@ -569,6 +569,30 @@ check('verify accepts a startup row for a plugin the set lost', verdict(goneRes.
 check('verify names the plugin the page comes up without', String(goneRes.body).includes('@local/a'), goneRes.body)
 check('the log says the app no longer serves it', readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('no longer serves: @local/a'))
 
+// A refused startup check is written down, so a press that stopped can be explained later.
+const blockedRows = mount(
+  {},
+  {
+    clientModules: {
+      graph: () => ({ rev: 'new', entries: [{ id: '@local/a', url: '/plugins/??@local/a/client.js&rev=new', rev: 'new' }], batches: [] }),
+      fetchBundle: async () => new Response('window.__ModuleLoader__.load({ id: "@local/other", factory() {} })', { status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8' } }),
+    },
+  },
+)
+const blockedRes = fakeRes()
+const blockedReq = { method: 'POST', headers: { 'x-dsh-unlag': '1' }, on: () => {}, destroy: () => {} }
+const blockedListeners = {}
+blockedReq.on = (event, fn) => {
+  ;(blockedListeners[event] ??= []).push(fn)
+}
+setImmediate(() => {
+  for (const fn of blockedListeners.data ?? []) fn(Buffer.from(JSON.stringify({ rows: ['/plugins/??@local/a/client.js&rev=new'] })))
+  for (const fn of blockedListeners.end ?? []) fn()
+})
+await blockedRows.routes.get('/dsh-unlag/verify')(blockedReq, blockedRes)
+check('a refused startup check answers blocked', verdict(blockedRes.body) === 'blocked', blockedRes.body)
+check('and the reason it refused is written down', readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('a startup check refused the page: register'))
+
 console.log(out.join('\n'))
 process.exit(process.exitCode ?? 0)
 

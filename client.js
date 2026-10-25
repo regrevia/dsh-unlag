@@ -245,6 +245,7 @@ window.__ModuleLoader__.load({
       network: 'script', // ui-copy-ignore
       parse: 'parse', // ui-copy-ignore
       register: 'plugin', // ui-copy-ignore
+      slow: 'script', // ui-copy-ignore
       dependencies: 'covers',
       list: 'list', // ui-copy-ignore
     };

@@ -92,6 +92,12 @@ const MAX_STARTUP_ROW_CHARS = 4096
  * is work the request itself must not be able to grow without bound.
  */
 const MAX_BUNDLE_IDS = 128
+/**
+ * How long one startup check may spend reading the list. Each address is bounded on its own, but a
+ * list of them is not: dozens of slow addresses would otherwise hold a press past the moment the
+ * page gives up waiting, and the person would see a button that did nothing.
+ */
+const MAX_VERIFY_MS = 9000
 const MIN_INTERVAL_MS = 1500
 /** The route the app publishes client bundles under; the same key the module table registers. */
 const BUNDLE_ROUTE = '/plugins'
@@ -1417,7 +1423,7 @@ function parseAsScript(body, name) {
  * @param fetchBody reads one script address and answers a response-like, or null when it cannot.
  * @param rows the startup script addresses, as the next document would request them.
  */
-export async function verifyStartupRows(graph, fetchBody, rows) {
+export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_VERIFY_MS) {
   const entries = new Map(
     (Array.isArray(graph?.entries) ? graph.entries : [])
       .filter((row) => typeof row?.id === 'string' && row.id !== '')
@@ -1447,7 +1453,11 @@ export async function verifyStartupRows(graph, fetchBody, rows) {
   const leftOut = new Set()
   const listed = new Set()
   const bodies = []
+  const began = Date.now()
   for (const item of wanted) {
+    if (Date.now() - began > budgetMs) {
+      return { status: 'blocked', reason: 'slow', detail: 'the startup list took longer than this check waits' }
+    }
     for (const id of item.ids) if (served.has(id)) listed.add(id)
     for (const id of item.ids) if (!served.has(id)) leftOut.add(id)
     let response = null
@@ -1594,6 +1604,9 @@ function serveButton(ctx, controller, config) {
             verdict = await verifyStartup(clientModules, Array.isArray(body?.rows) ? body.rows : [])
           } catch (error) {
             verdict = { status: 'blocked', reason: 'list', detail: String(error?.message ?? error) }
+          }
+          if (verdict?.status !== 'ok') {
+            log(`a startup check refused the page: ${String(verdict?.reason ?? 'list')} (${String(verdict?.detail ?? 'no detail')})`)
           }
           if (Array.isArray(verdict?.leftOut) && verdict.leftOut.length > 0) {
             log(`a startup row names a plugin this app no longer serves: ${verdict.leftOut.join(', ')}; the page comes up without it`)

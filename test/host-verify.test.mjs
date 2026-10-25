@@ -61,6 +61,24 @@ const wrong = table({ body: registered('@local/other') })
 const mismatch = await verifyStartup(wrong, [frozenRow])
 check('a served body that misses its plugin still refuses', mismatch.status === 'blocked', JSON.stringify(mismatch))
 
+// A list whose addresses each answer slowly is bounded as a whole: a press must not wait past the
+// moment the page stops waiting for the verdict.
+const { verifyStartupRows } = await import('../index.js')
+let slowReads = 0
+const slowGraph = { rev: 'new', entries: [{ id: '@local/a', url: 'plugins/??@local/a/client.js&rev=new' }, { id: '@local/b', url: 'plugins/??@local/b/client.js&rev=new' }], batches: [] }
+const slow = await verifyStartupRows(
+  slowGraph,
+  async () => {
+    slowReads += 1
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    return { status: 200, arrayBuffer: async () => registered('@local/a') }
+  },
+  [frozenRow, '/plugins/??@local/b/client.js&rev=old'],
+  30,
+)
+check('a list read slower than the page waits refuses instead of hanging', slow.status === 'blocked' && slow.reason === 'slow', JSON.stringify(slow))
+check('and the slow list stops being read once its time is up', slowReads === 1, String(slowReads))
+
 // Garbage in the row is a refusal, not a throw.
 const junk = await verifyStartup(table(), [''])
 check('an empty address refuses instead of throwing', junk.status === 'blocked' && junk.reason === 'list', JSON.stringify(junk))
