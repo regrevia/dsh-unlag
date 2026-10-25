@@ -122,5 +122,36 @@ check('a body that is not JSON stays a refused list', broken.body.status === 'bl
   oncePerAnswer('a network refusal is answered once', answer)
 }
 
+
+// --- a loop of checks cannot stack script reads without a ceiling ---------------------------
+// Each check holds one script's bytes while it reads them. The page asks once per press, but a loop
+// (or several windows) would otherwise stack those reads until the app itself runs out of memory,
+// which is the crash this plugin is not allowed to cause. Past three it is refused, in its own words.
+{
+  const gate = { release: null }
+  const slow = new Promise((resolve) => { gate.release = resolve })
+  const slowRoutes = mount({ fetchBundle: async () => { await slow; return new Response(registered('@local/a'), { status: 200 }) } })
+  const body = JSON.stringify({ rows: ['/plugins/??@local/a/client.js&rev=old'] })
+  const send = async () => {
+    const res = fakeRes()
+    const answer = slowRoutes.get('/dsh-unlag/verify')(request(body), res)
+    // One turn of the loop lets the body reach the read and be counted as running.
+    await new Promise((resolve) => setImmediate(resolve))
+    return { res, answer }
+  }
+  const running = [await send(), await send(), await send()]
+  const fourth = fakeRes()
+  await slowRoutes.get('/dsh-unlag/verify')(request(body), fourth)
+  check('a fourth check while three are running is answered at once', fourth.writableEnded === true, String(fourth.ends))
+  check('and it says a check is already running', fourth.status === 200 && JSON.parse(fourth.body).reason === 'busy', fourth.body)
+  check('and the refusal is logged with the count', readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('3 checks are already reading the plugin table'))
+  gate.release()
+  await Promise.all(running.map((item) => item.answer))
+  check('the checks that were running all finish', running.every((item) => item.res.writableEnded === true), running.map((item) => String(item.res.status)).join(','))
+  const after = fakeRes()
+  await slowRoutes.get('/dsh-unlag/verify')(request(body), after)
+  check('and a later check is served again', after.writableEnded === true, String(after.ends))
+}
+
 console.log(out.join('\n'))
 if (out.some((line) => line.startsWith('FAIL'))) process.exitCode = 1

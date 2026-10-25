@@ -116,6 +116,8 @@ const MAX_TOTAL_SCRIPT_BYTES = 128 * 1024 * 1024
  * app could boot from, and it is answered as such instead of being read.
  */
 const MAX_LIST_BODY_BYTES = 1024 * 1024
+/** Checks that may read the plugin table at the same time. Each one holds a script at a time. */
+const MAX_CONCURRENT_CHECKS = 3
 /** The body reader's answer for a request past its bound: not JSON, and not an empty list either. */
 const TOO_LARGE = Symbol('too-large')
 
@@ -1872,6 +1874,8 @@ function serveButton(ctx, controller, config) {
     return null
   }
   const settings = settingsOf(config)
+  /** One counter for the whole route set: the check is the only body that reads scripts. */
+  let checking = 0
   const handlers = [
     [
       `${BASE_PATH}/state`,
@@ -1916,6 +1920,18 @@ function serveButton(ctx, controller, config) {
           const method = String(req?.method ?? 'GET').toUpperCase()
           if (method !== 'POST') return sendJson(res, 405, { status: 'method' })
           if (buttonAllowed(req) === false) return sendJson(res, 403, { status: 'forbidden' })
+          /**
+           * Each check holds the bytes of one script while it reads them, so a page that asks in a
+           * loop, or several windows asking at once, must not stack those reads without a ceiling: the
+           * app is the process that would run out of memory. Past three the check is refused in its
+           * own words rather than served slowly or not at all.
+           */
+          if (checking >= MAX_CONCURRENT_CHECKS) {
+            log(`a startup check was refused: ${String(checking)} checks are already reading the plugin table`)
+            return sendJson(res, 200, { status: 'blocked', reason: 'busy', detail: 'another startup check is still running' })
+          }
+          checking += 1
+          try {
           const clientModules = ctx.get('clientModules')
           if (typeof clientModules?.fetchBundle !== 'function' || typeof clientModules?.graph !== 'function') {
             return sendJson(res, 200, { status: 'blocked', reason: 'list', detail: 'the plugin table is not running' })
@@ -1943,6 +1959,9 @@ function serveButton(ctx, controller, config) {
             log(`a startup row names a plugin this app no longer serves: ${verdict.leftOut.join(', ')}; the page comes up without it`)
           }
           sendJson(res, 200, verdict)
+          } finally {
+            checking -= 1
+          }
         } catch (error) {
           log(`cannot answer ${BASE_PATH}/verify: ${error?.message ?? error}`)
           sendJson(res, 500, { status: 'error' })
