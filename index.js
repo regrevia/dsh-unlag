@@ -43,6 +43,12 @@ const DEFAULT_ROOTS = [join(homedir(), '.dsh', 'plugins')]
 /** A turn that never goes idle must not turn this into an endless poll. */
 const MAX_DEFERRALS = 40
 const MIN_INTERVAL_MS = 1500
+/** The route the app publishes client bundles under; the same key the module table registers. */
+const BUNDLE_ROUTE = '/plugins'
+/** Marks a route handler already wrapped here, so a plugin reload cannot wrap it twice. */
+const SHIM_MARK = Symbol.for('dsh-unlag.bundle-shim')
+/** Holds the wrapper across a module replacement, so a reload can put the route back. */
+const SHIM_KEY = Symbol.for('dsh-unlag.shim')
 
 /**
  * The two rows this plugin shows in Settings, in the schema dialect the settings form reads.
@@ -400,6 +406,136 @@ function liveBootGraph(server) {
 }
 
 /**
+ * The plugin ids, revision and source-map flag one bundle request names, read from the
+ * `??<id>/client.js,…&rev=<rev>` form the startup list uses. A request for a package-local chunk
+ * carries a real query string instead and is left alone: it is read from disk, so it is current.
+ */
+function bundleRequest(rawUrl) {
+  const url = String(rawUrl ?? '')
+  const start = url.indexOf(`${BUNDLE_ROUTE}/??`)
+  if (start < 0) return null
+  const rest = url.slice(start + BUNDLE_ROUTE.length + 1)
+  const revAt = rest.indexOf('&rev=')
+  const target = revAt < 0 ? rest : rest.slice(0, revAt)
+  if (!target.startsWith('??')) return null
+  const sourceMap = target.endsWith('.map')
+  const list = sourceMap ? target.slice(0, -4) : target
+  const ids = []
+  for (const part of list.slice(2).split(',')) {
+    let id = part
+    try {
+      id = decodeURIComponent(part)
+    } catch {}
+    id = id.endsWith('/client.js') ? id.slice(0, -'/client.js'.length) : id
+    if (id !== '') ids.push(id)
+  }
+  if (ids.length === 0) return null
+  return { ids, sourceMap, rev: revAt < 0 ? '' : rest.slice(revAt + '&rev='.length) }
+}
+
+/**
+ * The same plugin set under the revision the running app serves it at. The startup list a
+ * document is given names one revision; after a plugin is swapped, that revision stops
+ * resolving, and a document that boots from the list is refused by its own module loader. The
+ * ids are unchanged, so the set can be re-pointed at the current revision instead.
+ */
+function currentBundleUrls(graph, request) {
+  const wanted = new Set(request.ids)
+  const revisions = new Set()
+  for (const batch of Array.isArray(graph?.batches) ? graph.batches : []) {
+    const entries = Array.isArray(batch?.entries) ? batch.entries : []
+    if (entries.length !== request.ids.length) continue
+    if (!entries.every((id) => wanted.has(id))) continue
+    if (typeof batch.rev === 'string' && batch.rev !== '') revisions.add(batch.rev)
+  }
+  if (request.ids.length === 1) {
+    for (const entry of Array.isArray(graph?.entries) ? graph.entries : []) {
+      if (entry?.id !== request.ids[0]) continue
+      if (typeof entry.rev === 'string' && entry.rev !== '') revisions.add(entry.rev)
+    }
+  }
+  const list = request.ids.map((id) => `${id}/client.js${request.sourceMap ? '.map' : ''}`).join(',')
+  return [...revisions].map((rev) => `${BUNDLE_ROUTE}/??${list}&rev=${rev}`)
+}
+
+/**
+ * Answer one request the running app cannot serve because the revision it names is gone. The
+ * bundle module table is asked for the same set at its current revision, and only a body that
+ * really contains every plugin it claims is handed back; anything else falls through to the
+ * route as before, so an unknown id still ends as a plain 404.
+ */
+async function serveCurrentBundle(clientModules, req, res) {
+  try {
+    const method = String(req?.method ?? 'GET').toUpperCase()
+    if (method !== 'GET' && method !== 'HEAD') return false
+    const request = bundleRequest(req?.url)
+    if (request === null) return false
+    const urls = currentBundleUrls(clientModules.graph(), request)
+    if (urls.length === 0) return false
+    if (request.rev !== '' && urls.some((url) => url.endsWith(`&rev=${request.rev}`))) return false
+    for (const url of urls) {
+      const response = await clientModules.fetchBundle({ method: 'GET', url: `http://unlag.invalid${url}` })
+      if (response.status !== 200) continue
+      const body = Buffer.from(await response.arrayBuffer())
+      if (body.length === 0) continue
+      if (!request.sourceMap && !request.ids.every((id) => body.includes(id))) continue
+      if (res.writableEnded === true || res.destroyed === true) return true
+      res.writeHead(200, {
+        'content-type': String(response.headers.get('content-type') ?? 'text/javascript; charset=utf-8'),
+        'cache-control': 'no-store',
+        'content-length': String(body.length),
+      })
+      res.end(method === 'HEAD' ? undefined : body)
+      log(`served ${request.ids.join(', ')} at the current revision: a page asked for an older one`)
+      return true
+    }
+    return false
+  } catch (error) {
+    log(`cannot serve a bundle from an older revision: ${error?.message ?? error}`)
+    return false
+  }
+}
+
+/**
+ * Wrap the bundle route so a document booting from an older startup list still runs. The route
+ * belongs to the module table, and a second registration of the same prefix is refused, so the
+ * handler already there is wrapped in place and put back on dispose. Every path through the
+ * wrapper falls back to that handler: a bundle it cannot place is answered exactly as before.
+ */
+function serveBundlesAtCurrentRevision(ctx) {
+  const server = ctx.get('webServer')
+  const clientModules = ctx.get('clientModules')
+  if (server?.prefixes?.get === undefined) return null
+  if (typeof clientModules?.fetchBundle !== 'function' || typeof clientModules?.graph !== 'function') return null
+  const route = server.prefixes.get(BUNDLE_ROUTE)
+  if (route === null || route === undefined || typeof route.handler !== 'function') return null
+  if (route[SHIM_MARK] === true) return null
+  const original = route.handler
+  const wrapped = (req, res) => {
+    const fallback = () => original(req, res)
+    const answered = serveCurrentBundle(clientModules, req, res).catch((error) => {
+      log(`cannot answer a bundle request: ${error?.message ?? error}`)
+      return false
+    })
+    if (typeof answered?.then !== 'function') return fallback()
+    return answered.then((served) => (served === true ? undefined : fallback()))
+  }
+  route[SHIM_MARK] = true
+  route.handler = wrapped
+  log('bundles asked for under an older revision are answered at the current one')
+  return { route, original, wrapped }
+}
+
+/** Put the bundle route back the way it was found; a route replaced since then is left alone. */
+function releaseBundleShim(shim) {
+  try {
+    if (shim === null || shim === undefined) return
+    if (shim.route.handler === shim.wrapped) shim.route.handler = shim.original
+    if (shim.route[SHIM_MARK] === true) delete shim.route[SHIM_MARK]
+  } catch {}
+}
+
+/**
  * The entry points the header button calls. Each answers with the current switches so the page
  * never guesses: with both off it does nothing, and a turn still running is reported rather than
  * cut. The press outcome is written to the log, because a press that stopped before rebuilding
@@ -474,10 +610,21 @@ export function apply(ctx, config) {
   try {
     closeAll(globalThis[WATCHER_KEY])
     closeAll(globalThis[ROUTES_KEY])
+    releaseBundleShim(globalThis[SHIM_KEY])
     globalThis[WATCHER_KEY] = null
     globalThis[ROUTES_KEY] = null
+    globalThis[SHIM_KEY] = null
 
     const controller = pluginReloader(ctx, config ?? {})
+    /**
+     * The bundle route can be wrapped as soon as the module table has registered it. Doing it here
+     * as well as on the service event covers both orders: a table that is already up when this
+     * half starts, and one that appears after it.
+     */
+    const syncBundles = () => {
+      if (globalThis[SHIM_KEY] !== null) return
+      globalThis[SHIM_KEY] = serveBundlesAtCurrentRevision(ctx)
+    }
     /** Watching needs HMR; start as soon as it exists, drop the watcher when it goes away. */
     const syncWatching = () => {
       if (config?.plugins === 'off') return
@@ -497,16 +644,20 @@ export function apply(ctx, config) {
     if (typeof ctx.on === 'function') {
       ctx.on('internal/service', (service) => {
         if (service === 'hmr') syncWatching()
+        if (service === 'clientModules') syncBundles()
       })
     }
     globalThis[ROUTES_KEY] = serveButton(ctx, controller, config ?? {})
+    syncBundles()
 
     ctx.on('dispose', () => {
       controller.stop()
       closeAll(globalThis[WATCHER_KEY])
       closeAll(globalThis[ROUTES_KEY])
+      releaseBundleShim(globalThis[SHIM_KEY])
       globalThis[WATCHER_KEY] = null
       globalThis[ROUTES_KEY] = null
+      globalThis[SHIM_KEY] = null
     })
   } catch (error) {
     log(`plugin reload did not start: ${error?.message ?? error}`)

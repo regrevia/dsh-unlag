@@ -41,12 +41,14 @@ dsh plugin install dsh-unlag
 
 ## 排错
 
-- 日志：`~/.dsh/unlag-reload.log`，换代码／跳过／被拦各一行含原因。
+- 日志：`~/.dsh/unlag-reload.log`，换代码／跳过／被拦各一行，含原因。
 - 状态：`GET /dsh-unlag/state` → `{"plugins":true,"page":true}`。
 
 ## 测试
 
 ```sh
 node test/button.test.mjs
+node test/bundle-shim.test.mjs
+node test/client-guard.test.mjs
 node test/safety.test.mjs
 ```

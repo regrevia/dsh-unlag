@@ -122,6 +122,81 @@ window.__ModuleLoader__.load({
       return true;
     }
 
+    /**
+     * The startup list the desktop shell hands the next document, exactly as it hands it. The
+     * shell reads that list once when the app starts and replays the same copy for every document
+     * after that, so this is the only way to see what a rebuild would really boot from.
+     * @returns the list rows, or null when this page is not running inside the desktop shell.
+     */
+    async function desktopStartupPayload() {
+      const bridge = window.dshDesktopBoot;
+      if (bridge === undefined || bridge === null || typeof bridge.ready !== 'function') return null;
+      try {
+        const payload = await bridge.ready();
+        const rows = Array.isArray(payload?.injections) ? payload.injections : [];
+        return rows.length === 0 ? null : rows;
+      } catch {
+        return null;
+      }
+    }
+
+    /**
+     * Whether a document booting from the desktop shell's saved startup list would come up. Every
+     * script in that list is read back from where the document would load it, and every plugin it
+     * lists must still be one the running app serves: a missing script ends the desktop app, which
+     * would take every running turn with it, so this is answered before anything navigates.
+     * @param rows - the saved startup list.
+     * @returns true when each saved script loads and still contains its plugins.
+     */
+    async function frozenStartupLooksServable(rows) {
+      const scripts = [];
+      let frozen = null;
+      for (const row of rows) {
+        if (row === null || typeof row !== 'object') continue;
+        if (typeof row.src === 'string' && row.src !== '') scripts.push(row.src);
+        if (row.kind !== 'global' || row.name !== '__DSH_BOOT__') continue; // ui-copy-ignore
+        let value = row.value;
+        if (typeof value === 'string') {
+          try {
+            value = JSON.parse(value);
+          } catch {
+            value = null;
+          }
+        }
+        if (value !== null && typeof value === 'object') frozen = value;
+      }
+      if (scripts.length === 0) return false;
+      const live = await hostBootGraph();
+      if (live !== null && frozen !== null) {
+        const liveIds = new Set((Array.isArray(live.entries) ? live.entries : []).map((entry) => (typeof entry === 'string' ? entry : entry?.id)));
+        const kept = Array.isArray(frozen.entries) ? frozen.entries : [];
+        for (const entry of kept) {
+          const id = typeof entry === 'string' ? entry : entry?.id;
+          if (typeof id === 'string' && id !== '' && !liveIds.has(id)) return false;
+        }
+      }
+      for (const src of scripts) {
+        let target;
+        try {
+          target = new URL(src, location.href).toString();
+        } catch {
+          return false;
+        }
+        try {
+          const response = await fetch(target, { cache: 'no-store', credentials: 'same-origin' });
+          if (!response.ok) return false;
+          const body = await response.text();
+          if (body.length === 0) return false;
+          for (const id of bundledIds(target)) {
+            if (!body.includes(id)) return false;
+          }
+        } catch {
+          return false;
+        }
+      }
+      return true;
+    }
+
     /** The first balanced JSON object after `__DSH_BOOT__` in a served document. */
     function graphFromHtml(html) {
       const at = html.indexOf('__DSH_BOOT__'); // ui-copy-ignore
@@ -199,8 +274,12 @@ window.__ModuleLoader__.load({
      */
     async function startupLooksServable() {
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const graph = (await servedBootGraph()) ?? window.__DSH_BOOT__;
-        if (await bundlesCoverStartup(graph)) return true;
+        const saved = await desktopStartupPayload();
+        const servable =
+          saved === null
+            ? await bundlesCoverStartup((await servedBootGraph()) ?? window.__DSH_BOOT__)
+            : await frozenStartupLooksServable(saved);
+        if (servable) return true;
         if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 300)); // ui-copy-ignore
       }
       return false;
@@ -388,8 +467,16 @@ window.__ModuleLoader__.load({
         notice === null ? null : h('span', { role: 'status', 'aria-live': 'polite', style: PILL_STYLE }, notice));
     }
 
+    /**
+     * The guard as the press asks it. Exposed only to a headless harness: the failure this plugin
+     * must never cause is a navigation the saved startup list cannot survive, and that question is
+     * worth asking without starting a desktop app.
+     */
+    const PROBE = { prepareInterface, startupLooksServable, frozenStartupLooksServable, desktopStartupPayload, reloadFreshPage };
+
     return {
       inject: ['slots'], // ui-copy-ignore
+      ...(window.__DSH_UNLAG_PROBE__ === true ? { probe: PROBE } : {}), // ui-copy-ignore
       apply(ctx) {
         if (!desktop) return;
         // Leave a line in the log per rebuilt interface: it is the one place that shows which
