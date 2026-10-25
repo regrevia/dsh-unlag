@@ -1144,7 +1144,13 @@ async function currentBundleAnswer(clientModules, method, url, deadline = Date.n
       }
     }
   }
-  return (await regroupedBundleAnswer(clientModules, graph, request, deadline)) ?? survivingBundleAnswer(clientModules, graph, request, deadline)
+  const regrouped = await regroupedBundleAnswer(clientModules, graph, request, deadline)
+  if (regrouped !== null) return regrouped
+  // What is left is the last resort: the set itself is gone and the body is a stand-in that
+  // registers nothing. The check passes, and the answer says so, because a page booting that row
+  // comes up without the plugin rather than failing.
+  const surviving = await survivingBundleAnswer(clientModules, graph, request, deadline)
+  return surviving === null ? null : { ...surviving, standIn: true }
 }
 
 /** Answer one stale request over the plain request/response route an app registers. */
@@ -1663,6 +1669,7 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
   const bodies = []
   const began = Date.now()
   let totalBytes = 0
+  let standInRows = 0
   for (const item of wanted) {
     if (Date.now() - began > budgetMs) {
       return { status: 'blocked', reason: 'slow', detail: 'the startup list took longer than this check waits' }
@@ -1688,6 +1695,9 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
     if (!readable || response === null || response === undefined || status !== 200) {
       return { status: 'blocked', reason: 'missing', detail: `${item.url} answers ${readable ? String(status ?? 'nothing') : 'nothing readable'}` }
     }
+    try {
+      if (response?.standIn === true) standInRows += 1
+    } catch {}
     let bytes = null
     try {
       bytes = Buffer.from(await response.arrayBuffer())
@@ -1742,6 +1752,7 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
     revision: typeof graph?.rev === 'string' ? graph.rev : null,
     scripts: bodies.map((body) => ({ url: body.url, digest: body.digest, ids: body.ids })),
     ...(leftOut.size > 0 ? { leftOut: [...leftOut] } : {}),
+    ...(standInRows > 0 ? { standInRows } : {}),
   }
 }
 
@@ -1757,7 +1768,9 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
 export async function readStartupScript(clientModules, url) {
   try {
     const answer = await currentBundleAnswer(clientModules, 'GET', url)
-    if (answer !== null) return { status: 200, arrayBuffer: async () => answer.body }
+    // `standIn` rides along: these bytes stand in for a plugin the set no longer has, and the check
+    // says so when it passes, so the log can tell that from a body the app really serves.
+    if (answer !== null) return { status: 200, standIn: answer.standIn === true, arrayBuffer: async () => answer.body }
   } catch (error) {
     // The fallback is still the right answer; the failure itself must not vanish.
     log(`cannot answer ${oneLine(url)} at the revision the app serves now: ${oneLine(error?.message ?? error)}; asking the app's own route`)
@@ -1891,6 +1904,9 @@ function serveButton(ctx, controller, config) {
           }
           if (verdict?.status !== 'ok') {
             log(`a startup check refused the page: ${String(verdict?.reason ?? 'list')} (${String(verdict?.detail ?? 'no detail')})`)
+          }
+          if (typeof verdict?.standInRows === 'number' && verdict.standInRows > 0) {
+            log(`a startup check passed with ${String(verdict.standInRows)} row(s) answered by a stand-in script`)
           }
           if (Array.isArray(verdict?.leftOut) && verdict.leftOut.length > 0) {
             log(`a startup row names a plugin this app no longer serves: ${verdict.leftOut.join(', ')}; the page comes up without it`)

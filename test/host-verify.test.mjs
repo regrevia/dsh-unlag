@@ -64,6 +64,7 @@ check('a startup row for a plugin the set no longer has is readable', gone.statu
 check('the verdict names the plugin the page comes up without', gone.leftOut?.includes('@local/a') === true, JSON.stringify(gone))
 
 
+
 // A body that does not register what its address claims is a refusal even when served.
 const wrong = table({ body: registered('@local/other') })
 const mismatch = await verifyStartup(wrong, [frozenRow])
@@ -206,6 +207,12 @@ const failed = checks.filter((row) => !row.pass)
     check(`and that refusal says the list could not be read (${what})`, answer.reason === 'list', String(answer.reason))
   }
 }
+
+// A row the set still has is answered by its body, not by a stand-in, and the verdict says nothing
+// about stand-ins: the two cases have to stay apart, or a press would log a plugin loss that did not
+// happen.
+check('a row the set still serves names no stand-in', atCurrent.standInRows === undefined, JSON.stringify(atCurrent))
+check('the lost-plugin row is counted as a stand-in', gone.standInRows === 1, JSON.stringify(gone))
 
 console.log(`\n${checks.length - failed.length}/${checks.length} passed`)
 if (failed.length > 0) process.exitCode = 1

@@ -1,3 +1,9 @@
+## 1.9.80
+
+- 日志证据补齐：一次按压通过启动检查时，如果某一行地址是「插件已经不在集合里、由占位脚本顶上」的回答，日志现在会写明（`a startup check passed with N row(s) answered by a stand-in script`），与真正由集合服务的情况分开。`/verify` 的回答里带上 `standInRows` 计数，页面侧忽略它，不改变任何判断。
+- 与官方文档核对（`docs/subsystems/client-modules.md`，204 行，sha256 `c7a3dfd256e195d1` 未变）：`fetchBundle()` 与 HTTP 路由回答同一种响应、`graph()` 在两次变化之间是稳定对象、`rebuilt(id)` 只发布重建的 bundle 而条目重启走 reconciliation——本插件读的 `graph()`/`fetchBundle()` 和用的重排路径都在这份契约里。
+- 新增 `test/host-verify.test.mjs` 2 条（真实回答不带 `standInRows`、丢插件的那行计为 1）。全套 538 PASS / 0 FAIL。
+
 ## 1.9.79
 
 - 修复：按下按钮时「刚才已经按过」的时间戳写在准备界面之前，所以一次被弹窗或未保存内容拦下的按压也会留下它，紧接着的第二次按压会被当成「正在重载」而点不动 3 秒——正是「自动重载成功了按钮却点不了」那一类体验。现在这枚时间戳只在真的要换页面时写下，页面被拦住时撤回（`client.js` `stampWrite` / `stampClear`）。
