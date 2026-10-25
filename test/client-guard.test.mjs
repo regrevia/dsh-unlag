@@ -86,6 +86,7 @@ const crashed = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scri
 check('a saved script the app no longer serves holds the rebuild', (await crashed.probe.startupLooksServable()) === false)
 check('the guard asks about the saved list, not the page', crashed.requests.some((r) => r.path === '/plugins/??@local/a/client.js&rev=stale'))
 check('a held rebuild reports as blocked', (await crashed.probe.prepareInterface()) === 'blocked')
+check('the hold names the script it could not read', crashed.probe.startupHoldReason() === 'script', String(crashed.probe.startupHoldReason()))
 check('a held rebuild does not navigate', crashed.navigations.length === 0)
 
 // The same page after the plugin answers the old revision at the current one: safe to rebuild.
@@ -110,6 +111,7 @@ check('a saved script row with no address holds the rebuild', (await noSource.pr
 // A body written as a module never runs as a classic script, so the document that loads it ends.
 const moduleBody = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('export function revealAllowed() {}\n/* @local/a */') } })
 check('a saved script written as a module holds the rebuild', (await moduleBody.probe.startupLooksServable()) === false)
+check('the hold names the script that does not parse', moduleBody.probe.startupHoldReason() === 'parse', String(moduleBody.probe.startupHoldReason()))
 const compiles = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('(function () { const id = "@local/a" })()') } })
 check('a saved script that parses lets the rebuild through', (await compiles.probe.startupLooksServable()) === true)
 
@@ -120,6 +122,8 @@ check('a saved script with a top-level return holds the rebuild', (await returne
 // Without the running list there is nothing to compare a saved one against, so it is not trusted.
 const noLive = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live: null, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('const id = "@local/a"') } })
 check('a saved list without a served one holds the rebuild', (await noLive.probe.startupLooksServable()) === false)
+check('the hold names the plugin list it could not read', noLive.probe.startupHoldReason() === 'graph', String(noLive.probe.startupHoldReason()))
+check('a passing check leaves no reason behind', (await compiles.probe.startupLooksServable()) === true && compiles.probe.startupHoldReason() === null, String(compiles.probe.startupHoldReason()))
 
 // --- a page not running inside the desktop shell: the served list is the one it asks -----------
 const web = harness({ userAgent: 'Mozilla/5.0 (Macintosh) Firefox/140.0', frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=new': () => ok('const id = "@local/a"') } })

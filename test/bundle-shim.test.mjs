@@ -34,6 +34,8 @@ const bodies = new Map([
   ['/plugins/??@local/a/client.js,@local/b/client.js&rev=abrev', '/* application */ @local/a @local/b'],
   ['/plugins/??@deepseek-ai/dsh-client-modules/client.js&rev=brev', '/* bootstrap */ @deepseek-ai/dsh-client-modules'],
   ['/plugins/??@local/a/client.js&rev=ar2', '/* one entry */ @local/a'],
+  ['/plugins/??@local/b/client.js&rev=br2', '/* one entry */ @local/b'],
+  ['/plugins/??@deepseek-ai/dsh-client-modules/client.js&rev=cr2', '/* one entry */ @deepseek-ai/dsh-client-modules'],
   ['/plugins/??@local/a/client.js.map&rev=ar2', '{"version":3}'],
 ])
 
@@ -131,6 +133,19 @@ check('a stale single entry is answered here', staleOne.status === 200 && staleO
 
 const staleMap = await call(first.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js.map&rev=old' })
 check('a stale source map is answered here', staleMap.status === 200 && staleMap.body === '{"version":3}', `${staleMap.status} ${staleMap.body}`)
+
+// A document made before two plugins were grouped apart asks for a set the table never sends
+// again. Each plugin is still served on its own, so the set is answered from those bodies in the
+// order the document listed them: a 404 here used to end the desktop app.
+const regrouped = await call(first.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js,@deepseek-ai/dsh-client-modules/client.js&rev=g1' })
+check('a set the table no longer groups is answered entry by entry', regrouped.status === 200 && regrouped.body === '/* one entry */ @local/a/* one entry */ @deepseek-ai/dsh-client-modules', `${regrouped.status} ${regrouped.body}`)
+check('the regrouped answer is not cached', regrouped.headers?.['cache-control'] === 'no-store', JSON.stringify(regrouped.headers))
+
+const regroupedMissing = await call(first.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js,@local/gone/client.js&rev=g1' })
+check('a set with one unknown plugin still 404s', regroupedMissing.status === 404 && regroupedMissing.body === 'original', regroupedMissing.body)
+
+const regroupedMap = await call(first.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js,@deepseek-ai/dsh-client-modules/client.js.map&rev=g1' })
+check('a regrouped source map is not assembled', regroupedMap.status === 404 && regroupedMap.body === 'original', regroupedMap.body)
 
 const head = await call(first.route.handler, { method: 'HEAD', url: '/plugins/??@local/a/client.js,@local/b/client.js&rev=old' })
 check('HEAD gets the headers and no body', head.status === 200 && head.body === '', `${head.status} ${head.body}`)

@@ -9,6 +9,31 @@ window.__ModuleLoader__.load({
       ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次' } // ui-copy-ignore
       : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later' };
 
+    /**
+     * Why the interface was left as it is, in words a person can act on. The checks below record
+     * the first reason they refuse for, so a press that stops can say what it saw instead of
+     * repeating one generic sentence.
+     */
+    const REASONS = zh
+      ? { list: '读不到启动信息', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整' }
+      : { list: 'startup info is unavailable', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete' };
+
+    /** The last reason a readiness check refused for, or null after a check that passed. */
+    let holdReason = null;
+
+    /** Record why a rebuild is held and answer false for the check that asked. */
+    function held(reason) {
+      holdReason = reason;
+      return false;
+    }
+
+    /** The notice for one copy key, naming the reason when a readiness check stopped the press. */
+    function noticeFor(key) {
+      if (key !== 'blocked' || holdReason === null) return COPY[key];
+      const why = REASONS[holdReason] ?? REASONS.list;
+      return zh ? `暂时无法重建：${why}。稍后再点一次。` : `Cannot rebuild yet: ${why}. Press again shortly.`;
+    }
+
     // Desktop shell only: the macOS and Windows desktop build owns the page and the running
     // app, so this is where the button belongs. A browser tab can reload freely on its own.
     const desktop = /Electron\//.test(navigator.userAgent || '');
@@ -104,10 +129,10 @@ window.__ModuleLoader__.load({
 
     /** Read every bundle the next boot would load and prove each listed plugin is inside. */
     async function bundlesCoverStartup(graph) {
-      if (graph === null || typeof graph !== 'object') return false;
+      if (graph === null || typeof graph !== 'object') return held('graph');
       const entries = Array.isArray(graph.entries) ? graph.entries : [];
       const batches = Array.isArray(graph.batches) ? graph.batches : [];
-      if (entries.length === 0 || batches.length === 0) return false;
+      if (entries.length === 0 || batches.length === 0) return held('graph');
       const covered = new Set();
       const sources = [];
       for (const batch of batches) {
@@ -115,29 +140,30 @@ window.__ModuleLoader__.load({
         if (url === '') continue;
         const listed = Array.isArray(batch.entries) && batch.entries.every((id) => typeof id === 'string') ? batch.entries : [];
         const ids = listed.length > 0 ? listed : bundledIds(url);
-        if (ids.length === 0) return false;
+        if (ids.length === 0) return held('row');
         for (const id of ids) covered.add(id);
         sources.push({ url: new URL(url, location.href), ids });
       }
-      if (sources.length === 0) return false;
+      if (sources.length === 0) return held('graph');
       for (const entry of entries) {
         const id = typeof entry === 'string' ? entry : entry?.id;
-        if (typeof id !== 'string' || !covered.has(id)) return false;
+        if (typeof id !== 'string' || !covered.has(id)) return held('covers');
       }
       for (const source of sources) {
         try {
           const response = await fetch(source.url.toString(), { cache: 'no-store', credentials: 'same-origin' });
-          if (!response.ok) return false;
+          if (!response.ok) return held('script');
           const body = await response.text();
-          if (body.length === 0) return false;
+          if (body.length === 0) return held('empty');
           for (const id of source.ids) {
-            if (!body.includes(id)) return false;
+            if (!body.includes(id)) return held(source.ids.length === 1 ? 'plugin' : 'covers');
           }
-          if (!parsesAsClassicScript(body)) return false;
+          if (!parsesAsClassicScript(body)) return held('parse');
         } catch {
-          return false;
+          return held('script');
         }
       }
+      holdReason = null;
       return true;
     }
 
@@ -236,9 +262,15 @@ window.__ModuleLoader__.load({
       let frozen = null;
       for (const row of rows) {
         if (row === null || typeof row !== 'object') continue;
-        if (typeof row.kind !== 'string' || !STARTUP_ROW_KINDS.has(row.kind)) return false;
-        if (row.kind === 'script-src' && (typeof row.src !== 'string' || row.src === '')) return false;
-        if (typeof row.src === 'string' && row.src !== '') scripts.push(row.src);
+        if (typeof row.kind !== 'string' || !STARTUP_ROW_KINDS.has(row.kind)) return held('row');
+        // Only the rows a document runs as scripts have to load as classic scripts. Style and
+        // markup rows carry their own text and their address is not a script at all, so reading
+        // them back would refuse a sound list over a false alarm.
+        const runs = row.kind === 'script-src' || row.kind === 'script-preload';
+        if (runs && (typeof row.src !== 'string' || row.src === '')) return held('src');
+        if (runs) scripts.push(row.src);
+        // Inline rows carry their own text and are not fetched; the queue script among them ends
+        // in a nested return that a flat scan would misread, so their text is left to the document.
         if (row.kind !== 'global' || row.name !== '__DSH_BOOT__') continue; // ui-copy-ignore
         let value = row.value;
         if (typeof value === 'string') {
@@ -250,17 +282,23 @@ window.__ModuleLoader__.load({
         }
         if (value !== null && typeof value === 'object') frozen = value;
       }
-      if (scripts.length === 0) return false;
-      const live = await hostBootGraph();
+      if (scripts.length === 0) return held('list');
+      // The graph is read twice: one answer taken while the app re-composes says nothing about
+      // the next boot, and holding the page is the safe answer when it cannot be read at all.
+      let live = await hostBootGraph();
+      if (live === null && frozen !== null) {
+        await new Promise((resolve) => setTimeout(resolve, 300)); // ui-copy-ignore
+        live = await hostBootGraph();
+      }
       if (frozen !== null) {
-        // The frozen list decides what this document boots. Without the current graph there is
-        // nothing to prove that list still resolves, so the page is not rebuilt.
-        if (live === null) return false;
-        const liveIds = new Set((Array.isArray(live.entries) ? live.entries : []).map((entry) => (typeof entry === 'string' ? entry : entry?.id)));
+        // The frozen list decides what this document boots. Without the current plugin list there
+        // is nothing to prove every plugin in it still exists, so the page is not rebuilt.
+        if (live === null) return held('graph');
         const kept = Array.isArray(frozen.entries) ? frozen.entries : [];
+        const liveIds = new Set((Array.isArray(live.entries) ? live.entries : []).map((entry) => (typeof entry === 'string' ? entry : entry?.id)));
         for (const entry of kept) {
           const id = typeof entry === 'string' ? entry : entry?.id;
-          if (typeof id === 'string' && id !== '' && !liveIds.has(id)) return false;
+          if (typeof id === 'string' && id !== '' && !liveIds.has(id)) return held('plugin');
         }
       }
       for (const src of scripts) {
@@ -268,21 +306,23 @@ window.__ModuleLoader__.load({
         try {
           target = new URL(src, location.href).toString();
         } catch {
-          return false;
+          return held('src');
         }
         try {
           const response = await fetch(target, { cache: 'no-store', credentials: 'same-origin' });
-          if (!response.ok) return false;
+          if (!response.ok) return held('script');
           const body = await response.text();
-          if (body.length === 0) return false;
-          for (const id of bundledIds(target)) {
-            if (!body.includes(id)) return false;
+          if (body.length === 0) return held('empty');
+          const ids = bundledIds(target);
+          for (const id of ids) {
+            if (!body.includes(id)) return held(ids.length === 1 ? 'plugin' : 'covers');
           }
-          if (!parsesAsClassicScript(body)) return false;
+          if (!parsesAsClassicScript(body)) return held('parse');
         } catch {
-          return false;
+          return held('script');
         }
       }
+      holdReason = null;
       return true;
     }
 
@@ -362,18 +402,25 @@ window.__ModuleLoader__.load({
      * @returns true when every listed plugin's module is present in the served bundles.
      */
     async function startupLooksServable() {
-      for (let attempt = 0; attempt < 2; attempt += 1) {
+      holdReason = null;
+      // Two repeats: the app re-composes its bundles while it starts and after a plugin swap, and
+      // a list read in the middle of that can answer for a generation that is already gone.
+      for (let attempt = 0; attempt < 3; attempt += 1) {
         const saved = await desktopStartupPayload();
         // The desktop shell replays one startup list for every document. If it is running but its
         // copy cannot be read, nothing here proves a new document would boot, so the page stays.
-        if (saved === null && desktopShellPresent()) return false;
-        const servable =
-          saved === null
-            ? await bundlesCoverStartup((await servedBootGraph()) ?? window.__DSH_BOOT__)
-            : await frozenStartupLooksServable(saved);
-        if (servable) return true;
-        if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 300)); // ui-copy-ignore
+        if (saved === null && desktopShellPresent()) {
+          held('list');
+        } else {
+          const servable =
+            saved === null
+              ? await bundlesCoverStartup((await servedBootGraph()) ?? window.__DSH_BOOT__)
+              : await frozenStartupLooksServable(saved);
+          if (servable) return true;
+        }
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 300 + attempt * 300)); // ui-copy-ignore
       }
+      if (holdReason === null) held('list');
       return false;
     }
 
@@ -506,7 +553,7 @@ window.__ModuleLoader__.load({
         setNotice(null);
         const stop = (key) => {
           setPending(false);
-          setNotice(COPY[key]);
+          setNotice(noticeFor(key));
         };
         const settings = await readSettings();
         const replace = settings === null ? false : settings.plugins;
@@ -543,7 +590,8 @@ window.__ModuleLoader__.load({
         window.sessionStorage.setItem(STAMP_KEY, String(Date.now()));
         const reason = await prepareInterface();
         if (reason !== null) {
-          report('held', reason);
+          // The log keeps the exact check that refused, so a held press can be explained later.
+          report('held', reason === 'blocked' && holdReason !== null ? `blocked:${holdReason}` : reason);
           return stop(reason);
         }
         report('rebuild');
@@ -584,6 +632,7 @@ window.__ModuleLoader__.load({
     const PROBE = {
       prepareInterface,
       startupLooksServable,
+      startupHoldReason: () => holdReason,
       frozenStartupLooksServable,
       desktopStartupPayload,
       desktopShellPresent,

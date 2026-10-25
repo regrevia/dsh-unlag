@@ -590,6 +590,43 @@ async function fetchBundleAt(clientModules, url, method) {
 }
 
 /**
+ * One plugin's current module body, read back from the table so it can be put in front of a
+ * document that expects a grouping the table no longer keeps.
+ */
+async function currentEntryBody(clientModules, graph, id) {
+  const entries = Array.isArray(graph?.entries) ? graph.entries : []
+  const entry = entries.find((candidate) => candidate?.id === id)
+  const raw = typeof entry?.url === 'string' ? entry.url : ''
+  if (raw === '') return null
+  const target = raw.startsWith('/') ? raw : `/${raw}`
+  const response = await fetchBundleAt(clientModules, target, 'GET')
+  if (response.status !== 200) return null
+  const body = Buffer.from(await response.arrayBuffer())
+  return body.length === 0 ? null : body
+}
+
+/**
+ * A plugin set from a generation the table no longer groups the same way. An app that started
+ * before plugins were installed asks for exactly the sets its document listed; those sets are not
+ * kept as sets any more, but every plugin in them is still served on its own. Reading each one and
+ * answering with them in the requested order registers exactly the plugins the document expects,
+ * so a boot that would otherwise 404 and end the app comes up instead.
+ */
+async function regroupedBundleAnswer(clientModules, graph, request) {
+  if (request.sourceMap) return null
+  const parts = []
+  for (const id of request.ids) {
+    const body = await currentEntryBody(clientModules, graph, id)
+    if (body === null) return null
+    parts.push(body)
+  }
+  if (parts.length === 0) return null
+  const body = Buffer.concat(parts)
+  if (!request.ids.every((id) => body.includes(id))) return null
+  return { body, contentType: 'text/javascript; charset=utf-8', ids: request.ids }
+}
+
+/**
  * The plugin set one stale request names, answered at the revision the app serves now. Only a body
  * that really contains every plugin it claims is handed back; anything unsure answers null, so the
  * route then behaves exactly as before and an unknown id still ends as a plain 404.
@@ -598,24 +635,24 @@ async function currentBundleAnswer(clientModules, method, url) {
   const request = bundleRequest(url)
   if (request === null) return null
   const graph = clientModules.graph()
-  const urls = currentBundleUrls(graph, request)
-  if (urls.length === 0) return null
   // A request already at the generation the table serves is the table's to answer.
   if (typeof graph?.rev === 'string' && graph.rev !== '' && request.rev === graph.rev) return null
-  if (request.rev !== '' && urls.some((target) => target.endsWith(`&rev=${request.rev}`))) return null
-  for (const target of urls) {
-    const response = await fetchBundleAt(clientModules, target, 'GET')
-    if (response.status !== 200) continue
-    const body = Buffer.from(await response.arrayBuffer())
-    if (body.length === 0) continue
-    if (!request.sourceMap && !request.ids.every((id) => body.includes(id))) continue
-    return {
-      body,
-      contentType: String(response.headers.get('content-type') ?? 'text/javascript; charset=utf-8'),
-      ids: request.ids,
+  const urls = currentBundleUrls(graph, request)
+  if (urls.length > 0 && (request.rev === '' || !urls.some((target) => target.endsWith(`&rev=${request.rev}`)))) {
+    for (const target of urls) {
+      const response = await fetchBundleAt(clientModules, target, 'GET')
+      if (response.status !== 200) continue
+      const body = Buffer.from(await response.arrayBuffer())
+      if (body.length === 0) continue
+      if (!request.sourceMap && !request.ids.every((id) => body.includes(id))) continue
+      return {
+        body,
+        contentType: String(response.headers.get('content-type') ?? 'text/javascript; charset=utf-8'),
+        ids: request.ids,
+      }
     }
   }
-  return null
+  return regroupedBundleAnswer(clientModules, graph, request)
 }
 
 /** Answer one stale request over the plain request/response route an app registers. */
