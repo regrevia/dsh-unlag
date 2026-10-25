@@ -1,4 +1,9 @@
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Config, apply, name, inject } from '../index.js'
+
+// Keep the live log readable: this run writes its own.
+process.env.DSH_UNLAG_LOG = join(tmpdir(), 'dsh-unlag-test.log')
 
 const out = []
 const check = (label, ok, extra = '') => {
@@ -75,7 +80,7 @@ function mount(config) {
 }
 
 const both = mount({})
-check('two routes registered', both.routes.size === 2, [...both.routes.keys()].join(','))
+check('three routes registered', both.routes.size === 3, [...both.routes.keys()].join(','))
 
 const stateRes = fakeRes()
 both.routes.get('/dsh-unlag/state')({ method: 'GET' }, stateRes)
@@ -207,7 +212,7 @@ check('no web server and no hmr is not fatal', survived)
 // --- replacing the module twice must not stack routes ----------------------------------------
 const first = mount({})
 const second = mount({})
-check('remount leaves one route set', first.routes.size === 0 && second.routes.size === 2, `${first.routes.size}/${second.routes.size}`)
+check('remount leaves one route set', first.routes.size === 0 && second.routes.size === 3, `${first.routes.size}/${second.routes.size}`)
 
 console.log(out.join('\n'))
 console.log(process.exitCode === 1 ? 'FAILURES' : 'ALL PASS')

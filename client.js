@@ -352,6 +352,9 @@ window.__ModuleLoader__.load({
       inject: ['slots'], // ui-copy-ignore
       apply(ctx) {
         if (!desktop) return;
+        // Leave a line in the log per rebuilt interface: it is the one place that shows which
+        // plugin code a running page actually loaded.
+        fetch(`${HOST_BASE}/mounted`, { method: 'POST', credentials: 'same-origin', headers: { 'x-dsh-unlag': '1' }, body: '{}', keepalive: true }).catch(() => {});
         ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
           name: 'conversation.session.header.utilities',
           id: 'dsh-unlag', // ui-copy-ignore

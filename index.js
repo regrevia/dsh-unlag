@@ -27,6 +27,8 @@ export const name = 'dsh-unlag'
 export const inject = ['webServer']
 
 const LOG_PATH = join(homedir(), '.dsh', 'unlag-reload.log')
+/** Tests point this at a scratch file, so a test run leaves the live log readable. */
+const logTarget = () => process.env.DSH_UNLAG_LOG ?? LOG_PATH
 /** Survives a module replacement, so a reload cannot leave a second watcher behind. */
 const WATCHER_KEY = Symbol.for('dsh-unlag.watchers')
 /** The same, for the HTTP entry points the header button calls. */
@@ -94,7 +96,7 @@ function settingsOf(config) {
 
 function log(line) {
   try {
-    appendFileSync(LOG_PATH, `${new Date().toISOString()} ${line}\n`)
+    appendFileSync(logTarget(), `${new Date().toISOString()} ${line}\n`)
   } catch {}
 }
 
@@ -382,6 +384,15 @@ function serveButton(ctx, controller, config) {
       `${BASE_PATH}/state`,
       (_req, res) => {
         sendJson(res, 200, { plugins: settings.reloadPlugins, page: settings.reloadInterface })
+      },
+    ],
+    [
+      `${BASE_PATH}/mounted`,
+      (req, res) => {
+        const method = String(req?.method ?? 'GET').toUpperCase()
+        if (method !== 'POST') return sendJson(res, 405, { status: 'method' })
+        log('interface rebuilt; the page runs the plugins as served now')
+        sendJson(res, 200, { status: 'done' })
       },
     ],
     [
