@@ -1710,11 +1710,14 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
     for (const id of item.ids) if (served.has(id)) listed.add(id)
     for (const id of item.ids) if (!served.has(id)) leftOut.add(id)
     let response = null
-    try {
-      response = await fetchBody(item.url)
-    } catch (error) {
-      return { status: 'blocked', reason: 'network', detail: `${item.url}: ${String(error?.message ?? error)}` }
+    const read = await withDeadline(() => fetchBody(item.url), budgetMs - (Date.now() - began))
+    if (read.timedOut === true) {
+      return { status: 'blocked', reason: 'slow', detail: `${item.url} did not answer within the time this check waits` }
     }
+    if ('error' in read) {
+      return { status: 'blocked', reason: 'network', detail: `${item.url}: ${String(read.error?.message ?? read.error)}` }
+    }
+    response = read.value
     // Reading the answer is the same kind of step as fetching it: a response whose status or body
     // cannot be read is one this check cannot approve, and saying which script failed beats
     // abandoning the whole list without a name in the reason.
@@ -1820,6 +1823,27 @@ export async function verifyStartup(clientModules, rows) {
     return { status: 'blocked', reason: 'list', detail: String(error?.message ?? error) }
   }
   return verifyStartupRows(graph, (url) => readStartupScript(clientModules, url), rows)
+}
+
+/** The sentinel a read that ran past its time resolves to: a value, never an error. */
+const LATE = Symbol('late')
+
+/**
+ * One read the check will not wait past. The budget is counted between rows already; a single
+ * address that never answers would otherwise hold the press past the moment the page stops waiting
+ * for it, and the page would be told the check timed out with nothing naming what hung. Racing the
+ * read keeps the reason the check's own, and the read itself is left to finish with its bytes
+ * dropped, so nothing is left half-read.
+ */
+async function withDeadline(work, ms) {
+  let timer = null
+  const late = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(LATE), Math.max(0, ms))
+  })
+  const settled = Promise.resolve().then(work).then((value) => ({ value }), (error) => ({ error }))
+  const answer = await Promise.race([settled, late])
+  if (timer !== null) clearTimeout(timer)
+  return answer === LATE ? { timedOut: true } : answer
 }
 
 /** What one press is told when the update it waits for did not answer in time. */
