@@ -41,9 +41,9 @@ function mount(overrides = {}) {
 }
 
 function fakeRes() {
-  const res = { status: 0, headers: null, body: '', writableEnded: false }
-  res.writeHead = (status, headers) => { res.status = status; res.headers = headers }
-  res.end = (body) => { res.body += body ?? ''; res.writableEnded = true }
+  const res = { status: 0, headers: null, body: '', writableEnded: false, writeHeads: 0, ends: 0 }
+  res.writeHead = (status, headers) => { res.writeHeads += 1; res.status = status; res.headers = headers }
+  res.end = (body) => { res.ends += 1; res.body += body ?? ''; res.writableEnded = true }
   return res
 }
 
@@ -66,8 +66,12 @@ const routes = mount()
 const post = async (text) => {
   const res = fakeRes()
   await routes.get('/dsh-unlag/verify')(request(text), res)
-  return { status: res.status, body: JSON.parse(res.body) }
+  return { status: res.status, body: JSON.parse(res.body), writeHeads: res.writeHeads, ends: res.ends }
 }
+
+// One verdict, one answer: the page waits on this request, so a response written twice is a press
+// that never finishes, and a second status after a verdict is a page reading the wrong one.
+const oncePerAnswer = (label, answer) => check(label, answer.writeHeads === 1 && answer.ends === 1, `${answer.writeHeads}/${answer.ends}`)
 
 // A startup list from a profile with many bundles is longer than the old 64 KiB request bound:
 // that list has to be read, not refused.
@@ -76,15 +80,18 @@ const longList = JSON.stringify({ rows: Array.from({ length: 40 }, (_unused, n) 
 check('the request carrying a long but sound list is larger than the old bound', Buffer.byteLength(longList) > 64 * 1024, `${Buffer.byteLength(longList)} bytes`)
 const longAnswer = await post(longList)
 check('a long sound list is read and approved', longAnswer.body.status === 'ok', JSON.stringify(longAnswer.body).slice(0, 140))
+oncePerAnswer('an approved list is answered once', longAnswer)
 
 // Past the bound the answer names the list, not an empty one: the person pressing would otherwise
 // be told their startup list names nothing, which is false and points at the wrong thing.
 const huge = JSON.stringify({ rows: [`/plugins/??@local/a/client.js&rev=old&pad=${'x'.repeat(1024 * 1024 + 64)}`] })
 const hugeAnswer = await post(huge)
+oncePerAnswer('a size refusal is answered once', hugeAnswer)
 check('a request past the bound is refused as size', hugeAnswer.status === 200 && hugeAnswer.body.status === 'blocked' && hugeAnswer.body.reason === 'size', JSON.stringify(hugeAnswer.body))
 check('and the refusal says the list is longer than the check reads', /longer than this check reads/u.test(String(hugeAnswer.body.detail)), String(hugeAnswer.body.detail))
 
 const broken = await post('{"rows": [')
+oncePerAnswer('a refused list is answered once', broken)
 check('a body that is not JSON stays a refused list', broken.body.status === 'blocked' && broken.body.reason === 'list', JSON.stringify(broken.body))
 
 // A profile that loses a plugin still boots an older document from a stand-in script, and the pass
@@ -95,12 +102,24 @@ check('a body that is not JSON stays a refused list', broken.body.status === 'bl
   const answer = await (async () => {
     const res = fakeRes()
     await lostRoutes.get('/dsh-unlag/verify')(request(JSON.stringify({ rows: ['/plugins/??@local/a/client.js&rev=old'] })), res)
-    return { status: res.status, body: JSON.parse(res.body) }
+    return { status: res.status, body: JSON.parse(res.body), writeHeads: res.writeHeads, ends: res.ends }
   })()
+  oncePerAnswer('a stand-in pass is answered once', answer)
   check('a list whose plugin is gone still passes on the stand-in', answer.body.status === 'ok', JSON.stringify(answer.body).slice(0, 160))
   check('and the pass counts the stand-in row', answer.body.standInRows === 1, JSON.stringify(answer.body))
   const logText = readFileSync(process.env.DSH_UNLAG_LOG, 'utf8')
   check('and the log says a stand-in answered the row', /answered by a stand-in script/u.test(logText), logText.split('\n').slice(-3).join(' | '))
+}
+
+// A table that answers nothing is a network refusal, and it too must be one answer with one end:
+// the page has no other way to learn that the press was held.
+{
+  const downRoutes = mount({ fetchBundle: async () => { throw new Error('table gone') } })
+  const res = fakeRes()
+  await downRoutes.get('/dsh-unlag/verify')(request(JSON.stringify({ rows: ['/plugins/??@local/a/client.js&rev=old'] })), res)
+  const answer = { status: res.status, writeHeads: res.writeHeads, ends: res.ends, body: JSON.parse(res.body) }
+  check('a table that cannot answer holds the press as a network refusal', answer.body.status === 'blocked' && answer.body.reason === 'network', JSON.stringify(answer.body).slice(0, 140))
+  oncePerAnswer('a network refusal is answered once', answer)
 }
 
 console.log(out.join('\n'))
