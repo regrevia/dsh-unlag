@@ -564,9 +564,22 @@ window.__ModuleLoader__.load({
     function reloadFreshPage() {
       const graph = window.__DSH_BOOT__;
       const stamp = typeof graph?.rev === 'string' && graph.rev !== '' ? graph.rev : String(Date.now());
-      const target = new URL(location.href);
-      target.searchParams.set('interface', stamp);
-      window.location.replace(target.toString());
+      // The address is the page's own; a document whose address cannot be parsed still has to come
+      // back as a fresh one, because the code behind it has already been replaced.
+      let target = null;
+      try {
+        const parsed = new URL(location.href);
+        parsed.searchParams.set('interface', stamp);
+        target = parsed.toString();
+      } catch {
+        target = null;
+      }
+      try {
+        if (target !== null) window.location.replace(target);
+        else window.location.reload?.();
+      } catch {
+        // The page is going away either way; the press has already reported what it replaced.
+      }
     }
 
     /** A window the user still has open would go away with the rebuild. */

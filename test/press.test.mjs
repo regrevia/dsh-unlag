@@ -34,13 +34,18 @@ function show(tree) {
   return pill === undefined ? null : String(Array.isArray(pill.children) ? pill.children.join('') : pill.children)
 }
 
-function harness({ settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], revAfterReload, codeAfterReload, bootRows = rows } = {}) {
+function harness({ settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, href } = {}) {
   const requests = []
   const navigations = []
   const current = { rev: graph.rev, code: 'c1' }
   let reloadBody = reload
   let reloadAnswer = null
-  const location = { href: 'http://127.0.0.1:62542/?interface=live', replace: (target) => navigations.push(String(target)) }
+  const reloads = []
+  const location = {
+    href: href ?? 'http://127.0.0.1:62542/?interface=live',
+    replace: (target) => navigations.push(String(target)),
+    reload: () => reloads.push(1),
+  }
   const fetch = async (url, init = {}) => {
     const path = String(url).replace(/^https?:\/\/[^/]+/u, '')
     requests.push({ path, init })
@@ -125,7 +130,6 @@ function harness({ settings = { plugins: true, page: true }, reload = { status: 
     navigator: { language: 'en-US', userAgent: 'Mozilla/5.0 (Macintosh) Electron/44.7.0' },
     location,
     document,
-    sessionStorage: window.sessionStorage,
     fetch,
     URL,
     Response,
@@ -135,6 +139,13 @@ function harness({ settings = { plugins: true, page: true }, reload = { status: 
     requestAnimationFrame: (fn) => fn(),
     Event: FakeEvent,
     CustomEvent: FakeEvent,
+  }
+  // Some profiles deny the store outright: reading it throws rather than answering null.
+  if (storageThrows) {
+    Object.defineProperty(sandbox, 'sessionStorage', { get() { throw new Error('storage denied') } })
+    Object.defineProperty(window, 'sessionStorage', { get() { throw new Error('storage denied') } })
+  } else {
+    sandbox.sessionStorage = window.sessionStorage
   }
   sandbox.globalThis = sandbox
 
@@ -190,6 +201,7 @@ function harness({ settings = { plugins: true, page: true }, reload = { status: 
     listeners,
     settings,
     scheduled,
+    reloads,
     /** Release a /reload that is being held open, to model a slow app. */
     release: () => { reloadAnswer = null },
     holdReload: () => { reloadAnswer = new Promise((resolve) => { setImmediate(resolve) }) },
@@ -396,6 +408,34 @@ check('and the pressed page still rebuilt', swapped.navigations.length === 1, sw
     sentBody.includes('@local/a/client.js') && sentBody.includes('dsh-client-modules/client.js') && !sentBody.includes('__ModuleLoader__'),
     sentBody.slice(0, 160),
   )
+}
+
+// A store that cannot be read is not a reason to lose a press: the stamp only paces repeats.
+{
+  const denied = harness({ storageThrows: true })
+  let threw = null
+  try {
+    await denied.press()
+  } catch (error) {
+    threw = error
+  }
+  check('a store that refuses to be read does not stop the press', threw === null && denied.navigations.length === 1, String(threw?.message ?? JSON.stringify(denied.navigations)))
+  check('and the plugins were asked to replace', denied.requests.some((request) => request.path.startsWith('/dsh-unlag/reload')))
+}
+// A document whose address cannot be parsed still comes back as a fresh one: by then the code
+// behind it has already been replaced, and leaving the old page running would show the state as
+// the person never pressed.
+{
+  const addressless = harness({ href: '::bad address' })
+  let threw = null
+  try {
+    await addressless.press()
+  } catch (error) {
+    threw = error
+  }
+  const rebuilt = addressless.navigations.length + addressless.reloads.length
+  check('a page whose address cannot be parsed still reloads', threw === null && rebuilt >= 1, String(threw?.message ?? JSON.stringify({ navigations: addressless.navigations, reloads: addressless.reloads })))
+  check('and it reloads in place rather than leaving the old page', addressless.navigations.length === 0 && addressless.reloads.length === 1)
 }
 
 console.log(out.join('\n'))
