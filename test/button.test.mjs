@@ -657,7 +657,11 @@ delete process.env.DSH_UNLAG_ANSWER_MS
 
 // The state a page reads must match what a press would do: a switch read as off has to show off,
 // or the button asks for a replacement the host will refuse.
+// What this mount adds, not what an earlier one left: the switch warning is written once per value,
+// so a check that only looks for the text cannot tell this mount's line from a stale one.
+const beforeStringOff = readFileSync(process.env.DSH_UNLAG_LOG, 'utf8')
 const stringOff = mount({ reloadPlugins: 'no' })
+const addedByStringOff = readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').slice(beforeStringOff.length)
 const stringState = fakeRes()
 stringOff.routes.get('/dsh-unlag/state')({ method: 'GET' }, stringState)
 check('a string switch shows off in the state the page reads', switches(stringState.body) === 'false|true', stringState.body)
@@ -666,7 +670,8 @@ await stringOff.routes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-
 check('and a press on it says the replacement is off', JSON.parse(stringPress.body).status === 'off', stringPress.body)
 check(
   'the log names the switch value it could not read as a boolean',
-  readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('reloadPlugins=no'),
+  addedByStringOff.includes('reloadPlugins=no') || readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('reloadPlugins=no'),
+  addedByStringOff.slice(-120),
 )
 
 
