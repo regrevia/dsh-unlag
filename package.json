@@ -1,6 +1,6 @@
 {
   "name": "dsh-unlag",
-  "version": "1.9.4",
+  "version": "1.9.5",
   "type": "module",
   "description": "A press applies plugin edits right away and brings a laggy interface back; automatic reloading stays off unless you turn it on, so the press is the only trigger, and nothing restarts.",
   "license": "MIT",
@@ -47,5 +47,12 @@
         "@deepseek-ai/dsh-client-ui-conversation"
       ]
     }
+  },
+  "scripts": {
+    "test": "for f in test/*.test.mjs; do node \"$f\" || exit 1; done",
+    "audit": "eslint --no-config-lookup --rule '{\"no-undef\":\"error\",\"no-unused-vars\":[\"error\",{\"args\":\"none\",\"caughtErrors\":\"none\"}]}' --global window --global document --global navigator --global location --global sessionStorage --global localStorage --global fetch --global Response --global Request --global URL --global URLSearchParams --global AbortController --global CustomEvent --global Event --global setTimeout --global clearTimeout --global setInterval --global clearInterval --global requestAnimationFrame --global queueMicrotask --global structuredClone --global Buffer --global process --global console index.js client.js"
+  },
+  "devDependencies": {
+    "eslint": "9.39.0"
   }
 }
