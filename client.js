@@ -27,11 +27,16 @@ window.__ModuleLoader__.load({
       return false;
     }
 
-    /** The notice for one copy key, naming the reason when a readiness check stopped the press. */
-    function noticeFor(key) {
+    /**
+     * The notice for one copy key, naming the reason when a readiness check stopped the press.
+     * A press that already replaced the plugins did its work even when the page was left alone, and
+     * is said so: the update is live either way, and only the new document was skipped.
+     */
+    function noticeFor(key, applied = false) {
       if (key !== 'blocked' || holdReason === null) return COPY[key];
       const why = REASONS[holdReason] ?? REASONS.list;
-      return zh ? `暂时无法重建：${why}。稍后再点一次。` : `Cannot rebuild yet: ${why}. Press again shortly.`;
+      if (applied) return zh ? `插件已更新，页面未重开：${why}。` : `Plugins updated; the page stayed: ${why}.`;
+      return zh ? `暂时无法重建：${why}。` : `Cannot rebuild yet: ${why}.`;
     }
 
     // Desktop shell only: the macOS and Windows desktop build owns the page and the running
@@ -517,13 +522,14 @@ window.__ModuleLoader__.load({
         if (Number.isFinite(previous) && Date.now() - previous < 3000) return; // ui-copy-ignore
         setPending(true);
         setNotice(null);
-        const stop = (key) => {
+        const stop = (key, applied = false) => {
           setPending(false);
-          setNotice(noticeFor(key));
+          setNotice(noticeFor(key, applied));
         };
         const settings = await readSettings();
         const replace = settings === null ? false : settings.plugins;
         const rebuild = settings === null ? true : settings.page;
+        let replaced = false;
         // Both switches off: a press does nothing at all.
         if (!replace && !rebuild) {
           setPending(false);
@@ -548,6 +554,7 @@ window.__ModuleLoader__.load({
             report('plugin-held', key);
             return stop(key);
           }
+          replaced = status === 'done';
         }
         if (!rebuild) {
           setPending(false);
@@ -557,8 +564,9 @@ window.__ModuleLoader__.load({
         const reason = await prepareInterface();
         if (reason !== null) {
           // The log keeps the exact check that refused, so a held press can be explained later.
-          report('held', reason === 'blocked' && holdReason !== null ? `blocked:${holdReason}` : reason);
-          return stop(reason);
+          const gate = reason === 'blocked' && holdReason !== null ? `blocked:${holdReason}` : reason;
+          report('held', replaced ? `applied:${gate}` : gate);
+          return stop(reason, replaced);
         }
         report('rebuild');
         reloadFreshPage();

@@ -1174,15 +1174,32 @@ export async function verifyStartupRows(graph, fetchBody, rows) {
   }
 }
 
+/**
+ * Read one startup script the way the document itself would get it.
+ *
+ * The route answers a script from an older generation at the revision that still holds it, so a
+ * document booting from the shell's frozen list comes up instead of 404. Reading the address
+ * directly would see that same 404 and refuse a rebuild the button can actually carry out, so the
+ * answer is taken through the same mapping and only falls back to the raw address when the mapping
+ * has nothing to say.
+ */
+export async function readStartupScript(clientModules, url) {
+  try {
+    const answer = await currentBundleAnswer(clientModules, 'GET', url)
+    if (answer !== null) return { status: 200, arrayBuffer: async () => answer.body }
+  } catch {}
+  return fetchBundleAt(clientModules, url, 'GET')
+}
+
 /** Ask the same question of the plugin table the plugin itself talks to. */
-async function verifyStartup(clientModules, rows) {
+export async function verifyStartup(clientModules, rows) {
   let graph = null
   try {
     graph = clientModules.graph()
   } catch (error) {
     return { status: 'blocked', reason: 'list', detail: String(error?.message ?? error) }
   }
-  return verifyStartupRows(graph, (url) => fetchBundleAt(clientModules, url, 'GET'), rows)
+  return verifyStartupRows(graph, (url) => readStartupScript(clientModules, url), rows)
 }
 
 /**
