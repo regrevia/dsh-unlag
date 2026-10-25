@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Unlag",
-    "description": "When the interface gets sluggish: replace changed plugin code and rebuild the page in one press. Running turns, queued messages and unsent input are kept."
+    "description": "One press applies plugin edits right away and brings a laggy interface back. Running turns, queued messages and unsent input stay as they are."
   }
 }

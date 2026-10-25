@@ -1,8 +1,8 @@
 {
   "name": "dsh-unlag",
-  "version": "1.7.3",
+  "version": "1.7.4",
   "type": "module",
-  "description": "Clear a sluggish DeepSeek Harness workbench without restarting: rebuild the interface and swap plugin code in place, keeping running turns, queued messages and unsent drafts.",
+  "description": "One press applies plugin edits right away and brings a laggy interface back; running turns, queued messages and unsent input are untouched, and nothing restarts.",
   "license": "MIT",
   "exports": {
     ".": "./index.js",
