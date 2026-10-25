@@ -49,6 +49,7 @@ if (size > 0) {
 // one event cost the log its whole size budget at once.
 const { oneLine } = mod
 check('a log line never carries a line break', oneLine('a\nb\r\nc\u2028d') === 'a b c d', oneLine('a\nb\r\nc\u2028d'))
+check('a log line carries no control byte that could paint over it', oneLine('a\u001b[2Kb\u0000c\u0007d').replace(/ /gu, '') === 'a[2Kbcd', JSON.stringify(oneLine('a\u001b[2Kb\u0000c\u0007d')))
 check('a log line is capped', oneLine('x'.repeat(2500)).length === 2001, String(oneLine('x'.repeat(2500)).length))
 check('the cap says it cut the line', oneLine('x'.repeat(2500)).endsWith('\u2026'))
 check('a missing message is still a line', oneLine(null) === '' && oneLine(undefined) === '')
