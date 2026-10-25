@@ -272,9 +272,9 @@ function log(line) {
      * can land between two periodic checks: the size is read before every write and the whole
      * line has to fit, so the file never passes the cap even for one event.
      *
-     * A full file is moved aside rather than emptied: the lines it holds are the evidence for
-     * whatever just happened, and the event that fills the log is very often the one worth reading.
-     * One previous generation is kept, so a hostile page can cost at most one past million bytes.
+     * A full file is moved aside rather than emptied: its lines are the evidence for what led up to
+     * the write that filled it, which is the event a reader wants. One previous generation is
+     * kept, so a page that floods the log can cost at most one past million bytes.
      */
     try {
       if (statSync(target).size + Buffer.byteLength(text) > LOG_MAX_BYTES) {
