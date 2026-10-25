@@ -1521,6 +1521,12 @@ function serveButton(ctx, controller, config) {
         try {
           const method = String(req?.method ?? 'GET').toUpperCase()
           if (method !== 'POST') return sendJson(res, 405, { status: 'method' })
+          /**
+           * A page on any site can post to a local address without asking first, and a log is
+           * evidence: a made-up outcome must not get in. The header the page's own script sends
+           * makes the request one a browser has to ask about first, and this app never agrees.
+           */
+          if (typeof req?.headers?.[BUTTON_HEADER] !== 'string') return sendJson(res, 403, { status: 'forbidden' })
           let query = ''
           try {
             query = new URL(String(req?.url ?? ''), 'http://x').searchParams.toString()
