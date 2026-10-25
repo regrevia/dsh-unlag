@@ -164,13 +164,26 @@ function pluginReloader(ctx, config) {
     }
   }
 
-  /** Ask the HMR service to recompose; it throws rather than half-applying, so a catch is enough. */
+  /**
+   * Ask the HMR service to recompose; it throws rather than half-applying, so a catch is enough.
+   * Another reload may already hold the transaction (a save landing next to a session's own swap),
+   * so a nested refusal is retried instead of being reported as a reload that failed.
+   */
   const reload = async (hmr) => {
-    const result = await hmr.runExclusive(() => hmr.reconcileProfile([]))
-    const warnings = Array.isArray(result?.warnings) ? result.warnings.length : 0
-    const pending = Array.isArray(result?.pending) ? result.pending.length : 0
-    const suffix = typeof result?.restartReason === 'string' ? ` restart=${result.restartReason}` : ''
-    log(`plugins reloaded (warnings=${warnings} pending=${pending}${suffix})`)
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const result = await hmr.runExclusive(() => hmr.reconcileProfile([]))
+        const warnings = Array.isArray(result?.warnings) ? result.warnings.length : 0
+        const pending = Array.isArray(result?.pending) ? result.pending.length : 0
+        const suffix = typeof result?.restartReason === 'string' ? ` restart=${result.restartReason}` : ''
+        log(`plugins reloaded (warnings=${warnings} pending=${pending}${suffix})`)
+        return
+      } catch (error) {
+        const message = String(error?.message ?? error)
+        if (attempt >= 9 || message.includes('nested') === false) throw error
+        await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)))
+      }
+    }
   }
 
   const flush = async () => {

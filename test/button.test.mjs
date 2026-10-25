@@ -157,6 +157,35 @@ await graceRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-u
 await new Promise((resolve) => setTimeout(resolve, 2500))
 check('a busy machine still reloads after the grace', graceRes.body === '{"status":"queued"}' && graceRan === 1, `ran=${graceRan}`)
 
+
+// A swap that collides with another transaction is retried, not reported as a failure.
+let nestedTries = 0
+const nestedRoutes = (() => {
+  const routes = new Map()
+  const ctx = {
+    get: (key) => {
+      if (key === 'webServer') return { register: (r) => (routes.set(r.path, r.handler), () => routes.delete(r.path)) }
+      if (key === 'hmr')
+        return {
+          baseDir: '/tmp/x',
+          runExclusive: async (op) => op(),
+          reconcileProfile: async () => {
+            nestedTries += 1
+            if (nestedTries <= 2) throw new Error('HMR transactions cannot be nested')
+            return { warnings: [], pending: [] }
+          },
+        }
+      if (key === 'agents') return { list: () => [] }
+      return undefined
+    },
+    on: () => {},
+  }
+  apply(ctx, {})
+  return routes
+})()
+const nestedRes = fakeRes()
+await nestedRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, nestedRes)
+check('a colliding swap is retried', nestedRes.body === '{"status":"done"}' && nestedTries === 3, `tries=${nestedTries}`)
 // --- hostile surroundings --------------------------------------------------------------------
 let survived = true
 try {
