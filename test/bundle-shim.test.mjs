@@ -43,13 +43,15 @@ const bodies = new Map([
 const asPath = (url) => String(url).replace(/^http:\/\/[^/]+/u, '')
 
 function fakeRes() {
-  const res = { status: 0, headers: null, body: '', writableEnded: false, destroyed: false }
+  const res = { status: 0, headers: null, body: '', writableEnded: false, destroyed: false, writeHeads: 0, writes: 0, ends: 0 }
   res.writeHead = (status, headers) => {
+    res.writeHeads += 1
     res.status = status
     res.headers = headers
     res.headersSent = true
   }
   res.write = (chunk) => {
+    res.writes += 1
     // Node writes the headers implicitly on the first write, which is exactly the leak under test.
     if (res.headersSent !== true) {
       res.status = 200
@@ -59,6 +61,7 @@ function fakeRes() {
     return true
   }
   res.end = (body) => {
+    res.ends += 1
     if (body !== undefined) res.body += String(body)
     res.writableEnded = true
   }
@@ -178,6 +181,10 @@ check('the answer is not cached', stale.headers?.['cache-control'] === 'no-store
 check('the answer names its length', stale.headers?.['content-length'] === String(Buffer.byteLength(stale.body)))
 
 const staleOne = await call(first.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js&rev=old' })
+// A body written twice is a body a document never gets: the second write lands on a response that
+// has already ended, and Node turns that into an error on the connection the app is serving from.
+check('a stale batch writes its answer exactly once', stale.writeHeads === 1 && stale.ends === 1 && stale.writes === 0, `${stale.writeHeads}/${stale.writes}/${stale.ends}`)
+
 check('a stale single entry is answered here', staleOne.status === 200 && staleOne.body === '/* one entry */ @local/a', staleOne.body)
 
 const staleMap = await call(first.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js.map&rev=old' })
@@ -205,6 +212,9 @@ const regroupedMap = await call(first.route.handler, { method: 'GET', url: '/plu
 check('a regrouped source map is not assembled', regroupedMap.status === 404 && regroupedMap.body === 'original', regroupedMap.body)
 
 const head = await call(first.route.handler, { method: 'HEAD', url: '/plugins/??@local/a/client.js,@local/b/client.js&rev=old' })
+check('a HEAD answer ends once with no bytes', head.writeHeads === 1 && head.ends === 1 && head.body === '', `${head.writeHeads}/${head.ends}/${head.body.length}`)
+check('a request left to the table is written by the table alone', current.ends === 1 && current.writeHeads === 1, `${current.writeHeads}/${current.ends}`)
+
 check('HEAD gets the headers and no body', head.status === 200 && head.body === '', `${head.status} ${head.body}`)
 
 const post = await call(first.route.handler, { method: 'POST', url: '/plugins/??@local/a/client.js,@local/b/client.js&rev=old' })
