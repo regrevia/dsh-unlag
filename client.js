@@ -581,6 +581,7 @@ window.__ModuleLoader__.load({
         return () => clearTimeout(timer);
       }, [notice]);
 
+
       const style = pending
         ? { ...BUTTON_STYLE, opacity: 0.4 }
         : hover
@@ -658,6 +659,15 @@ window.__ModuleLoader__.load({
           pressInFlight = false;
           // The document goes away on a rebuild, so the button only needs re-enabling when it does not.
           if (!navigated) setPending(false);
+          else {
+            setTimeout(() => {
+              // Still here after asking for a rebuild: the page held the navigation. Say what
+              // happened and take the press back, so the button is never left unresponsive.
+              report('held', 'navigation');
+              setPending(false);
+              setNotice(noticeFor('replaced'));
+            }, 6000); // ui-copy-ignore
+          }
         }
       };
 

@@ -93,6 +93,13 @@ function harness({ settings = { plugins: true, page: true }, reload = { status: 
     },
     useEffect() {},
   }
+  // A wait the page arms for later is recorded instead of run: a test drives it by hand.
+  const scheduled = []
+  const setTimeoutStub = (fn, ms) => {
+    scheduled.push({ fn, ms })
+    if (ms >= 6000) return 0
+    return setTimeout(fn, ms)
+  }
   const sandbox = {
     window,
     navigator: { language: 'en-US', userAgent: 'Mozilla/5.0 (Macintosh) Electron/44.7.0' },
@@ -103,7 +110,7 @@ function harness({ settings = { plugins: true, page: true }, reload = { status: 
     URL,
     Response,
     console,
-    setTimeout,
+    setTimeout: setTimeoutStub,
     clearTimeout,
     requestAnimationFrame: (fn) => fn(),
     Event: FakeEvent,
@@ -162,6 +169,7 @@ function harness({ settings = { plugins: true, page: true }, reload = { status: 
     navigations,
     listeners,
     settings,
+    scheduled,
     /** Release a /reload that is being held open, to model a slow app. */
     release: () => { reloadAnswer = null },
     holdReload: () => { reloadAnswer = new Promise((resolve) => { setImmediate(resolve) }) },
@@ -187,6 +195,19 @@ const count = (requests, piece) => requests.filter((request) => request.path.sta
   check('the new page keeps the address it already had', page.navigations[0]?.includes('interface=live') === true, String(page.navigations[0]))
   check('a press writes its outcome to the app log', page.requests.some((request) => request.path.includes('/dsh-unlag/report') && request.path.includes('event=rebuild')))
   check('a plain press shows nothing to fix', page.notice() === null, String(page.notice()))
+}
+
+// --- a page that holds the navigation must not leave the button waiting forever ----------------
+{
+  const page = harness()
+  await page.press()
+  const wait = page.scheduled.find((entry) => entry.ms === 6000)
+  check('a rebuild arms a way back for a navigation the page holds', wait !== undefined, JSON.stringify(page.scheduled.map((entry) => entry.ms)))
+  wait.fn()
+  const view = page.render()
+  check('a held navigation leaves the button usable', view.button.props.style.opacity === 0.75, String(view.button.props.style.opacity))
+  check('a held navigation says the page stayed', /page stayed/.test(String(page.notice())), String(page.notice()))
+  check('a held navigation says why', page.requests.some((request) => request.path.includes('event=held') && request.path.includes('gate=navigation')))
 }
 
 // --- both switches off: the press says so instead of doing nothing -----------------------------
