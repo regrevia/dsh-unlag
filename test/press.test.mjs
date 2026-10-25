@@ -255,6 +255,8 @@ const count = (requests, piece) => requests.filter((request) => request.path.sta
   page.holdReload()
   const first = page.press()
   const second = page.press()
+  await new Promise((resolve) => setImmediate(resolve))
+  check('the press that joined says the update is still running', /Still applying/.test(String(page.notice())), String(page.notice()))
   page.release()
   await Promise.all([first, second])
   check('two presses in one moment replace plugins once', count(page.requests, '/dsh-unlag/reload') === 1, String(count(page.requests, '/dsh-unlag/reload')))

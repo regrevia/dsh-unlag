@@ -606,7 +606,15 @@ window.__ModuleLoader__.load({
           : BUTTON_STYLE;
 
       const onClick = async () => {
-        if (pending || pressInFlight) return;
+        // A press already running is joined, and the press that joined says so instead of nothing.
+        if (pressInFlight) {
+          setNotice(COPY.applying);
+          return;
+        }
+        if (pending) {
+          setNotice(COPY.applying);
+          return;
+        }
         // A press the page already answered is not answered twice. Saying so beats a dead button.
         if (Date.now() - stampRead() < 3000) { // ui-copy-ignore
           setNotice(COPY.applying);
