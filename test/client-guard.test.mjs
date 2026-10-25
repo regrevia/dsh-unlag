@@ -20,7 +20,7 @@ const gone = () => new Response('', { status: 404 })
 const asPath = (url) => String(url).replace(/^https?:\/\/[^/]+/u, '')
 const registered = (id) => `window.__ModuleLoader__.load({ id: "${id}", factory() {} })`
 
-function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge, frozen, live, scripts = {}, probe = true, prepare } = {}) {
+function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge, frozen, live, scripts = {}, probe = true, prepare, verifyAnswer } = {}) {
   let registration
   const navigations = []
   const requests = []
@@ -30,6 +30,9 @@ function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge
     if (path.startsWith('/dsh-unlag/graph')) {
       if (live === undefined || live === null) return gone()
       return new Response(JSON.stringify({ graph: live }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    if (path.startsWith('/dsh-unlag/verify') && verifyAnswer !== undefined) {
+      return new Response(JSON.stringify(verifyAnswer), { status: 200, headers: { 'content-type': 'application/json' } })
     }
     if (path.startsWith('/dsh-unlag/verify')) {
       const asked = JSON.parse(String(init.body ?? '{}'))
@@ -277,6 +280,13 @@ check('an update the app put on hold is not an update', verdictOf({ status: 'que
 check('an entry the app could not replace is not an update', verdictOf({ status: 'done', warnings: ['cannot load @local/a'], failedEntries: ['@local/a'] }) === 'failed')
 check('a replacement the running page cannot take is not an update', verdictOf({ status: 'done', restartReason: 'native' }) === 'failed')
 check('no answer at all is not an update', verdictOf(null) === 'failed')
+
+// A startup check that ran out of time is its own reason: the notice must not claim a script was
+// unreadable when the list simply answered too slowly.
+const slowCheck = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok(body) }, verifyAnswer: { status: 'blocked', reason: 'slow', detail: 'the startup list took longer than this check waits' } })
+check('a slow startup check holds the rebuild', (await slowCheck.probe.prepareInterface()) === 'blocked')
+check('the hold is named for what happened', slowCheck.probe.startupHoldReason() === 'slow', String(slowCheck.probe.startupHoldReason()))
+check('and the notice says the list answered too slowly', String(slowCheck.probe.noticeFor('blocked')).includes('too slowly'), String(slowCheck.probe.noticeFor('blocked')))
 
 console.log(out.join('\n'))
 if (out.some((line) => line.startsWith('FAIL'))) process.exitCode = 1
