@@ -58,3 +58,11 @@ const checked =
   contract['verify without header'] === '403'
 console.log(`${checked ? 'PASS' : 'FAIL'}  against a host the smoke prints the route contract and passes (${JSON.stringify(printed?.contract ?? null)} ${live.status})`)
 if (!checked) process.exitCode = 1
+
+// The README tells a reader to run this script, so the published package has to contain it: a
+// files list that forgot it is a broken instruction the repo tests would not otherwise notice.
+const { readFileSync } = await import('node:fs')
+const shipped = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).files
+const shippedScript = shipped.includes('scripts/live-smoke.mjs')
+console.log(`${shippedScript ? 'PASS' : 'FAIL'}  the package publishes the smoke the README tells a reader to run (${JSON.stringify(shipped)})`)
+if (!shippedScript) process.exitCode = 1
