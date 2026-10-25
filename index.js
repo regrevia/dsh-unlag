@@ -1269,7 +1269,12 @@ function serveBundlesAtCurrentRevision(ctx) {
        * from. Only when it has nothing is the same request tried at the revision of the plugin it
        * names, because a chunk is served at its entry's revision and nowhere else.
        */
-      const url = String(request?.url ?? '')
+      // Reading the address is the first thing that runs, and a request object that cannot answer it
+      // would reject this async handler before any guard below: it is read as no address instead.
+      let url = ''
+      try {
+        url = String(request?.url ?? '')
+      } catch {}
       // Same reason as the handler shape below: a rejection here is unhandled and ends the process.
       let retargeted = null
       try {
@@ -1315,7 +1320,12 @@ function serveBundlesAtCurrentRevision(ctx) {
    * first, so the served document and the chunks it later asks for are one generation.
    */
   const wrapped = async (req, res) => {
-    const originalUrl = String(req?.url ?? '')
+    // Same as the resource shape: an address that cannot be read is no address. Throwing here would
+    // reject the handler the server is awaiting, and a rejection nobody catches ends the process.
+    let originalUrl = ''
+    try {
+      originalUrl = String(req?.url ?? '')
+    } catch {}
     // Reading the table can throw while the plugin set is being swapped. This runs inside an async
     // route handler, where a rejection is an unhandled one and takes the whole app with it, so the
     // failure has to end here: answer the request as the table left it and say why in the log.
