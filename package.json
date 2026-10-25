@@ -1,8 +1,8 @@
 {
   "name": "dsh-unlag",
-  "version": "1.8.5",
+  "version": "1.9.0",
   "type": "module",
-  "description": "One press applies plugin edits right away and brings a laggy interface back; running turns, queued messages and unsent input are untouched, and nothing restarts.",
+  "description": "A press applies plugin edits right away and brings a laggy interface back; automatic reloading stays off unless you turn it on, so the press is the only trigger, and nothing restarts.",
   "license": "MIT",
   "exports": {
     ".": "./index.js",

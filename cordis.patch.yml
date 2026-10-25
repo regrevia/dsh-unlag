@@ -2,14 +2,15 @@
     - id: dsh-unlag
       name: 'dsh-unlag'
 
-# Turn on the shipped module watcher, which the desktop launcher leaves off.
-# `base` resolves against the plugin's own location, and an installed plugin
-# lives inside app.asar, which the watcher cannot stat — hence the working
-# directory, the one directory that always exists on the machine that boots it.
-# `root` stays empty here: the profile's own modules are watched by the watcher
-# installed-plugin path, and this entry only needs to start. To also watch
-# source checkouts, add their absolute paths to `root` in your own profile
-# patch layer.
+# The button applies edits through this service's transaction, so it has to run
+# even when nothing is watched. `base` resolves against the plugin's own
+# location, and an installed plugin lives inside app.asar, which the service
+# cannot stat — hence the working directory, the one directory that always
+# exists on the machine that boots it.
+# `root` stays empty: an empty root means this service itself watches no module
+# source, so a saved file applies nothing unless the plugin's own automatic
+# reload is switched on (it is off by default). To watch source checkouts, add
+# their absolute paths to `root` in your own profile patch layer.
 - id: hmr
   disabled: false
   config:

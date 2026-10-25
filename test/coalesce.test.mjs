@@ -36,7 +36,7 @@ const ctx = {
 const cases = []
 const check = (name, ok, detail = '') => cases.push({ name, ok, detail })
 
-mod.apply(ctx, { debounce: 20, minIntervalMs: 50 })
+mod.apply(ctx, { autoReload: true, debounce: 20, minIntervalMs: 50 })
 await sleep(300)
 const root = join(HOME, '.dsh', 'plugins', 'demo')
 

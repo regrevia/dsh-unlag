@@ -31,7 +31,7 @@ const switches = (body) => {
   }
 }
 
-// --- Config: validation never throws and defaults both switches on -----------------------------
+// --- Config: validation never throws, press switches on, automatic reloading off ---------------
 // Cordis reads every key of an object declaration as a required service name, so the declaration
 // must stay a plain array: `{ optional: [...] }` leaves the entry waiting forever on "optional".
 check(
@@ -41,7 +41,14 @@ check(
 )
 check('inject names only real services', inject.length === 1 && inject[0] === 'webServer')
 const v = (value) => Config['~standard'].validate(value)
-check('validate {} -> both on', JSON.stringify(v({}).value) === '{"reloadPlugins":true,"reloadInterface":true}')
+check(
+  'validate {} -> press on, auto off',
+  JSON.stringify(v({}).value) === '{"reloadPlugins":true,"reloadInterface":true,"autoReload":false}',
+  JSON.stringify(v({}).value),
+)
+check('auto reload needs an explicit yes', v({ autoReload: true }).value.autoReload === true)
+check('the old off switch still means off', v({ plugins: 'off', autoReload: true }).value.autoReload === false)
+check('any other auto value stays off', v({ autoReload: 'yes' }).value.autoReload === false)
 check('validate omitted -> both on', v(undefined).value.reloadPlugins === true)
 check('validate null -> both on', v(null).value.reloadInterface === true)
 check('validate false sticks', v({ reloadPlugins: false }).value.reloadPlugins === false)
@@ -49,6 +56,8 @@ check('validate keeps foreign keys', v({ roots: ['/x'], reloadInterface: false }
 check('validate survives a string config', v('nope').value.reloadPlugins === true)
 const json = JSON.parse(JSON.stringify(Config.toJSON()))
 check('toJSON is a plain document', json.refs?.[6]?.dict?.reloadPlugins === 2)
+check('toJSON carries the automatic row', json.refs?.[6]?.dict?.autoReload === 7 && json.refs?.[7]?.meta?.default === false)
+check('the form row for auto reload defaults off', Config.dict.autoReload.meta.default === false)
 check('form nodes are objects', Config.dict.reloadPlugins.type === 'boolean' && Config.dict.reloadPlugins.meta.default === true)
 
 // --- routes: registered, answer, and honour the switches --------------------------------------
@@ -349,7 +358,11 @@ const stuckRoutes = (() => {
   return routes
 })()
 const stuck = fakeRes()
+// The wait's own timer is unref'd, because a live app always has work keeping the loop alive and
+// this plugin must never be the reason the process stays up. Hold the loop here for the same reason.
+const keepAlive = setInterval(() => {}, 1000)
 await stuckRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, stuck)
+clearInterval(keepAlive)
 check('an update that never finishes is still applying', verdict(stuck.body) === 'applying', stuck.body)
 const stuckAgain = fakeRes()
 await stuckRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, stuckAgain)

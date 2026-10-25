@@ -65,15 +65,18 @@ const SHIM_MARK = Symbol.for('dsh-unlag.bundle-shim')
 const SHIM_KEY = Symbol.for('dsh-unlag.shim')
 
 /**
- * The two rows this plugin shows in Settings, in the schema dialect the settings form reads.
- * Both default on: a press then leaves nothing on old code.
+ * The three rows this plugin shows in Settings, in the schema dialect the settings form reads.
+ * The two press rows default on, so a press leaves nothing on old code. Automatic reloading
+ * defaults off: a file saved by an agent must not swap the plugin set under a running turn, and
+ * the press is the one trigger a person chose.
  */
 const SCHEMA = {
-  uid: 6, // ui-copy-ignore
+  uid: 7, // ui-copy-ignore
   refs: {
     2: { type: 'boolean', meta: { default: true, description: '按下刷新时换掉插件代码' } }, // ui-copy-ignore
     5: { type: 'boolean', meta: { default: true, description: '按下刷新时重建界面' } }, // ui-copy-ignore
-    6: { type: 'object', meta: { default: {} }, dict: { reloadPlugins: 2, reloadInterface: 5 } }, // ui-copy-ignore
+    7: { type: 'boolean', meta: { default: false, description: '改完文件自动刷新，不必按按钮' } }, // ui-copy-ignore
+    6: { type: 'object', meta: { default: {} }, dict: { reloadPlugins: 2, reloadInterface: 5, autoReload: 7 } }, // ui-copy-ignore
   },
 }
 
@@ -81,6 +84,7 @@ const SCHEMA = {
 const FIELDS = {
   reloadPlugins: { type: 'boolean', meta: { default: true, description: '按下刷新时换掉插件代码' } },
   reloadInterface: { type: 'boolean', meta: { default: true, description: '按下刷新时重建界面' } },
+  autoReload: { type: 'boolean', meta: { default: false, description: '改完文件自动刷新，不必按按钮' } },
 }
 
 /**
@@ -106,11 +110,15 @@ export const Config = {
   },
 }
 
-/** The two switches, defaulted on, from any config shape. */
+/**
+ * The three switches from any config shape. The press switches default on; automatic reloading
+ * defaults off, and the undocumented `plugins: 'off'` from older configs keeps meaning off.
+ */
 function settingsOf(config) {
   return {
     reloadPlugins: config?.reloadPlugins !== false,
     reloadInterface: config?.reloadInterface !== false,
+    autoReload: config?.plugins === 'off' ? false : config?.autoReload === true,
   }
 }
 
@@ -374,7 +382,7 @@ function pluginReloader(ctx, config) {
         log(`a change to ${lastChange || 'a watched file'} left the plugin set as it is; nothing applied`)
         return
       }
-      if (watched && lastChange !== '') log(`reloading after a change to ${lastChange}`)
+      if (watched && lastChange !== '') log(`auto reload after a change to ${lastChange}`)
       deferrals = 0
       lastRun = Date.now()
       running = true
@@ -464,6 +472,7 @@ function pluginReloader(ctx, config) {
   const reloadNow = async (force = false) => {
     const hmr = hmrService()
     if (hmr === null) return { status: 'unavailable', warnings: [], pending: [], restartReason: null, failedEntries: [] }
+    log('manual reload: the refresh button was pressed')
     if (turnsRunning()) log('reloading while turns are still running; they keep running')
     if (running || workState.current !== null || (force === false && busy())) return busyAnswer()
     const wait = lastRun + MIN_INTERVAL_MS - Date.now()
@@ -1287,9 +1296,12 @@ export function apply(ctx, config) {
     const syncBundles = () => {
       ensureBundleShim(ctx)
     }
-    /** Watching needs HMR; start as soon as it exists, drop the watcher when it goes away. */
+    /**
+     * Watching needs both the HMR service and an explicit opt-in: the switch defaults off, so no
+     * root is installed and no saved file applies anything by itself.
+     */
     const syncWatching = () => {
-      if (config?.plugins === 'off') return
+      if (settingsOf(config ?? {}).autoReload !== true) return
       if (controller.available() === false) {
         closeAll(globalThis[WATCHER_KEY])
         globalThis[WATCHER_KEY] = null
@@ -1298,10 +1310,15 @@ export function apply(ctx, config) {
       if (globalThis[WATCHER_KEY] !== null) return
       globalThis[WATCHER_KEY] = controller.startWatching()
     }
-    if (config?.plugins === 'off') log('file watching is off')
-    else {
+    // Printed on every start so a reader of the log knows which action applies a change: a person
+    // pressing the button, never this plugin, and never a restart of the app.
+    log('plugin reload is manual: ask the user to press the refresh button; do not restart the app')
+    if (settingsOf(config ?? {}).autoReload === true) {
       syncWatching()
-      if (globalThis[WATCHER_KEY] === null) log('plugin reload is unavailable: the hmr entry is not running')
+      if (globalThis[WATCHER_KEY] === null) log('auto reload is on but the hmr entry is not running; a press still works')
+      else log('auto reload is on: a saved plugin change applies without a press')
+    } else {
+      log('auto reload is off: no plugin source is watched')
     }
     if (typeof ctx.on === 'function') {
       ctx.on('internal/service', (service) => {

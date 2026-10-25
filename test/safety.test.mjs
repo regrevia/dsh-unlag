@@ -1,6 +1,6 @@
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 
 // Keep the live log readable: this run writes its own.
 process.env.DSH_UNLAG_LOG = join(tmpdir(), 'dsh-unlag-test.log')
@@ -43,6 +43,13 @@ function makeCtx({ hmrValue = hmr, status = 'idle' } = {}) {
 
 const cases = []
 const check = (name, ok, detail = '') => cases.push({ name, ok, detail })
+const logText = () => {
+  try {
+    return readFileSync(process.env.DSH_UNLAG_LOG, 'utf8')
+  } catch {
+    return ''
+  }
+}
 
 // 1. No hmr service at all: must not throw, must not watch.
 try {
@@ -74,9 +81,25 @@ const hostileCtx = makeCtx({ hmrValue: hostile })
 mod.apply(hostileCtx, { debounce: 10 })
 await sleep(50)
 
+// 3b. Default off: no watch root is installed, so a saved file applies nothing by itself.
+const root0 = join(HOME, '.dsh', 'plugins', 'demo')
+const offCtx = makeCtx()
+mod.apply(offCtx, {})
+await sleep(250)
+const beforeOff = reloads
+writeFileSync(join(root0, 'off.js'), 'export const o = 1\n')
+await sleep(350)
+check('default off watches nothing', reloads === beforeOff, `reloads=${reloads - beforeOff}`)
+check('default off says so in the log', logText().includes('auto reload is off: no plugin source is watched'))
+check(
+  'the log names the press as the only trigger',
+  logText().includes('plugin reload is manual: ask the user to press the refresh button; do not restart the app'),
+)
+offCtx.disposeAll()
+
 // 4. A real watcher: .js fires a reload, .txt and node_modules do not.
 const ctx = makeCtx()
-mod.apply(ctx, { debounce: 10 })
+mod.apply(ctx, { autoReload: true, debounce: 10 })
 await sleep(200)
 const root = join(HOME, '.dsh', 'plugins', 'demo')
 writeFileSync(join(root, 'ignore.txt'), 'x')
@@ -96,6 +119,7 @@ check('txt ignored', afterTxt === 0, `reloads=${afterTxt}`)
 check('node_modules file name ignored', afterNoModules === 0, `reloads=${afterNoModules}`)
 check('node_modules dir ignored', afterNested === 0, `reloads=${afterNested}`)
 check('js triggers one reload', afterJs === 1, `reloads=${afterJs}`)
+check('an automatic reload names its trigger', logText().includes('auto reload after a change to real.js'))
 
 // 4b. A profile link usually points outside the profile; watch it as given, not glued to baseDir.
 const profile = join(HOME, 'profile')
@@ -104,7 +128,7 @@ mkdirSync(profile, { recursive: true })
 mkdirSync(devRoot, { recursive: true })
 writeFileSync(join(profile, 'package.json'), JSON.stringify({ dependencies: { 'dsh-demo': `link:${devRoot}` } }))
 const beforeLinked = reloads
-mod.apply(makeCtx({ hmrValue: { ...hmr, baseDir: profile } }), { debounce: 10 })
+mod.apply(makeCtx({ hmrValue: { ...hmr, baseDir: profile } }), { autoReload: true, debounce: 10 })
 await sleep(250)
 writeFileSync(join(devRoot, 'change.js'), 'export const c = 1\n')
 await sleep(300)
@@ -112,7 +136,7 @@ check('an absolute link target is watched', reloads === beforeLinked + 1, `reloa
 
 // 5. A busy agent does not hold a save back: swapping code never interrupts a turn.
 const busyCtx = makeCtx({ status: 'running' })
-mod.apply(busyCtx, { debounce: 10 })
+mod.apply(busyCtx, { autoReload: true, debounce: 10 })
 await sleep(200)
 const beforeBusy = reloads
 writeFileSync(join(root, 'busy.js'), 'export const b = 1\n')
@@ -121,7 +145,7 @@ check('a busy agent still swaps', reloads === beforeBusy + 1, `reloads=${reloads
 
 // 5b. The opt-in quiet mode waits instead.
 const quietCtx = makeCtx({ status: 'running' })
-mod.apply(quietCtx, { debounce: 10, idleOnly: true })
+mod.apply(quietCtx, { autoReload: true, debounce: 10, idleOnly: true })
 await sleep(200)
 const beforeQuiet = reloads
 writeFileSync(join(root, 'quiet.js'), 'export const q = 1\n')
@@ -143,7 +167,7 @@ const slow = {
   },
   reconcileProfile: async () => ({ warnings: [], pending: [] }),
 }
-mod.apply(makeCtx({ hmrValue: slow }), { debounce: 10 })
+mod.apply(makeCtx({ hmrValue: slow }), { autoReload: true, debounce: 10 })
 await sleep(200)
 writeFileSync(join(root, 'a.js'), 'export const c = 1\n')
 writeFileSync(join(root, 'b.js'), 'export const d = 1\n')
