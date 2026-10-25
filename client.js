@@ -122,6 +122,9 @@ window.__ModuleLoader__.load({
       return true;
     }
 
+    // Every row kind a document boot understands; an unknown one ends the document.
+    const STARTUP_ROW_KINDS = new Set(['global', 'script', 'script-src', 'script-preload', 'style', 'html']);
+
     /**
      * The startup list the desktop shell hands the next document, exactly as it hands it. The
      * shell reads that list once when the app starts and replays the same copy for every document
@@ -153,6 +156,8 @@ window.__ModuleLoader__.load({
       let frozen = null;
       for (const row of rows) {
         if (row === null || typeof row !== 'object') continue;
+        if (typeof row.kind !== 'string' || !STARTUP_ROW_KINDS.has(row.kind)) return false;
+        if (row.kind === 'script-src' && (typeof row.src !== 'string' || row.src === '')) return false;
         if (typeof row.src === 'string' && row.src !== '') scripts.push(row.src);
         if (row.kind !== 'global' || row.name !== '__DSH_BOOT__') continue; // ui-copy-ignore
         let value = row.value;
