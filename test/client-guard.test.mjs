@@ -432,5 +432,19 @@ check('and the notice says the list answered too slowly', String(slowCheck.probe
   check('and names the row as what stopped it', loaded.plugin.probe.startupHoldReason() === 'row', String(loaded.plugin.probe.startupHoldReason()))
 }
 
+// The comparison reads the saved list. The saved row can carry its boot object already parsed, so a
+// list object whose fields cannot be read must hold the press and name the list.
+{
+  const hostileFrozen = Object.defineProperty({ rev: 'r1', batches: [] }, 'entries', { get() { throw new Error('crossed') } })
+  const rows = [
+    { kind: 'script-src', src: '/plugins/a/client.js' },
+    { kind: 'global', name: '__DSH_BOOT__', value: hostileFrozen },
+  ]
+  const loaded = harness({ live: { rev: 'r1', entries: [{ id: '@local/a' }], batches: [] }, scripts: { '/plugins/a/client.js': () => ok(registered('@local/a')) } })
+  const verdict = await loaded.plugin.probe.frozenStartupLooksServable(rows)
+  check('a saved list that cannot be read holds the press', verdict === false, String(verdict))
+  check('and names the saved list as what stopped it', loaded.plugin.probe.startupHoldReason() === 'list', String(loaded.plugin.probe.startupHoldReason()))
+}
+
 console.log(out.join('\n'))
 if (out.some((line) => line.startsWith('FAIL'))) process.exitCode = 1

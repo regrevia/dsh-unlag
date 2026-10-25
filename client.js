@@ -400,8 +400,27 @@ window.__ModuleLoader__.load({
         // The frozen list decides what this document boots. Without the current plugin list there
         // is nothing to prove every plugin in it still exists, so the page is not rebuilt.
         if (live === null) return held('graph');
-        const kept = Array.isArray(frozen.entries) ? frozen.entries : [];
-        const liveIds = new Set((Array.isArray(live.entries) ? live.entries : []).map((entry) => (typeof entry === 'string' ? entry : entry?.id)));
+        // Both lists come from outside this function: the saved one from the shell, the current one
+        // from the app. One that cannot be read leaves the comparison unanswered, and each names
+        // itself rather than the page.
+        let kept = [];
+        try {
+          kept = Array.isArray(frozen.entries) ? frozen.entries : [];
+        } catch {
+          return held('list');
+        }
+        let liveEntries = [];
+        try {
+          liveEntries = Array.isArray(live.entries) ? live.entries : [];
+        } catch {
+          return held('graph');
+        }
+        const liveIds = new Set();
+        try {
+          for (const entry of liveEntries) liveIds.add(typeof entry === 'string' ? entry : entry?.id);
+        } catch {
+          return held('graph');
+        }
         let vanished = false;
         for (const entry of kept) {
           const id = typeof entry === 'string' ? entry : entry?.id;
