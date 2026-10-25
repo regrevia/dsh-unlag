@@ -1,3 +1,9 @@
+## 1.9.85
+
+- 给页面这一半补上随机敌意输入的实证：8 种坏页面（读不出的 sessionStorage / location / 文档、抛错的事件派发、抛错的桥、抛错的 fetch、抛错的 rAF）× 多种清单形状（含读取字段就抛的清单）扫过 `prepareInterface` / `startupLooksServable` / `reloadVerdict` / `readSettings` / `desktopStartupPayload` / `desktopShellPresent` / `reloadFreshPage`，没有一次异常穿出，结论是 `fuzz clean`。也就是说按压路径上已有护栏是真的兜住了，不是靠外层 catch。
+- 其中一条此前没有固定用例：存储被拒（`sessionStorage` 读写抛错）时，按压仍要拿到结论。现在写进 `test/client-guard.test.mjs`（2 条：不抛出、仍返回判定）。
+- 全套 553 PASS / 0 FAIL。
+
 ## 1.9.84
 
 - `/verify` 的插件清单读取补上最后一段没护栏的地方：清单是运行中应用自己的对象、会在切换时被重组，某一行字段读出来就会抛（例如 `id` 是抛错的取值器）时，旧代码把异常抛出 `verifyStartupRows`，只能由路由兜底成「清单不可读」。现在这一层自己就降级为 `blocked/list`，并写明是清单读不出来——按压仍然拿到一个确定的答案，而不是靠外层接住。

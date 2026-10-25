@@ -20,7 +20,7 @@ const gone = () => new Response('', { status: 404 })
 const asPath = (url) => String(url).replace(/^https?:\/\/[^/]+/u, '')
 const registered = (id) => `window.__ModuleLoader__.load({ id: "${id}", factory() {} })`
 
-function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge, boot, frozen, live, scripts = {}, probe = true, prepare, verifyAnswer, verifyReply, shimWrapped, stateReply, dom, noCustomEvent } = {}) {
+function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge, boot, frozen, live, scripts = {}, probe = true, prepare, verifyAnswer, verifyReply, shimWrapped, stateReply, dom, noCustomEvent, storage } = {}) {
   let registration
   const navigations = []
   const requests = []
@@ -64,7 +64,7 @@ function harness({ userAgent = 'Mozilla/5.0 (Macintosh) Electron/44.7.0', bridge
     __DSH_UNLAG_PROBE__: probe,
     __DSH_BOOT__: boot ?? frozen,
     dshDesktopBoot: bridge,
-    sessionStorage: { getItem: () => '0', setItem() {} },
+    sessionStorage: storage ?? { getItem: () => '0', setItem() {} },
     location,
     dispatchEvent: (event) => {
       // The rebuild announcement is the one event this page raises itself; a stand-in can answer
@@ -268,6 +268,24 @@ check('a served list that does not load holds the rebuild', (await webStale.prob
 // A browser tab of a profile with no plugin at all: the next document loads no script, so a
 // rebuild has nothing to fail. A held press there would blame a list that is perfectly complete.
 const noPlugins = harness({ userAgent: 'Mozilla/5.0 (Macintosh) Firefox/140.0', boot: { rev: 'new', entries: [], batches: [] } })
+// Session storage is denied in some profiles and full in others. The stamp it holds only paces
+// repeated presses, so a store that refuses to answer must cost the press nothing.
+const deniedStore = () => { throw new Error('storage') }
+const noStore = harness({
+  userAgent: 'Mozilla/5.0 (Macintosh) Firefox/140.0',
+  boot: { rev: 'new', entries: [], batches: [] },
+  live: { rev: 'new', entries: [], batches: [] },
+  storage: { getItem: deniedStore, setItem: deniedStore, removeItem: deniedStore },
+})
+let storeThrew = null
+let storeGate = null
+try {
+  storeGate = await noStore.probe.prepareInterface()
+} catch (error) {
+  storeThrew = error
+}
+check('a store that refuses to answer does not throw out of a press', storeThrew === null, String(storeThrew?.message ?? ''))
+check('and the press still reads a verdict', storeGate === null || typeof storeGate === 'string', String(storeGate))
 check('a page with no plugin at all lets the rebuild through', (await noPlugins.probe.startupLooksServable()) === true, String(noPlugins.probe.startupHoldReason()))
 check('and reads no script for it', noPlugins.requests.every((r) => !r.path.startsWith('/plugins/')), JSON.stringify(noPlugins.requests.map((r) => r.path)))
 
