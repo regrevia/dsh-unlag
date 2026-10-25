@@ -117,7 +117,7 @@ check('a held rebuild does not navigate', crashed.navigations.length === 0)
 // The same page after the plugin answers the old revision at the current one: safe to rebuild.
 const served = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok(body) } })
 check('a saved script answered at the current revision lets the rebuild through', (await served.probe.startupLooksServable()) === true)
-check('the guard reads every saved script back', served.requests.filter((r) => r.path.startsWith('/plugins/')).length === 2, String(served.requests.filter((r) => r.path.startsWith('/plugins/')).length))
+check('the guard reads each distinct saved address once', served.requests.filter((r) => r.path.startsWith('/plugins/')).length === 1, String(served.requests.filter((r) => r.path.startsWith('/plugins/')).length))
 check('the guard asks the host half rather than reading bodies itself', served.requests.some((r) => r.path === '/dsh-unlag/verify' && r.init.method === 'POST'))
 
 // A plugin removed since the app started leaves a saved entry with nowhere to load from.
@@ -234,11 +234,11 @@ check('a script that requires a plugin outside the list is blocked', verdictDepe
 
 // One request must not become unbounded work on the process that owns every running turn.
 let reads = 0
-const manyRows = 'plugins/??@local/a/client.js&rev=live'
+const manyRows = (n) => `plugins/??@local/a/client.js&rev=live&n=${n}`
 const bounded = await verifyStartupRows(live, async () => {
   reads += 1
   return read(body)()
-}, Array.from({ length: 200 }, () => manyRows))
+}, Array.from({ length: 200 }, (_, n) => manyRows(n)))
 check('a list far longer than a startup list is read only up to the bound', reads === 64, `${reads} reads`)
 check('and it still answers instead of failing', bounded.status === 'ok', JSON.stringify(bounded).slice(0, 120))
 let longReads = 0

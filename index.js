@@ -1504,6 +1504,10 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
     }
     const path = row.includes('://') ? row.replace(/^[a-z]+:\/\/[^/]+/iu, '') : row
     const url = path.startsWith('/') ? path : `/${path.replace(/^\.?\//u, '')}`
+    // A list can name the same address more than once, and one address can be most of a profile's
+    // bytes: read each address once so a repeated row cannot make one check read the profile's
+    // scripts tens of times.
+    if (wanted.some((entry) => entry.url === url)) continue
     const request = bundleRequest(url)
     wanted.push({ url, ids: request === null ? [] : request.ids })
   }
