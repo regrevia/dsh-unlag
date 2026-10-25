@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, readFileSync, statSync, watch } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
 /**
  * One header button, three ways new code reaches the running app:
@@ -18,7 +18,13 @@ import { join } from 'node:path'
  * nothing, because the desktop shell treats a failed startup entry as fatal.
  */
 export const name = 'dsh-unlag'
-export const inject = { optional: ['hmr', 'webServer'] }
+/**
+ * Cordis has no optional injection: every key of an object declaration is read as a required
+ * service name, so `{ optional: [...] }` waits forever for a service called "optional". Declare
+ * only the web server, which any interface that can show the button has, and look the reload
+ * service up per use instead so a disabled reloader costs the plugin half, not the whole entry.
+ */
+export const inject = ['webServer']
 
 const LOG_PATH = join(homedir(), '.dsh', 'unlag-reload.log')
 /** Survives a module replacement, so a reload cannot leave a second watcher behind. */
@@ -108,7 +114,7 @@ function linkedRoots(baseDir) {
     const deps = { ...manifest.dependencies, ...manifest.devDependencies }
     for (const [name, spec] of Object.entries(deps)) {
       if (typeof spec !== 'string' || !/^(link|file):/u.test(spec)) continue
-      const path = join(baseDir, spec.replace(/^(link|file):/u, ''))
+      const path = resolve(baseDir, spec.replace(/^(link|file):/u, ''))
       if (existsSync(path)) roots.push(path)
       else log(`skip ${name}: ${path} is missing`)
     }
@@ -131,9 +137,13 @@ function worthReloading(filename) {
  * button (immediate). Neither ever replaces code while a turn is running, and neither re-enters.
  */
 function pluginReloader(ctx, config) {
-  const hmr = ctx.get('hmr')
-  const available =
-    hmr !== undefined && hmr !== null && typeof hmr.reconcileProfile === 'function' && typeof hmr.runExclusive === 'function'
+  /** HMR can start after this half, so ask per use instead of once at load. */
+  const hmrService = () => {
+    const hmr = ctx.get('hmr')
+    if (hmr === null || typeof hmr?.reconcileProfile !== 'function' || typeof hmr?.runExclusive !== 'function') return null
+    return hmr
+  }
+  const available = () => hmrService() !== null
   const idleOnly = config?.idleOnly !== false
   const debounce = Number.isFinite(config?.debounce) ? config.debounce : 300
 
@@ -155,7 +165,7 @@ function pluginReloader(ctx, config) {
   }
 
   /** Ask the HMR service to recompose; it throws rather than half-applying, so a catch is enough. */
-  const reload = async () => {
+  const reload = async (hmr) => {
     const result = await hmr.runExclusive(() => hmr.reconcileProfile([]))
     const warnings = Array.isArray(result?.warnings) ? result.warnings.length : 0
     const pending = Array.isArray(result?.pending) ? result.pending.length : 0
@@ -185,10 +195,12 @@ function pluginReloader(ctx, config) {
         timer = setTimeout(() => void flush(), wait)
         return
       }
+      const hmr = hmrService()
+      if (hmr === null) return
       deferrals = 0
       lastRun = Date.now()
       running = true
-      await reload()
+      await reload(hmr)
     } catch (error) {
       log(`reload failed, the previous code keeps running: ${error?.message ?? error}`)
     } finally {
@@ -216,7 +228,8 @@ function pluginReloader(ctx, config) {
    * @returns 'done' | 'busy' | 'unavailable' | 'failed'
    */
   const reloadNow = async () => {
-    if (!available) return 'unavailable'
+    const hmr = hmrService()
+    if (hmr === null) return 'unavailable'
     if (running) return 'busy'
     if (busy()) return 'busy'
     const wait = lastRun + MIN_INTERVAL_MS - Date.now()
@@ -230,7 +243,7 @@ function pluginReloader(ctx, config) {
     deferrals = 0
     lastRun = Date.now()
     try {
-      await reload()
+      await reload(hmr)
       return 'done'
     } catch (error) {
       log(`reload failed, the previous code keeps running: ${error?.message ?? error}`)
@@ -243,10 +256,8 @@ function pluginReloader(ctx, config) {
 
   /** Watch the development roots; a missing or unreadable root is logged, never fatal. */
   const startWatching = () => {
-    if (!available) {
-      log('plugin reload is unavailable: the hmr entry is not running')
-      return null
-    }
+    const hmr = hmrService()
+    if (hmr === null) return null
     const configured = Array.isArray(config?.roots) ? config.roots.filter((root) => typeof root === 'string') : []
     const roots = [...new Set([...configured, ...linkedRoots(hmr.baseDir ?? process.cwd()), ...DEFAULT_ROOTS])]
     const closers = []
@@ -270,7 +281,7 @@ function pluginReloader(ctx, config) {
     }
   }
 
-  return { reloadNow, startWatching }
+  return { reloadNow, startWatching, available }
 }
 
 /** Write one JSON answer; a response already gone must not throw into the caller. */
@@ -340,8 +351,27 @@ export function apply(ctx, config) {
     globalThis[ROUTES_KEY] = null
 
     const controller = pluginReloader(ctx, config ?? {})
+    /** Watching needs HMR; start as soon as it exists, drop the watcher when it goes away. */
+    const syncWatching = () => {
+      if (config?.plugins === 'off') return
+      if (controller.available() === false) {
+        closeAll(globalThis[WATCHER_KEY])
+        globalThis[WATCHER_KEY] = null
+        return
+      }
+      if (globalThis[WATCHER_KEY] !== null) return
+      globalThis[WATCHER_KEY] = controller.startWatching()
+    }
     if (config?.plugins === 'off') log('file watching is off')
-    else globalThis[WATCHER_KEY] = controller.startWatching()
+    else {
+      syncWatching()
+      if (globalThis[WATCHER_KEY] === null) log('plugin reload is unavailable: the hmr entry is not running')
+    }
+    if (typeof ctx.on === 'function') {
+      ctx.on('internal/service', (service) => {
+        if (service === 'hmr') syncWatching()
+      })
+    }
     globalThis[ROUTES_KEY] = serveButton(ctx, controller, config ?? {})
 
     ctx.on('dispose', () => {

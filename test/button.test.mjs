@@ -7,7 +7,14 @@ const check = (label, ok, extra = '') => {
 }
 
 // --- Config: validation never throws and defaults both switches on -----------------------------
-check('name/inject', name === 'dsh-unlag' && Array.isArray(inject.optional))
+// Cordis reads every key of an object declaration as a required service name, so the declaration
+// must stay a plain array: `{ optional: [...] }` leaves the entry waiting forever on "optional".
+check(
+  'name/inject is a plain service list',
+  name === 'dsh-unlag' && Array.isArray(inject) && inject.every((service) => typeof service === 'string'),
+  JSON.stringify(inject),
+)
+check('inject names only real services', inject.length === 1 && inject[0] === 'webServer')
 const v = (value) => Config['~standard'].validate(value)
 check('validate {} -> both on', JSON.stringify(v({}).value) === '{"reloadPlugins":true,"reloadInterface":true}')
 check('validate omitted -> both on', v(undefined).value.reloadPlugins === true)

@@ -93,13 +93,27 @@ check('node_modules file name ignored', afterNoModules === 0, `reloads=${afterNo
 check('node_modules dir ignored', afterNested === 0, `reloads=${afterNested}`)
 check('js triggers one reload', afterJs === 1, `reloads=${afterJs}`)
 
+// 4b. A profile link usually points outside the profile; watch it as given, not glued to baseDir.
+const profile = join(HOME, 'profile')
+const devRoot = join(HOME, 'dev', 'dsh-demo')
+mkdirSync(profile, { recursive: true })
+mkdirSync(devRoot, { recursive: true })
+writeFileSync(join(profile, 'package.json'), JSON.stringify({ dependencies: { 'dsh-demo': `link:${devRoot}` } }))
+const beforeLinked = reloads
+mod.apply(makeCtx({ hmrValue: { ...hmr, baseDir: profile } }), { debounce: 10 })
+await sleep(250)
+writeFileSync(join(devRoot, 'change.js'), 'export const c = 1\n')
+await sleep(300)
+check('an absolute link target is watched', reloads === beforeLinked + 1, `reloads=${reloads - beforeLinked}`)
+
 // 5. A busy agent defers instead of interrupting, and a stuck agent stops deferring.
 const busyCtx = makeCtx({ status: 'running' })
 mod.apply(busyCtx, { debounce: 10 })
 await sleep(200)
+const beforeBusy = reloads
 writeFileSync(join(root, 'busy.js'), 'export const b = 1\n')
 await sleep(300)
-check('busy agent defers', reloads === 1, `reloads=${reloads}`)
+check('busy agent defers', reloads === beforeBusy, `reloads=${reloads - beforeBusy}`)
 
 // 6. A reload while another is in flight does not re-enter.
 let concurrent = 0
@@ -127,9 +141,10 @@ check('no re-entrant reload', peak === 1, `peak=${peak}`)
 // 7. Disposing closes the watchers and leaves no handle behind.
 for (const c of [ctx, busyCtx, hostileCtx]) c.disposeAll()
 await sleep(150)
+const beforeDispose = reloads
 writeFileSync(join(root, 'after-dispose.js'), 'export const f = 1\n')
 await sleep(300)
-check('dispose stops reloads', reloads === 1, `reloads=${reloads}`)
+check('dispose stops reloads', reloads === beforeDispose, `reloads=${reloads - beforeDispose}`)
 check('no unhandled rejection', unhandled.length === 0, unhandled.join('; '))
 
 for (const c of cases) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.name}${c.detail ? `  (${c.detail})` : ''}`)
