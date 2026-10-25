@@ -108,11 +108,12 @@ const MAX_STARTUP_ROW_CHARS = 8192
  */
 const MAX_SCRIPT_BYTES = 24 * 1024 * 1024
 /**
- * The same bound for one whole startup list, so a list of large bodies cannot add up either. Two
- * measured profiles' worth: what a check keeps per body is the ids it names, never its text, so
- * the whole list's transient text is what this bounds.
+ * The same bound for one whole startup list. This one bounds work, not memory: a body's text is let
+ * go before the next one is read, so what the list costs is summed compile time, and this profile
+ * measured 158 ms for 15.7 MB. A bound this far above a real profile keeps a large profile
+ * rebuildable while still stopping a list from asking for minutes of compiling.
  */
-const MAX_TOTAL_SCRIPT_BYTES = 48 * 1024 * 1024
+const MAX_TOTAL_SCRIPT_BYTES = 256 * 1024 * 1024
 /**
  * How large the request that carries the list may be. The list itself is bounded (64 addresses of at
  * most 8 KB, plus JSON escaping), so a bound below that would refuse a sound startup list from a
@@ -1650,7 +1651,11 @@ function parseAsScript(body, name) {
  * @param fetchBody reads one script address and answers a response-like, or null when it cannot.
  * @param rows the startup script addresses, as the next document would request them.
  */
-export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_VERIFY_MS) {
+export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_VERIFY_MS, limits = null) {
+  // The bounds are the shipped ones; the argument exists so a test can work them at a size a test
+  // run can afford. Anything not a usable number falls back to the shipped bound.
+  const maxScriptBytes = Number.isFinite(limits?.maxScriptBytes) ? limits.maxScriptBytes : MAX_SCRIPT_BYTES
+  const maxTotalBytes = Number.isFinite(limits?.maxTotalBytes) ? limits.maxTotalBytes : MAX_TOTAL_SCRIPT_BYTES
   // A startup list is checked against the plugin set, so a set that cannot be read at all leaves
   // nothing to check against: approving anyway would vouch for addresses nothing backs, and the
   // next document would die on the first one that answers 404. An empty set is still a readable
@@ -1746,8 +1751,8 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
     }
     if (bytes.length === 0) return { status: 'blocked', reason: 'empty', detail: `${item.url} answers an empty body` }
     totalBytes += bytes.length
-    if (bytes.length > MAX_SCRIPT_BYTES || totalBytes > MAX_TOTAL_SCRIPT_BYTES) {
-      return { status: 'blocked', reason: 'size', detail: `${item.url} answers ${String(bytes.length)} bytes; this check reads at most ${String(MAX_SCRIPT_BYTES)} per script and ${String(MAX_TOTAL_SCRIPT_BYTES)} in all` }
+    if (bytes.length > maxScriptBytes || totalBytes > maxTotalBytes) {
+      return { status: 'blocked', reason: 'size', detail: `${item.url} answers ${String(bytes.length)} bytes; this check reads at most ${String(maxScriptBytes)} per script and ${String(maxTotalBytes)} in all` }
     }
     const text = bytes.toString('utf8')
     const complaint = parseAsScript(text, item.url)

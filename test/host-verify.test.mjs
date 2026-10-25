@@ -128,13 +128,18 @@ const summed = await verifyStartupRows(
   { rev: 'new', entries: manyRows.map((row, at) => ({ id: `@local/${'abc'[at]}`, url: row.replace(/^\/plugins\/\?\?/, 'plugins/??') })), batches: [] },
   async () => {
     servedLarge += 1
-    const body = 'abc'.split('').map((one) => registered(`@local/${one}`)).join('\n') + '\n/*' + 'x'.repeat(20 * 1024 * 1024) + '*/'
+    const body = 'abc'.split('').map((one) => registered(`@local/${one}`)).join('\n') + '\n/*' + 'x'.repeat(800) + '*/'
     return { status: 200, arrayBuffer: async () => body }
   },
   manyRows,
+  9000,
+  // The bounds are worked at a size a test run can afford; each body is under the one-script bound,
+  // so the refusal can only come from the summed one.
+  { maxScriptBytes: 3000, maxTotalBytes: 2000 },
 )
 check('a list of large bodies refuses once the whole list passes its bound', summed.status === 'blocked' && summed.reason === 'size', JSON.stringify(summed))
 check('that refusal stops reading the list early', servedLarge === 3, String(servedLarge))
+check('and the refusal counts the bytes it read', /bytes; this check reads at most/u.test(String(summed.detail)), String(summed.detail))
 
 
 // An address can name a whole plugin set at once: this profile's largest measured 2.8 KB, and one
@@ -228,6 +233,18 @@ try {
 }
 check('a row that cannot be read is refused, not thrown', entryThrew === null && entryRead?.status === 'blocked', String(entryThrew?.message ?? entryRead?.status))
 check('and the refusal names the list', entryRead?.reason === 'list', String(entryRead?.reason))
+
+// A body past the one-script bound is refused before it is compiled, and the refusal names both
+// bounds: a person reading the log learns what to change, not only that the press was held.
+const oneBig = await verifyStartupRows(
+  { rev: 'new', entries: [{ id: '@local/a', url: 'plugins/??@local/a/client.js&rev=old' }], batches: [] },
+  async () => ({ status: 200, arrayBuffer: async () => registered('@local/a') + '\n/*' + 'x'.repeat(800) + '*/' }),
+  [frozenRow],
+  9000,
+  { maxScriptBytes: 700, maxTotalBytes: 3000 },
+)
+check('a body past the one-script bound is refused as size', oneBig.status === 'blocked' && oneBig.reason === 'size', JSON.stringify(oneBig))
+check('and that refusal names the per-script bound', String(oneBig.detail).includes('700'), String(oneBig.detail))
 
 // The measure this bound is set from: this app's own profile serves 15.7 MB across three bundles,
 // the largest 9.2 MB. Loosening the bound past what a profile needs is what let one check hold
