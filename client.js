@@ -15,8 +15,8 @@ window.__ModuleLoader__.load({
      * repeating one generic sentence.
      */
     const REASONS = zh
-      ? { list: '读不到启动信息', slow: '启动信息读得太慢', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', verify: '插件后端没有应答' }
-      : { list: 'startup info is unavailable', slow: 'the startup list answered too slowly', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete', verify: 'the plugin is not answering' };
+      ? { list: '读不到启动信息', slow: '启动信息读得太慢', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', size: '启动脚本太大', verify: '插件后端没有应答' }
+      : { list: 'startup info is unavailable', slow: 'the startup list answered too slowly', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete', size: 'a startup script is too large', verify: 'the plugin is not answering' };
 
     /** The last reason a readiness check refused for, or null after a check that passed. */
     let holdReason = null;
@@ -244,6 +244,7 @@ window.__ModuleLoader__.load({
       missing: 'script', // ui-copy-ignore
       network: 'script', // ui-copy-ignore
       parse: 'parse', // ui-copy-ignore
+      size: 'script', // ui-copy-ignore
       register: 'plugin', // ui-copy-ignore
       slow: 'slow', // ui-copy-ignore
       dependencies: 'covers',

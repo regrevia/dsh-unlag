@@ -61,6 +61,13 @@ const wrong = table({ body: registered('@local/other') })
 const mismatch = await verifyStartup(wrong, [frozenRow])
 check('a served body that misses its plugin still refuses', mismatch.status === 'blocked', JSON.stringify(mismatch))
 
+// A body far larger than any real bundle is refused instead of read and compiled in this process:
+// a request must not be able to make one check hold an unbounded amount of text.
+const huge = table({ body: registered('@local/a') + '\n' + '/*' + 'x'.repeat(8 * 1024 * 1024) + '*/' })
+const tooBig = await verifyStartup(huge, [frozenRow])
+check('an oversized startup script refuses instead of being compiled', tooBig.status === 'blocked' && tooBig.reason === 'size', JSON.stringify(tooBig))
+check('the refusal says how much it read', /bytes/.test(String(tooBig.detail)), String(tooBig.detail))
+
 // A list whose addresses each answer slowly is bounded as a whole: a press must not wait past the
 // moment the page stops waiting for the verdict.
 const { verifyStartupRows } = await import('../index.js')
@@ -78,6 +85,22 @@ const slow = await verifyStartupRows(
 )
 check('a list read slower than the page waits refuses instead of hanging', slow.status === 'blocked' && slow.reason === 'slow', JSON.stringify(slow))
 check('and the slow list stops being read once its time is up', slowReads === 1, String(slowReads))
+
+// The same bound holds for a whole list: several large bodies cannot add up past it either.
+let servedLarge = 0
+const manyRows = [frozenRow, '/plugins/??@local/b/client.js&rev=old', '/plugins/??@local/c/client.js&rev=old', '/plugins/??@local/d/client.js&rev=old', '/plugins/??@local/e/client.js&rev=old']
+const summed = await verifyStartupRows(
+  { rev: 'new', entries: manyRows.map((row, at) => ({ id: `@local/${'abcde'[at]}`, url: row.replace(/^\/plugins\/\?\?/, 'plugins/??') })), batches: [] },
+  async () => {
+    servedLarge += 1
+    const body = 'abcde'.split('').map((one) => registered(`@local/${one}`)).join('\n') + '\n/*' + 'x'.repeat(7 * 1024 * 1024) + '*/'
+    return { status: 200, arrayBuffer: async () => body }
+  },
+  manyRows,
+)
+check('a list of large bodies refuses once the whole list passes its bound', summed.status === 'blocked' && summed.reason === 'size', JSON.stringify(summed))
+check('that refusal stops reading the list early', servedLarge === 5, String(servedLarge))
+
 
 // Garbage in the row is a refusal, not a throw.
 const junk = await verifyStartup(table(), [''])

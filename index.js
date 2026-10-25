@@ -91,6 +91,14 @@ const DEFAULT_ROOTS = [join(homedir(), '.dsh', 'plugins')]
 const MAX_DEFERRALS = 40
 const MAX_STARTUP_ROWS = 64
 const MAX_STARTUP_ROW_CHARS = 4096
+/**
+ * The largest one startup script may be before a check refuses it. A real client bundle is far
+ * below this; a body past it is either a mistake or an attempt to make a check read (and compile)
+ * an unbounded amount of text inside the process that owns every running turn.
+ */
+const MAX_SCRIPT_BYTES = 8 * 1024 * 1024
+/** The same bound for one whole startup list, so a list of large bodies cannot add up either. */
+const MAX_TOTAL_SCRIPT_BYTES = 32 * 1024 * 1024
 
 /**
  * The most plugin ids one bundle address may name. A real startup list is far below this; a made-up
@@ -1468,6 +1476,7 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
   const listed = new Set()
   const bodies = []
   const began = Date.now()
+  let totalBytes = 0
   for (const item of wanted) {
     if (Date.now() - began > budgetMs) {
       return { status: 'blocked', reason: 'slow', detail: 'the startup list took longer than this check waits' }
@@ -1485,6 +1494,10 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
     }
     const bytes = Buffer.from(await response.arrayBuffer())
     if (bytes.length === 0) return { status: 'blocked', reason: 'empty', detail: `${item.url} answers an empty body` }
+    totalBytes += bytes.length
+    if (bytes.length > MAX_SCRIPT_BYTES || totalBytes > MAX_TOTAL_SCRIPT_BYTES) {
+      return { status: 'blocked', reason: 'size', detail: `${item.url} answers ${String(bytes.length)} bytes; this check reads at most ${String(MAX_SCRIPT_BYTES)} per script and ${String(MAX_TOTAL_SCRIPT_BYTES)} in all` }
+    }
     const text = bytes.toString('utf8')
     const complaint = parseAsScript(text, item.url)
     if (complaint !== null) return { status: 'blocked', reason: 'parse', detail: `${item.url}: ${complaint}` }
