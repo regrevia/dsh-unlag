@@ -87,6 +87,11 @@ contract.push(['state DELETE', await status('/dsh-unlag/state', { method: 'DELET
 contract.push(['graph PUT', await status('/dsh-unlag/graph', { method: 'PUT' }), 405])
 contract.push(['reload without header', await status('/dsh-unlag/reload', { method: 'POST' }), 403])
 contract.push(['verify without header', await status('/dsh-unlag/verify', { method: 'POST' }), 403])
+// The button header is one half of the gate; the other half is that a page on another origin can
+// never send it, so the same request carrying a foreign origin must be refused too.
+contract.push(['report without header', await status('/dsh-unlag/report', { method: 'POST' }), 403])
+contract.push(['verify from another origin', await status('/dsh-unlag/verify', { method: 'POST', headers: { 'x-dsh-unlag': '1', origin: 'https://evil.example', 'content-type': 'application/json' }, body: '{"rows":[]}' }), 403])
+contract.push(['report from another origin', await status('/dsh-unlag/report', { method: 'POST', headers: { origin: 'https://evil.example', 'content-type': 'application/json' }, body: '{"kind":"done"}' }), 403])
 const contractHeld = contract.every(([, got, want]) => got === want)
 
 // The shim's one promise, asked of the running app: a document that replays the startup list the

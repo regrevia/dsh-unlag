@@ -72,7 +72,8 @@ dsh plugin install dsh-unlag
 ## 排错
 
 - 日志：`~/.dsh/unlag-reload.log`，换代码／跳过／被拦各一行，含原因。
-- 演练：`npm run live-smoke` 不按按钮，只按当前启动清单把下一个文档要加载的字节在沙箱里跑一遍，看每个插件是否都注册（`rehearsal.ok`），并当场核对两件事：写死的旧版本号仍然拿得到现在的字节（`shim.staleRev`），按下前会做的那个判断此刻是否放行（`pressPath`）——它证明的是「按下去之后新页面能起来、按钮现在真的可按」，不换任何代码。
+- 演练：`npm run live-smoke` 不按按钮，只按当前启动清单把下一个文档要加载的字节在沙箱里跑一遍，看每个插件是否都注册（`rehearsal.ok`），并当场核对三件事：写死的旧版本号仍然拿得到现在的字节（`shim.staleRev`），按下前会做的那个判断此刻是否放行（`pressPath`），以及那个判断本身会不会误拒（`verify.sound` 应为 `ok`、`verify.broken` 应为 `blocked`、`verify.refuses` 与 `verify.accepts` 为 `true`）——它证明的是「按下去之后新页面能起来、按钮现在真的可按、拦住的是坏清单」，不换任何代码。
+- 同一支脚本还现场核对路由的守门规则（`contract`）：读路由只认读、写路由缺 `x-dsh-unlag` 头或来自别的源一律 403、未知路径 404。它用的是和页面一样的请求，所以这条规则在运行中的 App 上是否还在，一眼可见。
 - 状态：`GET /dsh-unlag/state` → `{"version":"<当前版本>","code":"<index.js 写入时间>","plugins":true,"page":true,"shim":{...}}`。`code` 用来分清「版本号没刷」和「旧代码真的还在跑」。
 - 重建后的日志带起页面代次：`interface rebuilt; the page runs the plugins as served now (page <rev>)`，据此判断新文档加载的是新脚本还是旧脚本。
 
