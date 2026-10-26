@@ -797,5 +797,121 @@ check(
   check('and the state route carries it', JSON.parse(carried.body).boot?.rev === 'live', carried.body)
 }
 
+// --- the startup snapshot a page boots with ---------------------------------------------------
+// The shell freezes the startup list per window, so the bytes behind those addresses are written
+// down when the page reports them. A rebuild is then allowed only while the page still runs the
+// generation it booted with; otherwise the frozen main and the chunks the shim serves now would be
+// two generations in one document.
+function bootJson(urls, rev = 'old') {
+  return JSON.stringify({ boot: { rev, entries: 1, batches: urls.map((url) => ({ url })) } })
+}
+
+async function postJson(route, document) {
+  const res = fakeRes()
+  const listeners = {}
+  const req = {
+    method: 'POST',
+    headers: { 'x-dsh-unlag': '1' },
+    on: (event, fn) => {
+      ;(listeners[event] ??= []).push(fn)
+    },
+    destroy: () => {},
+  }
+  setImmediate(() => {
+    for (const fn of listeners.data ?? []) fn(Buffer.from(document))
+    for (const fn of listeners.end ?? []) fn()
+  })
+  await route(req, res)
+  return res
+}
+
+/** Answer with the newest frozen record once the capture the report started has settled. */
+async function settledBoot(routes) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const res = fakeRes()
+    routes.get('/dsh-unlag/state')({ method: 'GET' }, res)
+    const body = JSON.parse(res.body)
+    if (body.bootSnapshot !== undefined && body.bootSnapshot !== null && body.bootSnapshot.pending !== true) return body.bootSnapshot
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  return null
+}
+
+const frozenUrl = '/plugins/??@local/a/client.js&rev=old'
+let bootGraph = { rev: 'old', entries: [{ id: '@local/a', rev: 'old', url: frozenUrl }], batches: [{ url: frozenUrl, entries: ['@local/a'], rev: 'old' }] }
+const booted = mount(
+  {},
+  {
+    clientModules: {
+      graph: () => bootGraph,
+      fetchBundle: async (request) => {
+        const url = String(request?.url ?? request)
+        // Only the generation serving now answers, exactly like a real table after a swap.
+        if (!url.includes('&rev=new') && !url.includes('&rev=old')) return new Response('', { status: 404 })
+        return new Response('window.__ModuleLoader__.load({ id: "@local/a", factory() {} })', { status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8' } })
+      },
+    },
+  },
+)
+const report = await postJson(booted.routes.get('/dsh-unlag/boot'), bootJson([frozenUrl], 'old'))
+check('a page can report the list it booted with', JSON.parse(report.body).status === 'done', report.body)
+const frozen = await settledBoot(booted.routes)
+check('the report freezes the bytes behind that list', frozen !== null && frozen.complete === true, JSON.stringify(frozen))
+check('and records what generation they belong to', frozen?.rev === 'old', JSON.stringify(frozen?.rev))
+
+// The set was replaced after that page booted, but the newer body still registers every id the
+// frozen list names: the page rebuilds onto the newer code, which is the update being pressed.
+bootGraph = { rev: 'new', entries: [{ id: '@local/a', rev: 'new', url: '/plugins/??@local/a/client.js&rev=new' }], batches: [{ url: '/plugins/??@local/a/client.js&rev=new', entries: ['@local/a'], rev: 'new' }] }
+const sameIdsRes = await postJson(booted.routes.get('/dsh-unlag/verify'), JSON.stringify({ rows: [frozenUrl] }))
+check('a newer body that registers the same ids still rebuilds', verdict(sameIdsRes.body) === 'ok', sameIdsRes.body)
+
+// The newer code dropped an id the frozen body loads while the list itself is unchanged: the
+// rebuilt document would require a module nothing registers, so the press is held.
+let helperServed = true
+const stableGraph = { rev: 'old', entries: [{ id: '@local/a', rev: 'old', url: frozenUrl }], batches: [{ url: frozenUrl, entries: ['@local/a'], rev: 'old' }] }
+const renamedBody = mount(
+  {},
+  {
+    clientModules: {
+      graph: () => stableGraph,
+      fetchBundle: async () =>
+        new Response(
+          helperServed
+            ? 'window.__ModuleLoader__.load({ id: "@local/a", factory() {} }); window.__ModuleLoader__.load({ id: "@local/helper", factory() {} })'
+            : 'window.__ModuleLoader__.load({ id: "@local/a", factory() {} })',
+          { status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8' } },
+        ),
+    },
+  },
+)
+await postJson(renamedBody.routes.get('/dsh-unlag/boot'), bootJson([frozenUrl], 'old'))
+await settledBoot(renamedBody.routes)
+helperServed = false
+const renamedRes = await postJson(renamedBody.routes.get('/dsh-unlag/verify'), JSON.stringify({ rows: [frozenUrl] }))
+check('a newer body that drops an id the page loads is held', verdict(renamedRes.body) === 'blocked' && String(renamedRes.body).includes('"boot"'), renamedRes.body)
+check('and names the id it no longer registers', String(renamedRes.body).includes('@local/helper'), renamedRes.body)
+
+// A list the app cannot read in full is not a shorter list: nothing about that generation was
+// proven, so the rebuild is held rather than allowed on the rows that happened to answer.
+let bootCaptureAnswers = false
+const unreadable = mount(
+  {},
+  {
+    clientModules: {
+      graph: () => stableGraph,
+      fetchBundle: async () =>
+        bootCaptureAnswers
+          ? new Response('window.__ModuleLoader__.load({ id: "@local/a", factory() {} })', { status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8' } })
+          : new Response('', { status: 404 }),
+    },
+  },
+)
+await postJson(unreadable.routes.get('/dsh-unlag/boot'), bootJson([frozenUrl], 'old'))
+const partial = await settledBoot(unreadable.routes)
+bootCaptureAnswers = true
+check('a script the app could not read leaves the snapshot incomplete', partial !== null && partial.complete === false, JSON.stringify(partial))
+const unprovenRes = await postJson(unreadable.routes.get('/dsh-unlag/verify'), JSON.stringify({ rows: [frozenUrl] }))
+check('a rebuild with no complete snapshot is held', verdict(unprovenRes.body) === 'blocked' && String(unprovenRes.body).includes('"boot"'), unprovenRes.body)
+
 console.log(out.join('\n'))
 process.exit(process.exitCode ?? 0)

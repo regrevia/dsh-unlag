@@ -39,6 +39,8 @@ const RELOAD_TIMEOUT_MS = 20_000
 const RELOAD_ANSWER_MS = 10_000
 /** The longest batch address kept from a page's startup report; whole or refused, never cut. */
 const MAX_BOOT_URL = 16 * 1024
+/** How long a press waits for the boot snapshot the page's own report started. */
+const MAX_BOOT_PROOF_WAIT_MS = 800
 
 
 const LOG_PATH = join(homedir(), '.dsh', 'unlag-reload.log')
@@ -86,7 +88,7 @@ const BUTTON_HEADER = 'x-dsh-unlag'
  * shell pins the list when a window starts, so the only place the truth about a live document
  * exists is inside that document; this is where it is kept for a check to read.
  */
-const liveBoot = { current: null }
+const liveBoot = { current: null, snapshot: null, capture: 0 }
 const CODE_EXTENSIONS = new Set(['.js', '.mjs', '.cjs'])
 /** Build output and dependency trees change without the source a developer edits changing. */
 const IGNORED_PATH = /(^|\/)(node_modules|\.git|\.cache|dist|build|coverage)([./]|$)/u
@@ -1133,6 +1135,72 @@ function readJsonBody(req, limit = MAX_LIST_BODY_BYTES) {
       finish(null)
     }
   })
+}
+
+/**
+ * Freeze the scripts one startup list resolves to, while the page that booted with it is still the
+ * only document running. The desktop shell pins the list per window, so those addresses keep being
+ * requested after the plugin set behind them has changed; the digest recorded here is the only
+ * record of what that window actually booted from. A list that cannot be read in full is recorded
+ * as incomplete rather than as a shorter list: a shorter one would vouch for a generation nobody saw.
+ * @param clientModules the module table that answers bundle requests.
+ * @param boot the startup list the page reported.
+ * @returns the snapshot, or null when the table cannot answer at all.
+ */
+async function captureBootSnapshot(clientModules, boot) {
+  if (typeof clientModules?.fetchBundle !== 'function') return null
+  const urls = []
+  for (const url of Array.isArray(boot?.urls) ? boot.urls.slice(0, MAX_STARTUP_ROWS) : []) {
+    if (typeof url === 'string' && url !== '') urls.push(url)
+  }
+  let revision = null
+  let entries = []
+  try {
+    const graph = clientModules.graph?.()
+    revision = typeof graph?.rev === 'string' ? graph.rev : null
+    entries = (Array.isArray(graph?.entries) ? graph.entries : [])
+      .map((entry) => (typeof entry?.id === 'string' ? entry.id : null))
+      .filter((id) => id !== null)
+      .slice(0, MAX_STARTUP_ROWS)
+  } catch {
+    revision = null
+    entries = []
+  }
+  const rows = []
+  let bytes = 0
+  for (const url of urls) {
+    try {
+      const response = await readStartupScript(clientModules, url)
+      if (response?.status !== 200) {
+        rows.push({ url, unreadable: true })
+        continue
+      }
+      const buffer = Buffer.from(await response.arrayBuffer())
+      if (bytes + buffer.length > MAX_TOTAL_SCRIPT_BYTES) {
+        rows.push({ url, unreadable: true })
+        continue
+      }
+      bytes += buffer.length
+      const text = buffer.toString('utf8')
+      rows.push({
+        url,
+        bytes: buffer.length,
+        digest: createHash('sha256').update(buffer).digest('hex').slice(0, 16),
+        ids: [...registeredIds(text)],
+        required: [...requiredIds(text)],
+      })
+    } catch (error) {
+      log(`cannot freeze one startup script: ${oneLine(error?.message ?? error)}`)
+      rows.push({ url, unreadable: true })
+    }
+  }
+  return {
+    rev: revision,
+    entries,
+    rows,
+    complete: rows.length === urls.length && rows.every((row) => row.unreadable !== true && typeof row.digest === 'string'),
+    at: Date.now(),
+  }
 }
 
 /**
@@ -2241,7 +2309,67 @@ export async function verifyStartup(clientModules, rows) {
   if (answer?.status === 'ok' && (after !== graph || servedRevisionOf(after) !== servedRevisionOf(graph))) {
     return { status: 'blocked', reason: 'generation', detail: 'the plugin set was replaced while its scripts were read' }
   }
+  if (answer?.status === 'ok') {
+    const proof = await bootGenerationProof(answer)
+    if (proof !== null) return proof
+  }
   return answer
+}
+
+/**
+ * Whether the frozen generation a page booted with can still become one document after a rebuild.
+ *
+ * The shell freezes the startup list per window, so after a plugin was swapped those addresses are
+ * answered with today's bytes: the main script comes from the frozen list and each chunk from
+ * whatever the table serves now. That is the designed path and it is sound only while the newer body
+ * still registers what the older one expects to find — the ids it loaded and the modules it required.
+ * The snapshot taken when the page reported its list is what those expectations are read from; a
+ * frozen list whose record is missing, incomplete, or whose ids the newer bytes no longer provide is
+ * a document that boots half way, so the press is held before it can take the running turns with it.
+ * @param answer the startup check's own verdict, over the rows the page reported.
+ * @returns a refusal, or null when the two generations can meet in one document.
+ */
+async function bootGenerationProof(answer) {
+  // A window that never reported its list is not proven wrong; its addresses are checked as before.
+  if (liveBoot.current === null) return null
+  let snapshot = liveBoot.snapshot
+  if (snapshot !== null && typeof snapshot === 'object' && snapshot.pending === true) {
+    // The capture is a handful of script reads; the press waits for them rather than treating a
+    // record that is still being written as one that disagrees.
+    const deadline = Date.now() + MAX_BOOT_PROOF_WAIT_MS
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+      snapshot = liveBoot.snapshot
+      if (!(snapshot !== null && typeof snapshot === 'object' && snapshot.pending === true)) break
+    }
+  }
+  if (snapshot === null || typeof snapshot !== 'object' || snapshot.pending === true) {
+    return { status: 'blocked', reason: 'boot', detail: 'the scripts this page booted with could not be frozen' }
+  }
+  if (snapshot.complete !== true) {
+    return { status: 'blocked', reason: 'boot', detail: 'the scripts this page booted with could not all be read when it booted' }
+  }
+  /**
+   * A body the app serves now is allowed to differ from the frozen one — that is the update being
+   * pressed. What it may not do is drop an id the frozen document loads: the list this window boots
+   * with names those ids, and a newer body that registers fewer of them leaves the rebuilt document
+   * requiring a module nothing provides. Modules the older body required are not checked: after the
+   * rebuild it is the newer body that runs, and its own dependencies were checked against the table.
+   */
+  const known = new Map((Array.isArray(snapshot.rows) ? snapshot.rows : []).map((row) => [row.url, row]))
+  const scripts = Array.isArray(answer?.scripts) ? answer.scripts : []
+  const currentIds = new Set()
+  for (const script of scripts) for (const id of Array.isArray(script?.ids) ? script.ids : []) currentIds.add(id)
+  for (const script of scripts) {
+    const row = known.get(script?.url)
+    if (row === undefined || row.unreadable === true || typeof row.digest !== 'string') continue
+    if (script?.digest === row.digest) continue
+    for (const id of Array.isArray(row.ids) ? row.ids : []) {
+      if (currentIds.has(id)) continue
+      return { status: 'blocked', reason: 'boot', detail: `the newer scripts no longer register ${oneLine(String(id))}, which this page loads` }
+    }
+  }
+  return null
 }
 
 /** The sentinel a read that ran past its time resolves to: a value, never an error. */
@@ -2374,7 +2502,7 @@ function serveButton(ctx, controller, config) {
           // answers a method it does not serve.
           const method = String(req?.method ?? 'GET').toUpperCase()
           if (method !== 'GET' && method !== 'HEAD') return sendJson(res, 405, { status: 'method' })
-          sendJson(res, 200, { version: VERSION, code: CODE_STAMP, plugins: switches.plugins, page: switches.page, saved: switches.saved, shim: bundleShimStatus(ctx), operation: controller.operation?.() ?? null, boot: liveBoot.current })
+          sendJson(res, 200, { version: VERSION, code: CODE_STAMP, plugins: switches.plugins, page: switches.page, saved: switches.saved, shim: bundleShimStatus(ctx), operation: controller.operation?.() ?? null, boot: liveBoot.current, bootSnapshot: liveBoot.snapshot })
         } catch (error) {
           log(`cannot describe this copy of the plugin: ${error?.message ?? error}`)
           sendJson(res, 500, { status: 'error' })
@@ -2435,6 +2563,39 @@ function serveButton(ctx, controller, config) {
             at: Date.now(),
           }
           log(`the page reported the startup list it was frozen with (${String(urls.length)} script address(es))`)
+          /**
+           * The list is frozen per window and those addresses keep being requested after the plugin
+           * set behind them changed, so the bytes it resolves to are written down now, in the same
+           * turn: reading them later would capture whatever generation happened to be serving then.
+           * The capture is left to finish on its own; a press that needs it waits for it below.
+           */
+          try {
+            liveBoot.snapshot = null
+            const reportStamp = liveBoot.capture + 1
+            liveBoot.capture = reportStamp
+            const clientModules = ctx.get('clientModules')
+            void captureBootSnapshot(clientModules, { urls })
+              .then((snapshot) => {
+                // A newer report owns the record: this one describes a window that is no longer
+                // the document asking for a rebuild.
+                if (liveBoot.capture !== reportStamp) return
+                liveBoot.snapshot = snapshot
+                if (snapshot !== null) {
+                  log(`froze the startup scripts the page booted with (${String(snapshot.rows.filter((row) => row.unreadable !== true).length)} of ${String(snapshot.rows.length)} readable, ${snapshot.complete ? 'complete' : 'incomplete'})`)
+                }
+              })
+              .catch((error) => {
+                if (liveBoot.capture !== reportStamp) return
+                liveBoot.snapshot = null
+                log(`cannot freeze the startup scripts the page booted with: ${oneLine(error?.message ?? error)}`)
+              })
+            // Set before the capture resolves: a check that reads it sees "not yet known" rather
+            // than the previous window's generation.
+            liveBoot.snapshot = { pending: true }
+          } catch (error) {
+            log(`cannot freeze the startup scripts the page booted with: ${oneLine(error?.message ?? error)}`)
+            liveBoot.snapshot = null
+          }
           sendJson(res, 200, { status: 'done' })
         } catch (error) {
           log(`cannot record the page's startup list: ${error?.message ?? error}`)

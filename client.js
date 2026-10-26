@@ -15,8 +15,8 @@ window.__ModuleLoader__.load({
      * repeating one generic sentence.
      */
     const REASONS = zh
-      ? { list: '读不到启动信息', slow: '启动信息读得太慢', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', size: '启动脚本太大', verify: '插件后端没有应答', screen: '页面状态读不到', busy: '另一次刷新还在进行', dependencies: '插件依赖还没有运行', missing: '启动清单里有插件已经不见了', network: '读取插件时出错', register: '插件没有登记自己', entries: '启动清单里的插件已卸载，重启应用后再刷新', generation: '插件刚被换过，再按一次刷新', url: '启动信息太长，读不全' }
-      : { list: 'startup info is unavailable', slow: 'the startup list answered too slowly', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete', size: 'a startup script is too large', verify: 'the plugin is not answering', screen: 'the page state cannot be read', busy: 'another rebuild is already running', dependencies: 'a plugin dependency is not running', missing: 'a plugin in the startup list is gone', network: 'the plugins could not be read', register: 'a plugin did not register itself', entries: 'a plugin in the startup list was uninstalled, so restart the app before rebuilding', generation: 'the plugins were replaced a moment ago, press again', url: 'the startup info is too long to keep' };
+      ? { list: '读不到启动信息', slow: '启动信息读得太慢', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', size: '启动脚本太大', verify: '插件后端没有应答', screen: '页面状态读不到', busy: '另一次刷新还在进行', dependencies: '插件依赖还没有运行', missing: '启动清单里有插件已经不见了', network: '读取插件时出错', register: '插件没有登记自己', entries: '启动清单里的插件已卸载，重启应用后再刷新', generation: '插件刚被换过，再按一次刷新', boot: '页面用的还是应用启动时那一版脚本，重新打开应用后再刷新', url: '启动信息太长，读不全' }
+      : { list: 'startup info is unavailable', slow: 'the startup list answered too slowly', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete', size: 'a startup script is too large', verify: 'the plugin is not answering', screen: 'the page state cannot be read', busy: 'another rebuild is already running', dependencies: 'a plugin dependency is not running', missing: 'a plugin in the startup list is gone', network: 'the plugins could not be read', register: 'a plugin did not register itself', entries: 'a plugin in the startup list was uninstalled, so restart the app before rebuilding', generation: 'the plugins were replaced a moment ago, press again', boot: 'the page still runs the scripts the app started with, so reopen the app before rebuilding', url: 'the startup info is too long to keep' };
 
     /** The last reason a readiness check refused for, or null after a check that passed. */
     let holdReason = null;
@@ -374,7 +374,7 @@ window.__ModuleLoader__.load({
       register: 'plugin', // ui-copy-ignore
       slow: 'slow', // ui-copy-ignore
       dependencies: 'covers',
-      entries: 'entries', generation: 'generation',
+      entries: 'entries', generation: 'generation', boot: 'boot',
       list: 'list', // ui-copy-ignore
     };
 
