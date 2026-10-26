@@ -21,6 +21,9 @@ window.__ModuleLoader__.load({
     /** The last reason a readiness check refused for, or null after a check that passed. */
     let holdReason = null;
 
+    /** The exact state that held the last check, when the reason alone would not tell. */
+    let holdDetail = null;
+
     /** Record why a rebuild is held and answer false for the check that asked. */
     function held(reason) {
       holdReason = reason;
@@ -350,6 +353,7 @@ window.__ModuleLoader__.load({
       }
       if (data !== null && typeof data === 'object' && data.status === 'ok') {
         holdReason = null;
+        holdDetail = null;
         return 'ok';
       }
       // The refusal's wording is the app's, read as a key into a table of gates: a key the table does
@@ -431,6 +435,7 @@ window.__ModuleLoader__.load({
       const verdict = await hostVerifyStartup(sources.map((source) => source.url.toString()));
       if (verdict !== 'ok') return false;
       holdReason = null;
+      holdDetail = null;
       return true;
     }
 
@@ -556,6 +561,7 @@ window.__ModuleLoader__.load({
       const verdict = await hostVerifyStartup(scripts);
       if (verdict !== 'ok') return false;
       holdReason = null;
+      holdDetail = null;
       return true;
     }
 
@@ -695,6 +701,7 @@ window.__ModuleLoader__.load({
      */
     async function startupLooksServable() {
       holdReason = null;
+      holdDetail = null;
       // Two repeats: the app re-composes its bundles while it starts and after a plugin swap, and
       // a list read in the middle of that can answer for a generation that is already gone.
       for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -831,24 +838,22 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * A draft attachment lives only in this document. The composer keeps it in its own state, not
-     * always in the markup: the file picker clears its input as soon as it takes the files, and a
-     * session the person left keeps its draft away from the page. Reading the service that owns
-     * that state is the only answer that covers all three, with the markup as a fallback for a
-     * page whose service cannot be reached.
-     * @returns true when the composer still holds something that was never sent.
+     * What the composer still holds that was never sent, if anything. The answer names the piece
+     * of state that held the rebuild: a check that guesses is worse than one that says which
+     * reading refused, because a false hold can then be traced to the exact field that lied.
+     * @returns the name of the holding state, or null when nothing is held.
      */
-    function draftHasAttachments() {
+    function draftAttachmentReason() {
       try {
         const conversation = appContext?.get?.('conversation');
         if (conversation !== null && conversation !== undefined) {
-          // Files picked into the draft, still uploading, or on their way out in a send that has
+          // Files picked into this draft, still uploading, or on their way out in a send that has
           // not settled: each one exists only here until the app keeps it.
-          if ((conversation.draftAttachments?.size ?? 0) > 0) return true;
-          if ((conversation.pendingFileUploads?.size ?? 0) > 0) return true;
-          if ((conversation.fileUploadOperations?.size ?? 0) > 0) return true;
+          if ((conversation.draftAttachments?.size ?? 0) > 0) return 'draft';
+          if ((conversation.pendingFileUploads?.size ?? 0) > 0) return 'uploading';
+          if ((conversation.fileUploadOperations?.size ?? 0) > 0) return 'uploading';
           const uploads = conversation.fileUploads?.getSnapshot?.() ?? conversation.fileUploads ?? {};
-          if (Object.keys(uploads).length > 0) return true;
+          if (Object.keys(uploads).length > 0) return 'upload';
           /**
            * A draft belongs to the session its composer was mounted for, and leaving that session
            * does not throw the draft away: the composer keeps it, attachments included, so the
@@ -863,29 +868,46 @@ window.__ModuleLoader__.load({
             try {
               const shell = shells?.shell?.(session.id);
               if (shell === null || shell === undefined) continue;
-              if ((shell.snapshot?.attachmentIds?.length ?? 0) > 0) return true;
-              if ((shell.detachedDrafts?.size ?? 0) > 0) return true;
-              if ((shell.failedDetached?.size ?? 0) > 0) return true;
-              if ((shell.attachmentFlights?.size ?? 0) > 0) return true;
+              if ((shell.snapshot?.attachmentIds?.length ?? 0) > 0) return 'composer';
+              if ((shell.attachmentFlights?.size ?? 0) > 0) return 'sending';
+              // A retained send without attachments carries text only; counting the record itself
+              // would hold every queued message as if it were a file.
+              for (const record of shell.detachedDrafts?.values?.() ?? []) {
+                if ((record?.attachmentIds?.length ?? 0) > 0) return 'sending';
+              }
+              for (const record of shell.failedDetached?.values?.() ?? []) {
+                if ((record?.attachmentIds?.length ?? 0) > 0) return 'sending';
+              }
             } catch {
               // One session whose composer cannot be read does not make the others empty; its own
               // composer still answers below through the markup fallback when it can.
             }
           }
-          return false;
+          // The service answered, so the markup is not a better witness: images already sent stay
+          // in the transcript with their preview addresses, and treating those as drafts held every
+          // rebuild after a picture was ever sent.
+          return null;
         }
       } catch {
         // The service answers nothing readable; the markup below is still worth a look.
       }
       try {
-        if (document.querySelectorAll?.('img[src^="blob:"]')?.length > 0) return true;
+        // A picker that still holds files is the one markup fact that cannot be a transcript.
         for (const picker of document.querySelectorAll?.('input[type="file"]') ?? []) {
-          if ((picker?.files?.length ?? 0) > 0) return true;
+          if ((picker?.files?.length ?? 0) > 0) return 'picker';
         }
-        return false;
+        return null;
       } catch {
-        return false;
+        return null;
       }
+    }
+
+    /**
+     * Whether a draft still holds something unsent, for the caller that only needs the decision.
+     * @returns true when the composer still holds something that was never sent.
+     */
+    function draftHasAttachments() {
+      return draftAttachmentReason() !== null;
     }
 
     /**
@@ -901,9 +923,11 @@ window.__ModuleLoader__.load({
        * document, and a throw here would end the press as a failure with no reason on screen, so
        * an unreadable page holds the rebuild and says so.
        */
+      holdDetail = null;
       try {
         if (screenHasOpenWindow()) return 'dialog';
-        if (draftHasAttachments()) return 'attachments';
+        holdDetail = draftAttachmentReason();
+        if (holdDetail !== null) return 'attachments';
         await commitFocusedField();
         const ready = await otherPluginsAreReady();
         if (!ready || stillHeldBack()) return 'unsaved';
@@ -1158,14 +1182,19 @@ window.__ModuleLoader__.load({
           const reason = await prepareInterface();
           if (reason !== null) {
             // The log keeps the exact check that refused, so a held press can be explained later.
-            const gate = reason === 'blocked' && holdReason !== null ? `blocked:${holdReason}` : reason;
+            const gate = reason === 'blocked' && holdReason !== null
+              ? `blocked:${holdReason}`
+              : reason === 'attachments' && holdDetail !== null
+                ? `attachments:${holdDetail}`
+                : reason;
             report('held', replaced ? `applied:${gate}` : gate);
             return stop(reason, replaced);
           }
           // The checks above can take a moment; a file can be picked into the draft while they run.
           // This is the last look before the document goes, and it costs one read of the composer.
-          if (draftHasAttachments()) {
-            report('held', replaced ? 'applied:attachments' : 'attachments');
+          holdDetail = draftAttachmentReason();
+          if (holdDetail !== null) {
+            report('held', replaced ? `applied:attachments:${holdDetail}` : `attachments:${holdDetail}`);
             return stop('attachments', replaced);
           }
           // Written only now, when the document really is about to go: a press that was held changed
@@ -1267,10 +1296,10 @@ window.__ModuleLoader__.load({
       apply(ctx) {
         appContext = ctx;
         if (!desktop) return;
-        // Leave a line in the log per rebuilt interface: it is the one place that shows which
-        // plugin code a running page actually loaded.
+        // Which composer service this document could reach decides how much the press can know: a
+        // page without it can only read the markup, and the line says which page it was.
         reportBoot();
-        report('mounted');
+        report('mounted', appContext?.get?.('conversation') ? 'composer' : 'no-composer');
         ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
           name: 'conversation.session.header.utilities',
           id: 'dsh-unlag', // ui-copy-ignore

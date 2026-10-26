@@ -386,15 +386,14 @@ for (const [label, options] of [
   check('a rebuild the page held takes its pacing stamp back', page.stamp() === 0, String(page.stamp()))
 }
 
-// --- a file the composer still holds ---------------------------------------------------------
-// A draft attachment lives only in this document, so a rebuild drops it. The press stops and says
-// so instead of replacing the page under a file that was never sent.
+// --- a picture the page still shows is not a draft -----------------------------------------
+// Sent pictures keep their preview address in the transcript. Counting every such image held
+// every rebuild after a picture had ever been sent, with nothing left to lose. Without the
+// composer service the only markup that proves a draft is a picker that still holds files.
 {
   const page = harness({ draftImages: 1 })
   await page.press()
-  check('a press with an unsent image does not rebuild', page.navigations.length === 0 && page.reloads.length === 0, JSON.stringify({ navigations: page.navigations, reloads: page.reloads }))
-  check('and it says the file has to go first', /attach|send/iu.test(String(page.notice())), String(page.notice()))
-  check('and the page is left as it is', page.stamp() === 0, String(page.stamp()))
+  check('a sent picture in the transcript does not hold the rebuild', page.reloads.length + page.navigations.length >= 1, JSON.stringify({ navigations: page.navigations, reloads: page.reloads }))
 }
 {
   const page = harness({ draftFiles: 1 })
@@ -408,6 +407,28 @@ for (const [label, options] of [
   const rebuilt = page.reloads.length + page.navigations.length
   check('a press with an empty composer still rebuilds', rebuilt >= 1, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
 }
+// --- a queued message is not an attachment --------------------------------------------------
+// A send waiting for admission is retained by the composer with the text it carries. Holding the
+// rebuild because that record exists made every queued message look like an unsent file.
+{
+  const shell = { snapshot: { attachmentIds: [] }, detachedDrafts: new Map([['d1', { attachmentIds: [] }]]), failedDetached: new Map(), attachmentFlights: new Map() }
+  const conversation = { draftAttachments: new Map(), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, input: { shell: () => shell } }
+  const page = harness({ conversation, sessions: { list: () => [{ id: 's1' }] } })
+  await page.press()
+  check('a queued text message does not hold the rebuild', page.reloads.length + page.navigations.length >= 1, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+}
+// --- a draft kept in another session ---------------------------------------------------------
+// The composer keeps the draft of a session the person left. That draft is not on screen, but a
+// rebuild would still drop it, so the press reads every retained session.
+{
+  const shell = { snapshot: { attachmentIds: ['a1'] }, detachedDrafts: new Map(), failedDetached: new Map(), attachmentFlights: new Map() }
+  const conversation = { draftAttachments: new Map(), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, input: { shell: () => shell } }
+  const page = harness({ conversation, sessions: { list: () => [{ id: 's1' }] } })
+  await page.press()
+  check('a draft kept in another session holds the rebuild', page.navigations.length === 0 && page.reloads.length === 0, JSON.stringify({ navigations: page.navigations, reloads: page.reloads }))
+  check('and the log names the state that held it', page.requests.some((request) => request.path.includes('event=held') && request.path.includes('attachments%3Acomposer')), page.requests.map((r) => r.path).join(' '))
+}
+
 // The composer takes a picked file out of the file input at once and keeps it in its own state.
 // A press that only reads the markup would rebuild over a file the person can no longer see, so it
 // reads the composer itself.

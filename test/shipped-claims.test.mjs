@@ -47,8 +47,8 @@ check('the host keeps that report', host.includes("`${BASE_PATH}/boot`") && host
 check('the state route carries it', /boot: liveBoot\.current/u.test(host))
 
 
-check('the page holds a press while a draft attachment is there', /function draftHasAttachments/.test(client) && /if \(draftHasAttachments\(\)\) return 'attachments'/.test(client))
-check('and it checks both previews and picked files', /img\[src\^="blob:"\]/.test(client) && /input\[type="file"\]/.test(client))
+check('the page holds a press while a draft attachment is there', /function draftAttachmentReason/.test(client) && /if \(holdDetail !== null\) return 'attachments'/.test(client))
+check('it reads the composer before the markup and keeps a file picker as the fallback', /input\[type="file"\]/.test(client) && !/img\[src\^="blob:"\]/.test(client))
 
 console.log(out.join('\n'))
 console.log(out.every((line) => line.startsWith('PASS')) ? 'ok' : 'failed')
