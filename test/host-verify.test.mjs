@@ -60,8 +60,8 @@ check('the read goes to the revision that holds the set', current.asked.every((u
 // place, so the boot comes up without it and the check says so instead of refusing the rebuild.
 const absent = table({ liveGraph: { rev: 'new', entries: [], batches: [] } })
 const gone = await verifyStartup(absent, [frozenRow])
-check('a startup row for a plugin the set no longer has is readable', gone.status === 'ok', JSON.stringify(gone))
-check('the verdict names the plugin the page comes up without', gone.leftOut?.includes('@local/a') === true, JSON.stringify(gone))
+check('a startup row for a plugin the set no longer has refuses the press', gone.status === 'blocked', JSON.stringify(gone))
+check('and the refusal says which entry the frozen list still names', gone.reason === 'entries' && gone.leftOut?.includes('@local/a') === true, JSON.stringify(gone))
 
 
 

@@ -634,7 +634,7 @@ setImmediate(() => {
   for (const fn of listeners.end ?? []) fn()
 })
 await goneRows.routes.get('/dsh-unlag/verify')(goneReq, goneRes)
-check('verify accepts a startup row for a plugin the set lost', verdict(goneRes.body) === 'ok', goneRes.body)
+check('verify refuses a startup row for a plugin the set lost', verdict(goneRes.body) === 'blocked', goneRes.body)
 check('verify names the plugin the page comes up without', String(goneRes.body).includes('@local/a'), goneRes.body)
 check('the log says the app no longer serves it', readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('no longer serves: @local/a'))
 

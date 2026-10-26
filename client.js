@@ -15,8 +15,8 @@ window.__ModuleLoader__.load({
      * repeating one generic sentence.
      */
     const REASONS = zh
-      ? { list: '读不到启动信息', slow: '启动信息读得太慢', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', size: '启动脚本太大', verify: '插件后端没有应答', screen: '页面状态读不到', busy: '另一次刷新还在进行', dependencies: '插件依赖还没有运行', missing: '启动清单里有插件已经不见了', network: '读取插件时出错', register: '插件没有登记自己' }
-      : { list: 'startup info is unavailable', slow: 'the startup list answered too slowly', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete', size: 'a startup script is too large', verify: 'the plugin is not answering', screen: 'the page state cannot be read', busy: 'another rebuild is already running', dependencies: 'a plugin dependency is not running', missing: 'a plugin in the startup list is gone', network: 'the plugins could not be read', register: 'a plugin did not register itself' };
+      ? { list: '读不到启动信息', slow: '启动信息读得太慢', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', size: '启动脚本太大', verify: '插件后端没有应答', screen: '页面状态读不到', busy: '另一次刷新还在进行', dependencies: '插件依赖还没有运行', missing: '启动清单里有插件已经不见了', network: '读取插件时出错', register: '插件没有登记自己', entries: '启动清单里的插件已卸载，重启应用后再刷新' }
+      : { list: 'startup info is unavailable', slow: 'the startup list answered too slowly', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete', size: 'a startup script is too large', verify: 'the plugin is not answering', screen: 'the page state cannot be read', busy: 'another rebuild is already running', dependencies: 'a plugin dependency is not running', missing: 'a plugin in the startup list is gone', network: 'the plugins could not be read', register: 'a plugin did not register itself', entries: 'a plugin in the startup list was uninstalled, so restart the app before rebuilding' };
 
     /** The last reason a readiness check refused for, or null after a check that passed. */
     let holdReason = null;
@@ -243,7 +243,8 @@ window.__ModuleLoader__.load({
         const data = await withTimeout(response.json());
         return reloadVerdict(data);
       } catch {
-        return 'failed';
+        // Nothing answered: the update may or may not have happened, and only the set can say.
+        return 'lost';
       }
     }
 
@@ -252,7 +253,7 @@ window.__ModuleLoader__.load({
      * Only a set the app has finished starting can be rebuilt against: one still starting would
      * boot a document over plugins that are not ready, and one the app says cannot be applied to a
      * running page would boot the old code behind a fresh interface.
-     * @returns 'done' | 'off' | 'queued' | 'unavailable' | 'failed'
+     * @returns 'done' | 'off' | 'queued' | 'unavailable' | 'failed' | 'lost'
      */
     function reloadVerdict(data) {
       if (data === null || typeof data !== 'object') return 'failed';
@@ -343,6 +344,7 @@ window.__ModuleLoader__.load({
       register: 'plugin', // ui-copy-ignore
       slow: 'slow', // ui-copy-ignore
       dependencies: 'covers',
+      entries: 'entries',
       list: 'list', // ui-copy-ignore
     };
 
@@ -899,8 +901,8 @@ window.__ModuleLoader__.load({
             const before = await hostBootGraph();
             const revBefore = typeof before?.rev === 'string' ? before.rev : null;
             const codeBefore = await hostCodeStamp();
-            let status = await withTimeout(replacePlugins()).catch(() => 'failed');
-            if (status === 'failed' && (revBefore !== null || codeBefore !== null)) {
+            let status = await withTimeout(replacePlugins()).catch(() => 'lost');
+            if (status === 'lost' && (revBefore !== null || codeBefore !== null)) {
               for (const wait of [400, 900, 1800]) { // ui-copy-ignore
                 await new Promise((resolve) => setTimeout(resolve, wait));
                 const after = await hostBootGraph();
@@ -915,6 +917,9 @@ window.__ModuleLoader__.load({
                   break;
                 }
               }
+              // Still `lost` after the set was read twice: no revision moved, so nothing proves the
+              // update went through and the press says it failed.
+              if (status === 'lost') status = 'failed';
             }
             if (status !== 'done' && status !== 'off') {
               const key =

@@ -141,8 +141,9 @@ check('the guard asks the host half rather than reading bodies itself', served.r
 const removed = harness({ bridge: bridgeOf(rows(boot)), frozen: boot, live: { rev: 'new', entries: [], batches: [] }, scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok(body) } })
 check('a plugin gone from the running app holds the rebuild', (await removed.probe.startupLooksServable()) === false)
 
-// The host stands in for a row whose plugin is gone; the check below reads that row back the same
-// way, so a switch-off between the app starting and the press does not disable the button.
+// The host can answer a row whose plugin is gone with a stand-in body, but that body registers
+// nothing while the shell's frozen list still names the entry, so the boot would fail after the press:
+// the check reads the stand-in as a refusal rather than as a reason to let the press through.
 const switchedOff = harness({
   bridge: bridgeOf(rows(boot)),
   frozen: boot,
@@ -150,7 +151,7 @@ const switchedOff = harness({
   shimWrapped: true,
   scripts: { '/plugins/??@local/a/client.js&rev=stale': () => ok('/* @local/a is not part of the plugin set served now */') },
 })
-check('a plugin switched off does not hold the rebuild when the host stands in for it', (await switchedOff.probe.startupLooksServable()) === true, String(switchedOff.probe.startupHoldReason()))
+check('a plugin switched off holds the rebuild even when a stand-in answers', (await switchedOff.probe.startupLooksServable()) === false, String(switchedOff.probe.startupHoldReason()))
 check('and the press asks the host check rather than deciding alone', switchedOff.requests.some((r) => r.path === '/dsh-unlag/verify'))
 
 // The check's answer is read outside the try that guards the request itself; an answer that cannot

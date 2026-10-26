@@ -1791,13 +1791,26 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
       detail: `not registered by the startup list: ${[...absent].slice(0, 4).join(', ')}`,
     }
   }
+  /**
+   * A row whose plugin is gone cannot boot the next page, whatever the route answers for it: the
+   * shell still holds a frozen list naming that entry and the app's loader still imports it, so a
+   * stand-in body that registers nothing fails the boot after the press was allowed. Refusing here
+   * costs one press; the page that would come up costs the running turns.
+   */
+  if (leftOut.size > 0) {
+    return {
+      status: 'blocked', // ui-copy-ignore
+      reason: 'entries', // ui-copy-ignore
+      leftOut: [...leftOut],
+      ...(standInRows > 0 ? { standInRows } : {}),
+      detail: `the startup list names plugins this app no longer serves: ${[...leftOut].slice(0, 4).join(', ')}`,
+    }
+  }
   return {
     status: 'ok', // ui-copy-ignore
     reason: 'ok', // ui-copy-ignore
     revision: typeof graph?.rev === 'string' ? graph.rev : null,
     scripts: bodies.map((body) => ({ url: body.url, digest: body.digest, ids: body.ids })),
-    ...(leftOut.size > 0 ? { leftOut: [...leftOut] } : {}),
-    ...(standInRows > 0 ? { standInRows } : {}),
   }
 }
 
@@ -1985,11 +1998,8 @@ function serveButton(ctx, controller, config) {
           if (verdict?.status !== 'ok') {
             log(`a startup check refused the page: ${String(verdict?.reason ?? 'list')} (${String(verdict?.detail ?? 'no detail')})`)
           }
-          if (typeof verdict?.standInRows === 'number' && verdict.standInRows > 0) {
-            log(`a startup check passed with ${String(verdict.standInRows)} row(s) answered by a stand-in script`)
-          }
           if (Array.isArray(verdict?.leftOut) && verdict.leftOut.length > 0) {
-            log(`a startup row names a plugin this app no longer serves: ${verdict.leftOut.join(', ')}; the page comes up without it`)
+            log(`a startup row names a plugin this app no longer serves: ${verdict.leftOut.join(', ')}; a stand-in body registers nothing, so the boot would fail and this press is held`)
           }
           sendJson(res, 200, verdict)
           } finally {
