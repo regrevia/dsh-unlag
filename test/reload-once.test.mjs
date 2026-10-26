@@ -26,6 +26,7 @@ function mount() {
   // controller's press, so it is cleared before the first press.
   const store = (globalThis[Symbol.for('dsh-unlag.operation')] ??= { id: 0, state: null })
   store.state = null
+  globalThis[Symbol.for('dsh-unlag.presses')]?.clear?.()
   const routes = new Map()
   const state = { runs: 0 }
   const ctx = {
@@ -44,8 +45,12 @@ function mount() {
           : undefined,
     on: () => {},
   }
+  const disposers = []
+  ctx.on = (event, fn) => {
+    if (event === 'dispose') disposers.push(fn)
+  }
   apply(ctx, {})
-  return { state, reload: routes.get('/dsh-unlag/reload') }
+  return { state, routes, reload: routes.get('/dsh-unlag/reload'), dispose: () => disposers[0]?.() }
 }
 
 async function press(route, requestId) {
@@ -125,5 +130,34 @@ async function press(route, requestId) {
   check('the in-flight press still finishes done', finished.status === 'done', JSON.stringify(finished))
   check('a retry during the work does not start a second composition', runs === 1, String(runs))
 }
+
+// --- a press keeps its own answer after later presses ------------------------------------------
+// The newest operation record is overwritten by the next press, so a page that lost the answer to
+// its first press and asked again after a second one must still read the first press's result
+// instead of being told about the second one or starting a third composition.
+const retried = mount()
+const firstDone = await press(retried.reload, 'press-one')
+const secondDone = await press(retried.reload, 'press-two')
+check('a second press is its own composition', retried.state.runs === 2, String(retried.state.runs))
+const retriedAgain = await press(retried.reload, 'press-one')
+check('a retried old press is answered from its own record', retriedAgain.status === 'done', JSON.stringify(retriedAgain))
+check('and it does not compose again', retried.state.runs === 2, String(retried.state.runs))
+check('a retried press names the operation it first made', retriedAgain.operationId === firstDone.operationId, `${retriedAgain.operationId} / ${firstDone.operationId}`)
+check('the newer press still reads as done', secondDone.status === 'done', JSON.stringify(secondDone))
+check('the first press ended as done', firstDone.status === 'done', JSON.stringify(firstDone))
+
+// --- an instance that was replaced stops its own controller ------------------------------------
+// Two applies in one process: the older copy is replaced by the newer one, and its dispose hook
+// arrives afterwards. It must stop its own work without tearing down what the newer copy installed.
+const older = mount()
+const newer = mount()
+older.dispose()
+const afterStale = await press(newer.reload, 'press-after-stale')
+check('a stale dispose leaves the newer copy pressing', afterStale.status === 'done', JSON.stringify(afterStale))
+check('the newer copy still answers its own state', typeof newer.routes.get('/dsh-unlag/state') === 'function', String(typeof newer.routes.get('/dsh-unlag/state')))
+
+// --- the load line says whether the page can hold unsent text ---------------------------------
+const logText = readFileSync(process.env.DSH_UNLAG_LOG, 'utf8')
+check('the load line names the composer', /composer: (mounted|no-composer)/.test(logText), logText.slice(0, 300))
 
 console.log(out.join('\n'))

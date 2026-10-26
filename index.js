@@ -41,6 +41,9 @@ const RELOAD_ANSWER_MS = 10_000
 const MAX_BOOT_URL = 16 * 1024
 /** How long a press waits for the boot snapshot the page's own report started. */
 const MAX_BOOT_PROOF_WAIT_MS = 800
+/** How many finished presses keep their own answer, and for how long. */
+const MAX_PRESSES = 32
+const MAX_PRESS_AGE_MS = 10 * 60 * 1000
 
 
 const LOG_PATH = join(homedir(), '.dsh', 'unlag-reload.log')
@@ -548,6 +551,31 @@ function pluginReloader(ctx, config) {
   const operation = globalThis[Symbol.for('dsh-unlag.operation')] ?? (globalThis[Symbol.for('dsh-unlag.operation')] = { id: 0, state: null })
 
   /**
+   * Every press keeps its own answer for a while, keyed by the id the page made up for it. The
+   * operation record above only holds the newest one, so a page that lost its answer and asked again
+   * after another press would be told about somebody else's update — or start a second one. The
+   * record is bounded and old entries are dropped by age, never kept for the life of the process.
+   */
+  const presses = globalThis[Symbol.for('dsh-unlag.presses')] ?? (globalThis[Symbol.for('dsh-unlag.presses')] = new Map())
+  const doneOf = (outcome, id = null) => ({
+    id,
+    status: Array.isArray(outcome?.pending) && outcome.pending.length > 0 ? 'restart' : String(outcome?.status ?? 'failed'), // ui-copy-ignore
+    pending: (Array.isArray(outcome?.pending) ? outcome.pending : []).slice(0, 16),
+    failed: (Array.isArray(outcome?.failedEntries) ? outcome.failedEntries : []).slice(0, 16),
+    restart: typeof outcome?.restartReason === 'string' && outcome.restartReason !== '' ? outcome.restartReason : null,
+    at: Date.now(),
+  })
+  /** Remember one press's end, dropping the oldest and the stale as it goes. */
+  const rememberPress = (requestId, outcome, id = null) => {
+    if (typeof requestId !== 'string' || requestId === '') return
+    presses.set(requestId, doneOf(outcome, id))
+    const limit = Date.now() - MAX_PRESS_AGE_MS
+    for (const [id, row] of presses) {
+      if (row.at < limit || presses.size > MAX_PRESSES) presses.delete(id)
+    }
+  }
+
+  /**
    * The one place an update's end is written down. Every path that can finish an update passes
    * through here, so the route answer, `/state.operation` and the page read the same record for the
    * same operation instead of each judging from its own partial view.
@@ -570,6 +598,7 @@ function pluginReloader(ctx, config) {
       restart,
       requestId: typeof requestId === 'string' && requestId !== '' ? requestId : (operation.state?.requestId ?? null),
     }
+    rememberPress(requestId, outcome, id)
   }
 
   const reload = async (hmr) => {
@@ -849,6 +878,22 @@ function pluginReloader(ctx, config) {
    */
   const seenRequest = (requestId) => {
     if (typeof requestId !== 'string' || requestId === '') return null
+    /**
+     * The press's own record answers first: it is bound to that id and nothing can overwrite it.
+     * The newest operation record is the fallback for the press still running, which has no end to
+     * remember yet.
+     */
+    const remembered = presses.get(requestId)
+    if (remembered !== undefined) {
+      return {
+        status: remembered.status, // ui-copy-ignore
+        operationId: remembered.id,
+        warnings: [],
+        pending: remembered.pending.slice(), // ui-copy-ignore
+        restartReason: remembered.restart,
+        failedEntries: remembered.failed.slice(),
+      }
+    }
     const state = operation.state
     if (state === null || state.requestId !== requestId) return null
     if (state.status === 'applying') return { status: 'applying', warnings: [], pending: [], restartReason: null, failedEntries: [] } // ui-copy-ignore
@@ -2789,7 +2834,7 @@ function serveButton(ctx, controller, config) {
               (error) => log(`the update failed after the page was told it is still applying: ${error?.message ?? error}`),
             )
           }
-          sendJson(res, 200, { ...outcome, operationId: controller.operation?.()?.id ?? null })
+          sendJson(res, 200, { ...outcome, operationId: outcome.operationId ?? controller.operation?.()?.id ?? null })
         } catch (error) {
           log(`cannot apply a plugin reload: ${error?.message ?? error}`)
           sendJson(res, 500, { status: 'failed', detail: String(error?.message ?? error) })
@@ -2852,6 +2897,13 @@ export function guardRoute(path, handler) {
 export function apply(ctx, config) {
   try {
     const instance = {}
+    /**
+     * What this copy of the plugin owns. An update replaces the plugin that started a watcher, a
+     * route or a bundle wrap; the newer copy installs its own and the older one is never disposed in
+     * the normal flow, so whatever this copy made is closed from its own record. Clearing a global
+     * slot is done only where that slot still names this copy's own handle.
+     */
+    const own = { watchers: null, routes: null, shim: null }
     closeAll(globalThis[WATCHER_KEY])
     closeAll(globalThis[ROUTES_KEY])
     releaseBundleShim(globalThis[SHIM_KEY])
@@ -2866,7 +2918,7 @@ export function apply(ctx, config) {
      * half starts, and one that appears after it.
      */
     const syncBundles = () => {
-      ensureBundleShim(ctx)
+      own.shim = ensureBundleShim(ctx)
     }
     /**
      * Watching needs both the HMR service and an explicit opt-in: the switch defaults off, so no
@@ -2885,6 +2937,7 @@ export function apply(ctx, config) {
         }
         if (globalThis[WATCHER_KEY] !== null) return
         globalThis[WATCHER_KEY] = controller.startWatching()
+        own.watchers = globalThis[WATCHER_KEY]
       } catch (error) {
         closeAll(globalThis[WATCHER_KEY])
         globalThis[WATCHER_KEY] = null
@@ -2893,7 +2946,14 @@ export function apply(ctx, config) {
     }
     // Printed on every start so a reader of the log knows which action applies a change: a person
     // pressing the button, never this plugin, and never a restart of the app.
-    log(`dsh-unlag ${VERSION} loaded (code ${CODE_STAMP})`)
+    let composerMounted = false
+    try {
+      const ids = activeEntryIds(ctx)
+      composerMounted = ids.some((id) => typeof id === 'string' && id.includes('conversation'))
+    } catch {
+      composerMounted = false
+    }
+    log(`dsh-unlag ${VERSION} loaded (code ${CODE_STAMP}, composer: ${composerMounted ? 'mounted' : 'no-composer'})`)
     log('plugin reload is manual: ask the user to press the refresh button; do not restart the app')
     if (settingsOf(config ?? {}).autoReload === true) {
       syncWatching()
@@ -2915,6 +2975,7 @@ export function apply(ctx, config) {
       })
     }
     globalThis[ROUTES_KEY] = serveButton(ctx, controller, config ?? {})
+    own.routes = globalThis[ROUTES_KEY]
     syncBundles()
     globalThis[INSTANCE_KEY] = instance
 
@@ -2924,14 +2985,21 @@ export function apply(ctx, config) {
        * anything; tearing the routes or the shim down here would break the newer one, and a page
        * that then cannot read a startup script ends the app.
        */
-      if (globalThis[INSTANCE_KEY] !== instance) return
+      /**
+       * This copy stops its own work whichever copy is current. The controller is stopped before the
+       * check: its timers and queued reloads are this copy's, and leaving them to run would let a
+       * plugin that was replaced press the update again. The watcher, the routes and the wrap are
+       * closed only while this copy is still the one holding them — a newer copy installs its own by
+       * replacing those slots, and tearing them down from a stale dispose would blind the page.
+       */
       controller.stop()
-      closeAll(globalThis[WATCHER_KEY])
-      closeAll(globalThis[ROUTES_KEY])
-      releaseBundleShim(globalThis[SHIM_KEY])
-      globalThis[WATCHER_KEY] = null
-      globalThis[ROUTES_KEY] = null
-      globalThis[SHIM_KEY] = null
+      if (globalThis[INSTANCE_KEY] !== instance) return
+      closeAll(own.watchers)
+      closeAll(own.routes)
+      releaseBundleShim(own.shim)
+      if (globalThis[WATCHER_KEY] === own.watchers) globalThis[WATCHER_KEY] = null
+      if (globalThis[ROUTES_KEY] === own.routes) globalThis[ROUTES_KEY] = null
+      if (globalThis[SHIM_KEY] === own.shim) globalThis[SHIM_KEY] = null
       globalThis[INSTANCE_KEY] = null
     })
   } catch (error) {
