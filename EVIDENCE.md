@@ -36,7 +36,10 @@
 npm test                     # 726 项，全绿才算数
 npm run audit                # 静态检查
 npm run live-smoke           # 对着运行中的 App 复核；输出里 verdict 为 true 才算数
+./scripts/release.sh         # 发布并回查 registry 是否真的列出这个版本
 ```
+
+发布物本身也核对过：`dsh-unlag-1.9.122.tgz` 里的 `index.js` 与仓库同文件 sha256 相同（`851386c9…`），包里没有 `test/`。
 
 演练输出里的每一项含义见 README「改完后让运行中的 App 用上」。
 
