@@ -31,7 +31,7 @@ function show(tree) {
   return pill === undefined ? null : String(Array.isArray(pill.children) ? pill.children.join('') : pill.children)
 }
 
-function harnessWith(sourceText, { settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], lateOperation = null, revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, draftImages = 0, draftFiles = 0, conversation = null, sessions = null, language = 'en-US', href, switchAnswer = 'done' } = {}) {
+function harnessWith(sourceText, { settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], lateOperation = null, revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, draftImages = 0, draftFiles = 0, conversation = null, sessions = null, language = 'en-US', href, switchAnswer = 'done', stampInStore = false } = {}) {
   const requests = []
   const navigations = []
   const current = { rev: graph.rev, code: 'c1' }
@@ -115,12 +115,15 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
     removeEventListener: () => {},
   }
   const store = new Map()
+  // `stamp` alone models a stamp that is always there (a press this document already made). A page
+  // that boots with a stamp of its own needs it in the store, so clearing it really clears it.
+  if (stampInStore) store.set('dsh-unlag:at', stamp)
   const listeners = []
   const window = {
     __ModuleLoader__: { load: () => {} },
     __DSH_BOOT__: graph,
     dshDesktopBoot: { ready: async () => ({ injections: bootRows }) },
-    sessionStorage: { getItem: (key) => (store.has(key) ? store.get(key) : stamp), setItem: (key, value) => store.set(key, value), removeItem: (key) => store.delete(key) },
+    sessionStorage: { getItem: (key) => (store.has(key) ? store.get(key) : stampInStore ? '0' : stamp), setItem: (key, value) => store.set(key, value), removeItem: (key) => store.delete(key) },
     location,
     dispatchEvent: (event) => {
       // A page whose event hub is broken throws where a listener would have run. That must hold the

@@ -184,6 +184,35 @@ check('and the pressed page still rebuilt', swapped.navigations.length === 1, sw
   check('and an unfinished record is not read as success', !/applied|replaced|rebuild/i.test(String(page.notice())), String(page.notice()))
 }
 
+// --- an answer that says "still applying" before the update finishes -------------------------
+// The app answered while its own update was still running, which is not a failure. The press reads
+// that update's real end by the name it gave it, and a finished update carries the press on to the
+// rebuild it was asked for instead of leaving the person with "press again later".
+{
+  const page = harness({
+    reload: { status: 'applying' },
+    lateOperation: (requestId) => ({ id: 1, status: 'done', pending: 0, failed: 0, restart: null, requestId }),
+  })
+  await page.press()
+  check('an applying answer whose update finished rebuilds the page', page.navigations.length === 1, String(page.navigations.length))
+  check('and the press is logged as a rebuild', page.requests.some((request) => request.path.includes('event=rebuild')))
+  check('and the late end is logged as such', page.requests.some((request) => request.path.includes('event=plugin-held')))
+  check('and no notice asks for another press', !/press again later/.test(String(page.notice())), String(page.notice()))
+}
+
+// --- the same answer where the update really is still applying -------------------------------
+{
+  const page = harness({
+    reload: { status: 'applying' },
+    lateOperation: (requestId) => ({ id: 1, status: 'applying', pending: 1, failed: 0, restart: null, requestId }),
+  })
+  await page.press()
+  check('an applying answer that never settles keeps the page', page.navigations.length === 0, String(page.navigations.length))
+  check('and it says the update is still running', /[Ss]till applying/.test(String(page.notice())), String(page.notice()))
+  check('and it never claims the code is current', !/up to date/.test(String(page.notice())), String(page.notice()))
+  check('and nothing is logged as rebuilt', !page.requests.some((request) => request.path.includes('event=rebuild')))
+}
+
 // --- a lost answer where only the code changed ----------------------------------------------
 // Replacing a plugin whose served bundles keep the same revision leaves the boot list unchanged, so
 // the graph cannot show that the press worked; a code stamp cannot either, because it belongs to
@@ -245,6 +274,18 @@ for (const [label, options] of [
   check(`${label} is logged as a screen hold`, gates.some((path) => path.includes('screen')), JSON.stringify(gates))
   check(`${label} leaves the button usable`, view.button !== null && view.button.props.disabled !== true)
   check(`${label} records no answered press`, page.stamp() === 0, String(page.stamp()))
+}
+
+// --- the first click of a fresh page is a press, not a repeat -------------------------------
+// The pacing stamp outlives a navigation on purpose: a press that could not leave the page must
+// not be repeated a moment later. A document that has just come up is the opposite case — the
+// press that wrote the stamp finished and the page it asked for is the one being read now — so a
+// click here has to be answered, not met with "press again later" on a page with nothing pending.
+{
+  const page = harness({ stamp: String(Date.now()), stampInStore: true })
+  await page.press()
+  check('a page that just came up answers its first click', page.navigations.length === 1, String(page.navigations.length))
+  check('and that click is not turned away as a repeat', !/did not finish|press again later/.test(String(page.notice())), String(page.notice()))
 }
 
 // --- one bad attempt does not cost the next one -------------------------------------------
@@ -435,6 +476,17 @@ for (const [label, options] of [
   const page = harness({ conversation, sessions: { list: () => [{ id: 's1' }] } })
   await page.press()
   check('a failed send whose words the app restores does not hold the rebuild', page.reloads.length + page.navigations.length >= 1, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+}
+// The app's restore only runs when the composer it would write into is empty. A failed message
+// left beside newer words is then kept in this document alone: the rebuild would drop the message
+// the app did not take back, so the press waits instead of navigating over it.
+{
+  const shell = { snapshot: { attachmentIds: [], draft: 'newer words', phase: 'idle' }, detachedDrafts: new Map(), failedDetached: new Map([['f1', { attachmentIds: [], draft: 'try again' }]]), attachmentFlights: new Map() }
+  const conversation = { draftAttachments: new Map(), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, input: { shell: () => shell } }
+  const page = harness({ conversation, sessions: { list: () => [{ id: 's1' }] } })
+  await page.press()
+  check('a failed send beside newer words holds the rebuild', page.reloads.length === 0 && page.navigations.length === 0, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+  check('and the notice says the failed message is not saved', /not saved|没保存/u.test(String(page.notice())), String(page.notice()))
 }
 // Its files are the other half: a failed record still holding an upload is a draft whose file only
 // lives in this document, so the press waits for it like any other draft attachment.

@@ -6,8 +6,8 @@ window.__ModuleLoader__.load({
 
     const zh = /^zh/i.test(navigator.language || '');
     const COPY = zh
-      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', off: '两个开关都关着，先在设置里打开一个', replaced: '插件代码已更新，页面保持不动', stayedReplaced: '插件代码已更新，页面没有重建；稍后再按一次', stayed: '页面没有重建；稍后再按一次', done: '插件代码已是最新', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次', attachments: '还有没发出去的附件，先发出去再按', sending: '消息正在发送，请稍候' , menu: '按下按钮时', switchPlugins: '换掉插件代码', switchPage: '重建页面', switchesFailed: '设置没改成，稍后再试', switchesUnsaved: '设置只在这次运行里有效'} // ui-copy-ignore
-      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', off: 'Both switches are off; turn one on in settings', replaced: 'Plugin code updated; the page stayed as it is', stayedReplaced: 'Plugin code updated; the page did not rebuild; press again shortly', stayed: 'The page did not rebuild; press again shortly', done: 'Plugin code is already up to date', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later', attachments: 'Files are attached but not sent; send them first', sending: 'A message is being sent; wait for it to finish' , menu: 'On press', switchPlugins: 'Replace plugin code', switchPage: 'Rebuild page', switchesFailed: 'Settings not changed; try again later', switchesUnsaved: 'Settings apply to this run only'};
+      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', off: '两个开关都关着，先在设置里打开一个', replaced: '插件代码已更新，页面保持不动', stayedReplaced: '插件代码已更新，页面没有重建；稍后再按一次', stayed: '页面没有重建；稍后再按一次', done: '插件代码已是最新', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次', attachments: '还有没发出去的附件，先发出去再按', unsent: '有一条发送失败的消息还没保存，先重发或清空再按', sending: '消息正在发送，请稍候' , menu: '按下按钮时', switchPlugins: '换掉插件代码', switchPage: '重建页面', switchesFailed: '设置没改成，稍后再试', switchesUnsaved: '设置只在这次运行里有效'} // ui-copy-ignore
+      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', off: 'Both switches are off; turn one on in settings', replaced: 'Plugin code updated; the page stayed as it is', stayedReplaced: 'Plugin code updated; the page did not rebuild; press again shortly', stayed: 'The page did not rebuild; press again shortly', done: 'Plugin code is already up to date', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later', attachments: 'Files are attached but not sent; send them first', unsent: 'A failed message is not saved yet; resend or clear it first', sending: 'A message is being sent; wait for it to finish' , menu: 'On press', switchPlugins: 'Replace plugin code', switchPage: 'Rebuild page', switchesFailed: 'Settings not changed; try again later', switchesUnsaved: 'Settings apply to this run only'};
 
     /**
      * Why the interface was left as it is, in words a person can act on. The checks below record
@@ -932,10 +932,15 @@ window.__ModuleLoader__.load({
                 if (typeof record?.draft === 'string' && record.draft.trim() !== '') return 'sending';
               }
               // A send that failed hands its words back to the draft store, which the next document
-              // restores, but its files only exist in this one: a failed record still holding files
-              // is a draft the person would lose.
+              // restores, but only when the composer it would write into is empty. Its files only
+              // exist in this document either way, and a failed message left beside a newer draft is
+              // in this document alone: the app keeps the newer words and leaves the failed ones
+              // where they are, so a rebuild would drop a message the person wrote.
+              const currentDraft = typeof shell.snapshot?.draft === 'string' ? shell.snapshot.draft : '';
               for (const record of shell.failedDetached?.values?.() ?? []) {
                 if ((record?.attachmentIds?.length ?? 0) > 0) return 'draft';
+                const unsaved = typeof record?.draft === 'string' ? record.draft.trim() : '';
+                if (unsaved !== '' && currentDraft.trim() !== '') return 'unsent';
               }
             } catch {
               // One session whose composer cannot be read does not make the others empty; its own
@@ -987,6 +992,7 @@ window.__ModuleLoader__.load({
         if (screenHasOpenWindow()) return 'dialog';
         holdDetail = draftAttachmentReason();
         if (holdDetail === 'sending') return 'sending';
+        if (holdDetail === 'unsent') return 'unsent';
         if (holdDetail !== null) return 'attachments';
         await commitFocusedField();
         const ready = await otherPluginsAreReady();
@@ -1206,6 +1212,7 @@ window.__ModuleLoader__.load({
               // is not rebuilt on a guess.
               status = settled === null ? 'failed' : settled;
             }
+            let lateDone = false;
             if (status !== 'done' && status !== 'off') {
               const key =
                 status === 'queued'
@@ -1235,10 +1242,19 @@ window.__ModuleLoader__.load({
                   report('plugin-held', 'late-restart');
                   return stop('restart');
                 }
+                // The answer ran out before the update did, but the update did finish: the press
+                // goes on to the rebuild it was asked for instead of asking for another press.
+                if (settled === 'done' || settled === 'off') {
+                  report('plugin-held', 'late-done');
+                  lateDone = settled === 'done';
+                } else {
+                  return stop(key);
+                }
+              } else {
+                return stop(key);
               }
-              return stop(key);
             }
-            replaced = status === 'done';
+            replaced = lateDone || status === 'done';
           }
           if (!rebuild) {
             // The plugin half is on and the page half is off: what the press did is worth saying.
@@ -1252,8 +1268,8 @@ window.__ModuleLoader__.load({
               ? `blocked:${holdReason}`
               : reason === 'attachments' && holdDetail !== null
                 ? `attachments:${holdDetail}`
-                : reason === 'sending'
-                  ? `sending:${holdDetail}`
+                : reason === 'sending' || reason === 'unsent'
+                  ? `${reason}:${holdDetail}`
                   : reason;
             report('held', replaced ? `applied:${gate}` : gate);
             return stop(reason, replaced);
@@ -1262,7 +1278,7 @@ window.__ModuleLoader__.load({
           // This is the last look before the document goes, and it costs one read of the composer.
           holdDetail = draftAttachmentReason();
           if (holdDetail !== null) {
-            const late = holdDetail === 'sending' ? 'sending' : 'attachments';
+            const late = holdDetail === 'sending' ? 'sending' : holdDetail === 'unsent' ? 'unsent' : 'attachments';
             report('held', replaced ? `applied:${late}:${holdDetail}` : `${late}:${holdDetail}`);
             return stop(late, replaced);
           }
@@ -1365,6 +1381,14 @@ window.__ModuleLoader__.load({
       apply(ctx) {
         appContext = ctx;
         if (!desktop) return;
+        /**
+         * The pacing stamp only paces presses inside one document. A document that is mounting now
+         * means the press that wrote it finished and navigated, so a click here is the first press
+         * of a fresh page, not a repeat of one still in flight. Clearing it keeps that click
+         * answered instead of turning it away with "press again later" on a page with nothing
+         * pending.
+         */
+        stampClear();
         // Which composer service this document could reach decides how much the press can know: a
         // page without it can only read the markup, and the line says which page it was.
         reportBoot();

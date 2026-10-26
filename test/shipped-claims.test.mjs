@@ -48,7 +48,17 @@ check('the state route carries it', /boot: liveBoot\.current/u.test(host))
 
 
 check('the page holds a press while a draft attachment is there', /function draftAttachmentReason/.test(client) && /if \(holdDetail !== null\) return 'attachments'/.test(client))
-check('written words in a draft do not hold the press', !/shell\.snapshot\?\.draft/u.test(client), 'the composer draft is read for holding')
+check(
+  'written words in an ordinary draft do not hold the press',
+  !/snapshot\?\.draft[\s\S]{0,120}?return '(?:sending|attachments)'/u.test(client),
+  'the composer draft is read as a reason to hold',
+)
+check(
+  'a failed send the app did not take back holds the press',
+  /shell\.failedDetached\?\.values\?\.\(\) \?\? \[\][\s\S]{0,600}?currentDraft\.trim\(\) !== ''\) return 'unsent'/u.test(client) &&
+    /unsent: 'A failed message is not saved yet/u.test(client),
+  'a failed message left beside a newer draft is lost on rebuild',
+)
 check('a startup record that could not be taken does not hold the press', !/could not all be read when it booted/u.test(host) && /the press is checked against the list it reported/u.test(host), 'the boot record refuses an unreadable capture')
 check('it reads the composer before the markup and keeps a file picker as the fallback', /input\[type="file"\]/.test(client) && !/img\[src\^="blob:"\]/.test(client))
 
