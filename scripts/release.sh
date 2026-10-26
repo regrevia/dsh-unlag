@@ -11,8 +11,11 @@ trap 'rm -f "$config"' EXIT
 printf '//registry.npmjs.org/:_authToken=%s\n' "$token" > "$config"
 chmod 600 "$config"
 if ! npm publish --userconfig "$config" --access public > /tmp/dsh-unlag-publish.log 2>&1; then
-  grep -q 'previously published' /tmp/dsh-unlag-publish.log || { cat /tmp/dsh-unlag-publish.log >&2; exit 1; }
-  echo "$version is already on the registry; checking that the package document lists it"
+  # A publish that was interrupted mid-flight leaves the version staged: npm then refuses the same
+  # number twice, while the version document may already answer. Both cases mean "go and look",
+  # not "give up".
+  grep -q 'previously published\|previously staged' /tmp/dsh-unlag-publish.log || { cat /tmp/dsh-unlag-publish.log >&2; exit 1; }
+  echo "$version was already sent to the registry; checking that it answers"
 fi
 # The package document is behind a CDN cache: it kept listing the previous version for a minute
 # after a publish that had already landed, while the version's own document answered at once. So
