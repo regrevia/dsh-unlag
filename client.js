@@ -6,8 +6,8 @@ window.__ModuleLoader__.load({
 
     const zh = /^zh/i.test(navigator.language || '');
     const COPY = zh
-      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', off: '两个开关都关着，先在设置里打开一个', replaced: '插件代码已更新，页面保持不动', stayedReplaced: '插件代码已更新，页面没有重建；稍后再按一次', stayed: '页面没有重建；稍后再按一次', done: '插件代码已是最新', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次', attachments: '还有没发出去的附件，先发出去再按' , menu: '按下按钮时', switchPlugins: '换掉插件代码', switchPage: '重建页面', switchesFailed: '设置没改成，稍后再试', switchesUnsaved: '设置只在这次运行里有效'} // ui-copy-ignore
-      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', off: 'Both switches are off; turn one on in settings', replaced: 'Plugin code updated; the page stayed as it is', stayedReplaced: 'Plugin code updated; the page did not rebuild; press again shortly', stayed: 'The page did not rebuild; press again shortly', done: 'Plugin code is already up to date', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later', attachments: 'Files are attached but not sent; send them first' , menu: 'On press', switchPlugins: 'Replace plugin code', switchPage: 'Rebuild page', switchesFailed: 'Settings not changed; try again later', switchesUnsaved: 'Settings apply to this run only'};
+      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', off: '两个开关都关着，先在设置里打开一个', replaced: '插件代码已更新，页面保持不动', stayedReplaced: '插件代码已更新，页面没有重建；稍后再按一次', stayed: '页面没有重建；稍后再按一次', done: '插件代码已是最新', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次', attachments: '还有没发出去的附件，先发出去再按', sending: '消息正在发送，请稍候' , menu: '按下按钮时', switchPlugins: '换掉插件代码', switchPage: '重建页面', switchesFailed: '设置没改成，稍后再试', switchesUnsaved: '设置只在这次运行里有效'} // ui-copy-ignore
+      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', off: 'Both switches are off; turn one on in settings', replaced: 'Plugin code updated; the page stayed as it is', stayedReplaced: 'Plugin code updated; the page did not rebuild; press again shortly', stayed: 'The page did not rebuild; press again shortly', done: 'Plugin code is already up to date', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later', attachments: 'Files are attached but not sent; send them first', sending: 'A message is being sent; wait for it to finish' , menu: 'On press', switchPlugins: 'Replace plugin code', switchPage: 'Rebuild page', switchesFailed: 'Settings not changed; try again later', switchesUnsaved: 'Settings apply to this run only'};
 
     /**
      * Why the interface was left as it is, in words a person can act on. The checks below record
@@ -852,6 +852,31 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The ids of every session the app retains. The app publishes them as one snapshot; older
+     * shapes are accepted too, so a page from before a shape change still finds its composers
+     * instead of reporting an empty set while messages are still being sent.
+     * @returns the session ids, in no particular order.
+     */
+    function retainedSessionIds(sessions) {
+      try {
+        const byId = sessions?.list?.getSnapshot?.()?.byId;
+        if (byId !== null && typeof byId === 'object') return Object.keys(byId);
+      } catch {
+        // Fall through to the list shapes below.
+      }
+      try {
+        const list = sessions?.list?.();
+        if (Array.isArray(list)) return list.map((session) => (typeof session === 'string' ? session : session?.id)).filter((id) => typeof id === 'string' && id !== '');
+        if (list !== null && list !== undefined && typeof list[Symbol.iterator] === 'function') {
+          return [...list].map((session) => (typeof session === 'string' ? session : session?.id)).filter((id) => typeof id === 'string' && id !== '');
+        }
+      } catch {
+        // No readable session list: the markup fallback below is the remaining witness.
+      }
+      return [];
+    }
+
+    /**
      * What the composer still holds that was never sent, if anything. The answer names the piece
      * of state that held the rebuild: a check that guesses is worse than one that says which
      * reading refused, because a false hold can then be traced to the exact field that lied.
@@ -877,20 +902,33 @@ window.__ModuleLoader__.load({
            */
           const sessions = appContext?.get?.('sessions');
           const shells = conversation.input;
-          for (const session of sessions?.list?.() ?? []) {
-            if (session === null || session === undefined) continue;
+          for (const id of retainedSessionIds(sessions)) {
             try {
-              const shell = shells?.shell?.(session.id);
+              // The shell is addressed by session id and resolves the retained binding itself, so
+              // this reads the composer the app actually mounted for that session.
+              const shell = shells?.shell?.(id) ?? shells?.for?.(id);
               if (shell === null || shell === undefined) continue;
+              // A composer that is deciding or submitting is mid-send: the text and its files are
+              // held by the composer, not yet in the transcript, and a rebuild would drop both.
+              const phase = shell.snapshot?.phase;
+              if (phase === 'adjudicating' || phase === 'submitting') return 'sending';
               if ((shell.snapshot?.attachmentIds?.length ?? 0) > 0) return 'composer';
+              if (typeof shell.snapshot?.draft === 'string' && shell.snapshot.draft !== '') return 'draft';
               if ((shell.attachmentFlights?.size ?? 0) > 0) return 'sending';
-              // A retained send without attachments carries text only; counting the record itself
-              // would hold every queued message as if it were a file.
+              /**
+               * A send is retained with the text it carries until admission settles, and with it
+               * either files or words. Words alone are still something the person cannot get back
+               * after a rebuild, so the record's content counts, not only its attachments.
+               */
               for (const record of shell.detachedDrafts?.values?.() ?? []) {
                 if ((record?.attachmentIds?.length ?? 0) > 0) return 'sending';
+                if (typeof record?.draft === 'string' && record.draft.trim() !== '') return 'sending';
               }
+              // A send that failed is handed back to the composer; until it is sent again it is an
+              // unsent draft, and the person sees it restored rather than re-typed.
               for (const record of shell.failedDetached?.values?.() ?? []) {
-                if ((record?.attachmentIds?.length ?? 0) > 0) return 'sending';
+                if ((record?.attachmentIds?.length ?? 0) > 0) return 'draft';
+                if (typeof record?.draft === 'string' && record.draft.trim() !== '') return 'draft';
               }
             } catch {
               // One session whose composer cannot be read does not make the others empty; its own
@@ -941,6 +979,7 @@ window.__ModuleLoader__.load({
       try {
         if (screenHasOpenWindow()) return 'dialog';
         holdDetail = draftAttachmentReason();
+        if (holdDetail === 'sending') return 'sending';
         if (holdDetail !== null) return 'attachments';
         await commitFocusedField();
         const ready = await otherPluginsAreReady();
@@ -1206,7 +1245,9 @@ window.__ModuleLoader__.load({
               ? `blocked:${holdReason}`
               : reason === 'attachments' && holdDetail !== null
                 ? `attachments:${holdDetail}`
-                : reason;
+                : reason === 'sending'
+                  ? `sending:${holdDetail}`
+                  : reason;
             report('held', replaced ? `applied:${gate}` : gate);
             return stop(reason, replaced);
           }
@@ -1214,8 +1255,9 @@ window.__ModuleLoader__.load({
           // This is the last look before the document goes, and it costs one read of the composer.
           holdDetail = draftAttachmentReason();
           if (holdDetail !== null) {
-            report('held', replaced ? `applied:attachments:${holdDetail}` : `attachments:${holdDetail}`);
-            return stop('attachments', replaced);
+            const late = holdDetail === 'sending' ? 'sending' : 'attachments';
+            report('held', replaced ? `applied:${late}:${holdDetail}` : `${late}:${holdDetail}`);
+            return stop(late, replaced);
           }
           // Written only now, when the document really is about to go: a press that was held changed
           // nothing, so the next press must not be turned away as if this one had been answered.

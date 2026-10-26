@@ -407,15 +407,54 @@ for (const [label, options] of [
   const rebuilt = page.reloads.length + page.navigations.length
   check('a press with an empty composer still rebuilds', rebuilt >= 1, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
 }
-// --- a queued message is not an attachment --------------------------------------------------
-// A send waiting for admission is retained by the composer with the text it carries. Holding the
-// rebuild because that record exists made every queued message look like an unsent file.
+// --- a message that is still being sent -----------------------------------------------------
+// A send waiting for admission is retained by the composer with the text it carries. That text is
+// in neither the transcript nor the draft field: a rebuild here would drop what the person wrote,
+// so the press waits for the send to settle instead of treating it as a file.
 {
-  const shell = { snapshot: { attachmentIds: [] }, detachedDrafts: new Map([['d1', { attachmentIds: [] }]]), failedDetached: new Map(), attachmentFlights: new Map() }
+  const shell = { snapshot: { attachmentIds: [], draft: '', phase: 'idle' }, detachedDrafts: new Map([['d1', { attachmentIds: [], draft: 'hello there' }]]), failedDetached: new Map(), attachmentFlights: new Map() }
   const conversation = { draftAttachments: new Map(), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, input: { shell: () => shell } }
   const page = harness({ conversation, sessions: { list: () => [{ id: 's1' }] } })
   await page.press()
-  check('a queued text message does not hold the rebuild', page.reloads.length + page.navigations.length >= 1, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+  check('a message still being sent holds the rebuild', page.reloads.length === 0 && page.navigations.length === 0, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+  check('and the notice says it is being sent', /sent|发送/u.test(String(page.notice())), String(page.notice()))
+}
+// An empty record is the composer's own bookkeeping, not unsent content: it must not hold anything.
+{
+  const shell = { snapshot: { attachmentIds: [], draft: '', phase: 'idle' }, detachedDrafts: new Map([['d1', { attachmentIds: [], draft: '' }]]), failedDetached: new Map(), attachmentFlights: new Map() }
+  const conversation = { draftAttachments: new Map(), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, input: { shell: () => shell } }
+  const page = harness({ conversation, sessions: { list: () => [{ id: 's1' }] } })
+  await page.press()
+  check('an empty retained record does not hold the rebuild', page.reloads.length + page.navigations.length >= 1, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+}
+// A send that failed is handed back to the composer: it is unsent text the person can still send.
+{
+  const shell = { snapshot: { attachmentIds: [], draft: '', phase: 'idle' }, detachedDrafts: new Map(), failedDetached: new Map([['f1', { attachmentIds: [], draft: 'try again' }]]), attachmentFlights: new Map() }
+  const conversation = { draftAttachments: new Map(), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, input: { shell: () => shell } }
+  const page = harness({ conversation, sessions: { list: () => [{ id: 's1' }] } })
+  await page.press()
+  check('a failed send still holds the rebuild', page.reloads.length === 0 && page.navigations.length === 0, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+}
+// The app publishes its sessions as one snapshot keyed by id; that is the interface a page can
+// actually read, so the check must not depend on a list function that the service does not have.
+{
+  const shell = { snapshot: { attachmentIds: [], draft: 'typed but not sent', phase: 'idle' }, detachedDrafts: new Map(), failedDetached: new Map(), attachmentFlights: new Map() }
+  const conversation = { draftAttachments: new Map(), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, input: { shell: (id) => (id === 's1' ? shell : undefined) } }
+  const sessions = { list: { getSnapshot: () => ({ byId: { s1: { id: 's1' } } }) } }
+  const page = harness({ conversation, sessions })
+  await page.press()
+  check('a draft kept by the snapshot-addressed session holds the rebuild', page.reloads.length === 0 && page.navigations.length === 0, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+}
+// A composer between deciding and submitting owns the text until the send settles.
+{
+  const shell = { snapshot: { attachmentIds: [], draft: '', phase: 'adjudicating' }, detachedDrafts: new Map(), failedDetached: new Map(), attachmentFlights: new Map() }
+  const conversation = { draftAttachments: new Map(), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, input: { shell: () => shell } }
+  const sessions = { list: { getSnapshot: () => ({ byId: { s1: { id: 's1' } } }) } }
+  const page = harness({ conversation, sessions })
+  await page.press()
+  check('a composer that is mid-send holds the rebuild', page.reloads.length === 0 && page.navigations.length === 0, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+  check('and the notice names the sending message', /sent|发送/u.test(String(page.notice())), String(page.notice()))
+  check('and the log names the composer state that held it', page.requests.some((request) => request.path.includes('event=held') && request.path.includes('sending')), page.requests.map((r) => r.path).join(' '))
 }
 // --- a draft kept in another session ---------------------------------------------------------
 // The composer keeps the draft of a session the person left. That draft is not on screen, but a

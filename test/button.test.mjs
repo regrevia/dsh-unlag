@@ -106,10 +106,13 @@ function mount(config, extra = {}) {
               runExclusive: async (op) => op(),
               reconcileProfile: async () => {
                 handlers.reloads = (handlers.reloads ?? 0) + 1
+                extra.onReconcile?.(extra.entries)
                 if (extra.reloadDelay) await new Promise((resolve) => setTimeout(resolve, extra.reloadDelay))
                 return { warnings: (extra.reloadWarnings ?? []).slice(), pending: [] }
               },
             }
+          : key === 'loader'
+            ? { entries: () => (extra.entries ?? [{ id: 'dsh-sibling', state: 2 }]).map((entry) => ({ options: { id: entry.id }, fiber: { state: entry.state } })) }
           : key === 'clientModules'
             ? extra.clientModules
             : undefined,
@@ -285,7 +288,7 @@ liveMount.routes.get('/dsh-unlag/report')({ method: 'GET' }, reportGet)
 check('report rejects GET', reportGet.status === 405)
 
 // --- a sibling plugin that does not come back --------------------------------------------------
-const withWarning = mount({}, { reloadWarnings: ['dsh-sibling (dsh-sibling): failed to import: boom'] })
+const withWarning = mount({}, { entries: [{ id: 'dsh-sibling', state: 3 }], reloadWarnings: ['dsh-sibling (dsh-sibling): failed to import: boom'] })
 const warnRes = fakeRes()
 await withWarning.routes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1', host: '127.0.0.1:62542', origin: 'http://127.0.0.1:62542' } }, warnRes)
 await new Promise((resolve) => setTimeout(resolve, 30))
@@ -298,11 +301,16 @@ check('and it does not turn the press into a failure', verdict(warnRes.body) ===
 // in the last list and is named as failed now is a breakage this update caused, and a page must not
 // be rebuilt on top of it.
 const warningsNow = ['dsh-sibling (dsh-sibling): failed to import: boom']
-const tracking = mount({}, { reloadWarnings: warningsNow })
+const trackingEntries = [{ id: 'dsh-sibling', state: 2 }]
+// The second update is the one that breaks the entry: it runs when the update starts and the app
+// finds the import gone by the time it settles.
+let breakSibling = false
+const tracking = mount({}, { entries: trackingEntries, reloadWarnings: warningsNow, onReconcile: () => { if (breakSibling) trackingEntries[0].state = 3 } })
 const firstRes = fakeRes()
 await tracking.routes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1', host: '127.0.0.1:62542', origin: 'http://127.0.0.1:62542' }, on: () => {}, destroy: () => {} }, firstRes)
 await new Promise((resolve) => setTimeout(resolve, 30))
 check("a first list of warnings is a baseline, not this press's result", verdict(firstRes.body) === 'done', firstRes.body)
+breakSibling = true
 warningsNow.push('dsh-new (dsh-new): failed to import: nope')
 const secondRes = fakeRes()
 await tracking.routes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1', host: '127.0.0.1:62542', origin: 'http://127.0.0.1:62542' }, on: () => {}, destroy: () => {} }, secondRes)

@@ -407,18 +407,35 @@ function transactionContext(service) {
   return null
 }
 
-/** The ids of the Loader entries that are running now, read defensively: this is diagnostics. */
-function activeEntryIds(ctx) {
+/** The id this plugin is inserted under; a self-update replaces it on purpose, so it is never judged. */
+const SELF_ENTRY_ID = 'dsh-unlag'
+
+/**
+ * Every Loader entry and its fiber state, keyed by the id a profile uses. `null` means the Loader
+ * cannot be read at all, which is different from "nothing is running": an update whose health cannot
+ * be read is not one that can be called finished.
+ * @returns {Map<string, number|null>|null}
+ */
+function loaderEntryStates(ctx) {
   try {
     const loader = typeof ctx?.get === 'function' ? ctx.get('loader') : undefined
-    const entries = typeof loader?.entries === 'function' ? [...loader.entries()] : []
-    return entries
-      .filter((entry) => entry?.fiber?.state === 2)
-      .map((entry) => entry?.options?.id)
-      .filter((id) => typeof id === 'string' && id !== '')
+    if (typeof loader?.entries !== 'function') return null
+    const states = new Map()
+    for (const entry of loader.entries()) {
+      const id = entry?.options?.id
+      if (typeof id === 'string' && id !== '') states.set(id, entry?.fiber?.state ?? null)
+    }
+    return states
   } catch {
-    return []
+    return null
   }
+}
+
+/** The ids of the Loader entries that are running now, read defensively: this is diagnostics. */
+function activeEntryIds(ctx) {
+  const states = loaderEntryStates(ctx)
+  if (states === null) return []
+  return [...states].filter(([, state]) => state === 2).map(([id]) => id)
 }
 
 function pluginReloader(ctx, config) {
@@ -489,7 +506,32 @@ function pluginReloader(ctx, config) {
    * here again was already true before this press; one that does not is a breakage this press caused,
    * and a press that broke something must not be followed by a page built on it.
    */
-  const knownInactive = globalThis[Symbol.for('dsh-unlag.health')] ?? (globalThis[Symbol.for('dsh-unlag.health')] = { health: null, lingering: [] })
+  const knownInactive = globalThis[Symbol.for('dsh-unlag.health')] ?? (globalThis[Symbol.for('dsh-unlag.health')] = { unhealthy: [] })
+
+  /**
+   * Which required entries are still not running. Required means: running at the moment this update
+   * started, minus this plugin's own entry (a self-update replaces it deliberately). The set is kept
+   * by id, not by warning prose: a warning is a sentence, and a sentence is not something a later
+   * update can compare against. A remembered entry stops blocking when it runs again or is gone from
+   * the profile; until then every later update stays unfinished, because a page built on it would
+   * start against a set that is still missing part of itself.
+   * @returns {{unhealthy: string[], readable: boolean}}
+   */
+  const settleEntryHealth = (required) => {
+    const states = loaderEntryStates(ctx)
+    if (states === null) return { unhealthy: [], readable: false }
+    const remembered = Array.isArray(knownInactive.unhealthy) ? knownInactive.unhealthy : []
+    const unhealthy = []
+    for (const id of new Set([...remembered, ...required])) {
+      if (id === SELF_ENTRY_ID) continue
+      const state = states.get(id)
+      // Absent from the Loader means the profile no longer has it: nothing left to wait for.
+      if (state === undefined) continue
+      if (state !== 2) unhealthy.push(id)
+    }
+    knownInactive.unhealthy = unhealthy
+    return { unhealthy, readable: true }
+  }
 
   /**
    * What the last operation really ended as. The answer to a press is bounded by the time a page
@@ -543,11 +585,19 @@ function pluginReloader(ctx, config) {
      * app report the ones this update took down, so the press is judged against the state before it
      * instead of against a list the previous update already carried.
      */
-    const requiredBefore = activeEntryIds(ctx)
-    const ask = (service) =>
-      context === null
-        ? service.runExclusive(() => service.reconcileProfile(requiredBefore))
-        : context.exit(() => service.runExclusive(() => service.reconcileProfile(requiredBefore)))
+    let requiredBefore = []
+    const ask = (service) => {
+      const inside = async () => {
+        // Snapshot inside the queue, not before it: what is running at the moment the update starts
+        // is what the page needs afterwards. Reading it earlier can name an entry another queued
+        // update already replaced, and the update would then be failed for somebody else's change.
+        requiredBefore = activeEntryIds(ctx).filter((id) => id !== SELF_ENTRY_ID)
+        return service.reconcileProfile(requiredBefore)
+      }
+      return context === null
+        ? service.runExclusive(inside)
+        : context.exit(() => service.runExclusive(inside))
+    }
     const abandoned = () =>
       new Promise((_resolve, reject) => {
         const limit = Number(process.env.DSH_UNLAG_TIMEOUT_MS ?? '') || RELOAD_TIMEOUT_MS
@@ -569,6 +619,7 @@ function pluginReloader(ctx, config) {
     /** Whether the bundle route was wrapped when this update started, so a re-wrap is written down. */
     const shimWrappedBefore = bundleShimStatus(ctx).wrapped
     let result = null
+    try {
     for (let attempt = 0; ; attempt += 1) {
       try {
         result = await Promise.race([tracked(ask(hmr)), abandoned()])
@@ -619,30 +670,29 @@ function pluginReloader(ctx, config) {
      */
     const listed = warnings.map((warning) => (typeof warning === 'string' ? warning : String(warning?.message ?? warning)))
     /**
-     * Judged from three directions, because no one of them is enough:
-     * - an entry that was running before this update and is not running now (the app was told those
-     *   ids were required, so it names them even though they predate the call);
-     * - a warning that was not in the list the last update left behind;
-     * - a warning this plugin already failed on that is still there. A breakage does not heal by
-     *   being reported twice: the third press must not turn a real failure into `done`.
-     * A warning that is on none of these lists was already true before this press and is not its
-     * result, which is what keeps leftover pending entries from blocking every update.
+     * The verdict comes from the Loader itself: which of the entries that were running before this
+     * update are not running after it. The app's warnings are prose and are passed on as they read;
+     * they are not parsed to decide anything, because a sentence can miss an entry or describe
+     * something harmless and the same text must not mean different things on different runs.
+     * An entry remembered from an earlier update keeps this press from ending `done` until it runs
+     * again or leaves the profile.
      */
-    const before = new Set(Array.isArray(knownInactive.health) ? knownInactive.health : [])
-    const lingering = new Set(Array.isArray(knownInactive.lingering) ? knownInactive.lingering : [])
-    const mentionsRequired = (entry) => requiredBefore.some((id) => entry.includes(id))
-    const failedEntries = listed.filter((entry) => lingering.has(entry) || mentionsRequired(entry) || (before.size > 0 && !before.has(entry)))
-    const inactiveEntries = listed.filter((entry) => !failedEntries.includes(entry))
-    knownInactive.health = listed
-    // Only entries still reported are remembered: one that went away has healed, and keeping it
-    // would fail the next update for a breakage that no longer exists.
-    knownInactive.lingering = failedEntries
+    const health = settleEntryHealth(requiredBefore)
+    const failedEntries = health.unhealthy
+    const inactiveEntries = listed
+    if (!health.readable) log('the plugin list could not be read after the update; this update is not marked as finished')
     log(
       `plugins reloaded (already not running=${inactiveEntries.length} newly not running=${failedEntries.length} pending=${pending.length}${restartReason === null ? '' : ` restart=${restartReason}`})`,
     )
     for (const entry of inactiveEntries.slice(0, 5)) log(`a plugin was already not running and still is not: ${entry.slice(0, 200)}`)
     for (const entry of failedEntries.slice(0, 5)) log(`a plugin stopped running with this update: ${entry.slice(0, 200)}`)
     return { status: failedEntries.length > 0 ? 'failed' : 'done', warnings, pending, restartReason, inactiveEntries, failedEntries }
+    } catch (error) {
+      // The update failed part-way: what it was required to keep running is still the right list to
+      // judge the next press against, so the memory is settled before the failure travels on.
+      settleEntryHealth(requiredBefore)
+      throw error
+    }
   }
 
   const flush = async () => {
