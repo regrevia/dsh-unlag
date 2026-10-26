@@ -156,6 +156,34 @@ check('and the pressed page still rebuilt', swapped.navigations.length === 1, sw
   check('and the notice never says it did not finish', !/did not finish/.test(String(page.notice())), String(page.notice()))
 }
 
+// --- a lost answer the app records as failed ------------------------------------------------
+// The name was found in the app's record, but that record says the update failed. The page stays
+// where it is: a failed replacement is not a reason to start a new document against a broken set.
+{
+  const page = harness({
+    reload: new Error('the route was replaced while it answered'),
+    lateOperation: (requestId) => ({ id: 1, status: 'failed', pending: 1, failed: 1, restart: null, requestId }),
+  })
+  await page.press()
+  check('a lost answer the app records as failed keeps the page', page.navigations.length === 0, String(page.navigations.length))
+  check('and the press says it did not finish', /did not finish/.test(String(page.notice())), String(page.notice()))
+  check('and nothing is logged as rebuilt', !page.requests.some((request) => request.path.includes('event=rebuild')))
+}
+
+// --- a lost answer whose record never settles ------------------------------------------------
+// The record still says the update is applying when every read has been spent. Running is not
+// done: the page stays and the press reports that it did not finish, so a late failure cannot be
+// mistaken for a press that worked.
+{
+  const page = harness({
+    reload: new Error('the route was replaced while it answered'),
+    lateOperation: (requestId) => ({ id: 1, status: 'applying', pending: 1, failed: 0, restart: null, requestId }),
+  })
+  await page.press()
+  check('a lost answer left applying keeps the page', page.navigations.length === 0, String(page.navigations.length))
+  check('and an unfinished record is not read as success', !/applied|replaced|rebuild/i.test(String(page.notice())), String(page.notice()))
+}
+
 // --- a lost answer where only the code changed ----------------------------------------------
 // Replacing a plugin whose served bundles keep the same revision leaves the boot list unchanged, so
 // the graph cannot show that the press worked; a code stamp cannot either, because it belongs to
