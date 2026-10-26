@@ -341,5 +341,30 @@ for (const [label, options] of [
   check('a rebuild the page held takes its pacing stamp back', page.stamp() === 0, String(page.stamp()))
 }
 
+// --- an update that outlasted the page's wait and then failed -------------------------------
+// The page stops waiting after a bounded time and is told the update is still applying. The host
+// writes that update's real end as it happens, so a press that later broke a plugin must show the
+// failure instead of leaving "still applying" on a button that looks busy forever.
+{
+  const page = harness({
+    reload: { status: 'applying', operationId: 7, warnings: [], pending: [], restartReason: null },
+    lateOperation: { id: 7, status: 'failed', pending: 1, failed: 1, restart: null },
+  })
+  await page.press()
+  check('an update the page gave up waiting for is read back once', count(page.requests, '/dsh-unlag/state') >= 2, String(count(page.requests, '/dsh-unlag/state')))
+  check('an update that failed after the wait says so', /did not finish|press again/i.test(String(page.notice())), String(page.notice()))
+  check('and it never rebuilds the page', page.navigations.length === 0 && page.reloads.length === 0, JSON.stringify({ navigations: page.navigations, reloads: page.reloads }))
+  check('and the button is usable again', page.render().button.props.style.opacity !== 0.6, String(page.render().button.props.style.opacity))
+}
+{
+  // The same update did finish: the press has nothing to report and must not invent a failure.
+  const page = harness({
+    reload: { status: 'applying', operationId: 8, warnings: [], pending: [], restartReason: null },
+    lateOperation: { id: 8, status: 'done', pending: 0, failed: 0, restart: null },
+  })
+  await page.press()
+  check('an update that finished after the wait is not a failure', !/did not finish/i.test(String(page.notice())), String(page.notice()))
+}
+
 console.log(out.join('\n'))
 console.log(out.every((line) => line.startsWith('PASS')) ? 'ok' : 'failed')

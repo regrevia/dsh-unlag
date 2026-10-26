@@ -31,10 +31,11 @@ function show(tree) {
   return pill === undefined ? null : String(Array.isArray(pill.children) ? pill.children.join('') : pill.children)
 }
 
-function harnessWith(sourceText, { settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, language = 'en-US', href } = {}) {
+function harnessWith(sourceText, { settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], lateOperation = null, revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, language = 'en-US', href } = {}) {
   const requests = []
   const navigations = []
   const current = { rev: graph.rev, code: 'c1' }
+  let replaced = false
   let reloadBody = reload
   let reloadAnswer = null
   const reloads = []
@@ -48,12 +49,16 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
     requests.push({ path, init })
     if (path.startsWith('/dsh-unlag/state')) {
       if (settings === null) return new Response('', { status: 503 })
-      return new Response(JSON.stringify({ ...settings, code: current.code }), { status: 200, headers: { 'content-type': 'application/json' } })
+      // A page reads this before, during and after a press: a case that changes what the host says
+      // over time queues the answers it wants in order, and later reads fall back to the switches.
+      const operation = replaced && lateOperation !== null ? { operation: lateOperation } : {}
+      return new Response(JSON.stringify({ ...settings, code: current.code, ...operation }), { status: 200, headers: { 'content-type': 'application/json' } })
     }
     if (path.startsWith('/dsh-unlag/reload')) {
       if (revAfterReload !== undefined) current.rev = revAfterReload
       if (codeAfterReload !== undefined) current.code = codeAfterReload
       if (reloadAnswer !== null) await reloadAnswer
+      replaced = true
       if (reloadBody instanceof Error) throw reloadBody
       return new Response(JSON.stringify(reloadBody), { status: 200, headers: { 'content-type': 'application/json' } })
     }

@@ -72,13 +72,13 @@ for (let index = 0; index < 20; index += 1) {
   cycle.routes.get('/dsh-unlag/state')({ method: 'GET' }, res)
   atApply.push(`${cycle.routes.size}/${res.status}`)
 }
-check('every apply leaves five routes and answers a state request', atApply.every((entry) => entry === '5/200'), atApply.join(','))
-check('only the newest instance owns routes after twenty applies', cycles[cycles.length - 1].routes.size === 5 && cycles.slice(0, -1).every((cycle) => cycle.routes.size === 0), cycles.map((cycle) => cycle.routes.size).join(','))
+check('every apply leaves five routes and answers a state request', atApply.every((entry) => entry === '6/200'), atApply.join(','))
+check('only the newest instance owns routes after twenty applies', cycles[cycles.length - 1].routes.size === 6 && cycles.slice(0, -1).every((cycle) => cycle.routes.size === 0), cycles.map((cycle) => cycle.routes.size).join(','))
 
 // The app can dispose an instance it replaced minutes ago; the newest one must keep serving.
 const newest = cycles[cycles.length - 1]
 for (const cycle of cycles.slice(0, -1)) cycle.dispose()
-check('a stale dispose leaves the live routes alone', newest.routes.size === 5, String(newest.routes.size))
+check('a stale dispose leaves the live routes alone', newest.routes.size === 6, String(newest.routes.size))
 const afterStale = fakeRes()
 newest.routes.get('/dsh-unlag/state')({ method: 'GET' }, afterStale)
 check('and the live instance still answers', afterStale.status === 200, String(afterStale.status))

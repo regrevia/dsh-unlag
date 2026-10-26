@@ -120,7 +120,7 @@ function mount(config, extra = {}) {
 }
 
 const both = mount({})
-check('five routes registered', both.routes.size === 5, [...both.routes.keys()].join(','))
+check('six routes registered', both.routes.size === 6, [...both.routes.keys()].join(','))
 
 const stateRes = fakeRes()
 both.routes.get('/dsh-unlag/state')({ method: 'GET' }, stateRes)
@@ -276,6 +276,22 @@ check('a plugin that was already not running is named in the log', readFileSync(
 // The app rejects a reload that newly breaks an entry, so a leftover inactive entry is not the
 // press's result: it is written down, and the press still replaces the set.
 check('and it does not turn the press into a failure', verdict(warnRes.body) === 'done', warnRes.body)
+
+// The second press is where a comparison has something to compare with: an entry that was running
+// in the last list and is named as failed now is a breakage this update caused, and a page must not
+// be rebuilt on top of it.
+const warningsNow = ['dsh-sibling (dsh-sibling): failed to import: boom']
+const tracking = mount({}, { reloadWarnings: warningsNow })
+const firstRes = fakeRes()
+await tracking.routes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1', host: '127.0.0.1:62542', origin: 'http://127.0.0.1:62542' }, on: () => {}, destroy: () => {} }, firstRes)
+await new Promise((resolve) => setTimeout(resolve, 30))
+check("a first list of warnings is a baseline, not this press's result", verdict(firstRes.body) === 'done', firstRes.body)
+warningsNow.push('dsh-new (dsh-new): failed to import: nope')
+const secondRes = fakeRes()
+await tracking.routes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1', host: '127.0.0.1:62542', origin: 'http://127.0.0.1:62542' }, on: () => {}, destroy: () => {} }, secondRes)
+await new Promise((resolve) => setTimeout(resolve, 30))
+check('an entry that stops running with this press fails it', verdict(secondRes.body) === 'failed', secondRes.body)
+check('and the answer names the entry that stopped', /dsh-new/.test(JSON.stringify(secondRes.body)), secondRes.body)
 
 // --- switches --------------------------------------------------------------------------------
 const onlyPage = mount({ reloadPlugins: false })
@@ -573,7 +589,7 @@ check('no web server and no hmr is not fatal', survived)
 // --- replacing the module twice must not stack routes ----------------------------------------
 const first = mount({})
 const second = mount({})
-check('remount leaves one route set', first.routes.size === 0 && second.routes.size === 5, `${first.routes.size}/${second.routes.size}`)
+check('remount leaves one route set', first.routes.size === 0 && second.routes.size === 6, `${first.routes.size}/${second.routes.size}`)
 
 // --- the address a press came from: a browser always sends one -------------------------------
 const gate = mount({})
@@ -695,9 +711,66 @@ check(
   addedByStringOff.slice(-120),
 )
 
+// --- a press that arrives while the plugin is being torn down --------------------------------
+// A dispose and a press can land together: the press must not start an update for a plugin that has
+// already stopped, because nothing would ever finish it and the page would wait on a dead instance.
+{
+  const stopping = mount({})
+  // A request already in flight when teardown lands: the route object is captured first, which is
+  // exactly the race this case is about.
+  const reloadRoute = stopping.routes.get('/dsh-unlag/reload')
+  stopping.handlers.dispose?.()
+  const after = fakeRes()
+  await reloadRoute({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, after)
+  check('a press after teardown is answered, not dropped', after.status === 200, String(after.status))
+  check('and it does not claim the code was replaced', verdict(after.body) !== 'done', after.body)
+  check('and no update was run for it', stopping.handlers.reloads === undefined, String(stopping.handlers.reloads))
+}
+
+// --- what the page reports about the list it booted with --------------------------------------
+// The desktop shell freezes the startup list per window, so only the running document knows it.
+{
+  const reports = mount({})
+  const noHeaderBoot = fakeRes()
+  await reports.routes.get('/dsh-unlag/boot')({ method: 'POST', headers: {} }, noHeaderBoot)
+  check('a boot report from another page is refused', noHeaderBoot.status === 403, String(noHeaderBoot.status))
+
+  const wrongMethod = fakeRes()
+  await reports.routes.get('/dsh-unlag/boot')({ method: 'GET', headers: { 'x-dsh-unlag': '1' } }, wrongMethod)
+  check('a boot report is a post only', wrongMethod.status === 405, String(wrongMethod.status))
+
+  const empty = fakeRes()
+  await reports.routes.get('/dsh-unlag/boot')(
+    {
+      method: 'POST',
+      headers: { 'x-dsh-unlag': '1' },
+      on: (event, fn) => {
+        if (event === 'end') setImmediate(fn)
+      },
+      destroy: () => {},
+    },
+    empty,
+  )
+  check('a boot report with no list is not stored', JSON.parse(empty.body).status !== 'done', empty.body)
+
+  const told = fakeRes()
+  await reports.routes.get('/dsh-unlag/boot')(
+    {
+      method: 'POST',
+      headers: { 'x-dsh-unlag': '1' },
+      on: (event, fn) => {
+        if (event === 'data') setImmediate(() => fn(Buffer.from(JSON.stringify({ boot: { rev: 'live', entries: 2, batches: [{ url: '/plugins/??@local/a/client.js&rev=live' }] } }))))
+        if (event === 'end') setImmediate(fn)
+      },
+      destroy: () => {},
+    },
+    told,
+  )
+  check('a boot report from this page is accepted', JSON.parse(told.body).status === 'done', told.body)
+  const carried = fakeRes()
+  reports.routes.get('/dsh-unlag/state')({ method: 'GET' }, carried)
+  check('and the state route carries it', JSON.parse(carried.body).boot?.rev === 'live', carried.body)
+}
 
 console.log(out.join('\n'))
 process.exit(process.exitCode ?? 0)
-
-
-console.log(process.exitCode === 1 ? 'FAILURES' : 'ALL PASS')

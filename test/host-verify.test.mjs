@@ -54,7 +54,9 @@ const frozenRow = '/plugins/??@local/a/client.js&rev=old'
 const current = table()
 const atCurrent = await verifyStartup(current, [frozenRow])
 check('a frozen startup script is read at the revision that holds it', atCurrent.status === 'ok', JSON.stringify(atCurrent))
-check('the read goes to the revision that holds the set', current.asked.every((url) => url.includes('&rev=new')), current.asked.join(' '))
+// The document asks the app's own route first and only falls back to the mapping, so the check reads
+// the frozen address first and the current revision second: the last read is the one the page runs.
+check('the read ends at the revision that holds the set', current.asked.at(-1).includes('&rev=new'), current.asked.join(' '))
 
 // A plugin the table no longer has is answered by the stand-in script the route serves in its
 // place, so the boot comes up without it and the check says so instead of refusing the rebuild.
@@ -64,6 +66,37 @@ check('a startup row for a plugin the set no longer has refuses the press', gone
 check('and the refusal says which entry the frozen list still names', gone.reason === 'entries' && gone.leftOut?.includes('@local/a') === true, JSON.stringify(gone))
 
 
+
+// The app's own route is what the next document asks, so its answer is what the check must read.
+// Here the route still knows the frozen address and serves it, while the mapping would have handed
+// over the newer bytes: approving the mapping's copy would vouch for a script the page never runs.
+const bothPaths = (() => {
+  const asked = []
+  const fetchBundle = async (request) => {
+    const url = String(request?.url ?? request)
+    const path = url.replace(/^https?:\/\/[^/]+/u, '')
+    asked.push(path)
+    if (path.includes('&rev=old')) return new Response(registered('@local/a'), { status: 200 })
+    return new Response(registered('@local/a') + '\n;', { status: 200 })
+  }
+  return { graph: () => ({ rev: 'new', entries: [{ id: '@local/a', rev: 'new', url: '/plugins/??@local/a/client.js&rev=new' }], batches: [] }), fetchBundle, asked }
+})()
+const servedFirst = await verifyStartup(bothPaths, [frozenRow])
+check('a row the app route still serves is read from that route', servedFirst.status === 'ok' && bothPaths.asked[0].includes('&rev=old'), bothPaths.asked.join(' '))
+
+// A recomposition between the first body and the last leaves the check with bytes from two
+// generations: no single answer describes that set, so the press is held instead of approved.
+const moving = (() => {
+  const graph = { rev: 'new', entries: [{ id: '@local/a', rev: 'new', url: '/plugins/??@local/a/client.js&rev=new' }], batches: [] }
+  const fetchBundle = async (request) => {
+    const path = String(request?.url ?? request).replace(/^https?:\/\/[^/]+/u, '')
+    if (!path.includes('&rev=old')) graph.rev = 'newer'
+    return new Response(registered('@local/a'), { status: path.includes('&rev=old') ? 404 : 200 })
+  }
+  return { graph: () => graph, fetchBundle }
+})()
+const moved = await verifyStartup(moving, [frozenRow])
+check('a set replaced while its scripts are read refuses the press', moved.status === 'blocked' && moved.reason === 'generation', JSON.stringify(moved))
 
 // A body that does not register what its address claims is a refusal even when served.
 const wrong = table({ body: registered('@local/other') })
@@ -156,7 +189,7 @@ const longTable = table({
   },
 })
 const longRead = await verifyStartup(longTable, [longUrl('old')])
-check('an address naming a whole plugin set is read, not dropped', longRead.status === 'ok' && longTable.asked.length === 1, JSON.stringify(longRead).slice(0, 160))
+check('an address naming a whole plugin set is read, not dropped', longRead.status === 'ok' && longTable.asked.at(-1).includes('&rev=new'), JSON.stringify(longRead).slice(0, 160))
 check('that address is longer than a thousand ids of slack', longUrl('old').length > 4096, String(longUrl('old').length))
 
 // Repeating one address is not a reason to read it again: one address can be most of a profile's

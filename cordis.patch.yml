@@ -14,5 +14,5 @@
 - id: hmr
   disabled: false
   config:
-    base: !!js 'process.cwd()'
+    base: !!js 'process.cwd().startsWith("/") ? "file://" + process.cwd() : "file:///" + process.cwd().replace(/\\/g, "/")'
     root: []

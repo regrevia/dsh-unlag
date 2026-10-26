@@ -74,7 +74,7 @@ function mount({ baseDirThrows = false, roots = [] } = {}) {
 
 // --- a watch that throws leaves the press working ---------------------------------------
 const broke = mount({ baseDirThrows: true })
-check('five routes are still registered', broke.routes.size === 5, String(broke.routes.size))
+check('six routes are still registered', broke.routes.size === 6, String(broke.routes.size))
 check('the reason is one line', lines().some((line) => line.includes('cannot watch for saved plugin changes: the profile directory went away')), JSON.stringify(lines().slice(-4)))
 check('and it says the press still works', lines().some((line) => line.includes('a press still works')))
 const state = fakeRes()

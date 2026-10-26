@@ -15,8 +15,8 @@ window.__ModuleLoader__.load({
      * repeating one generic sentence.
      */
     const REASONS = zh
-      ? { list: '读不到启动信息', slow: '启动信息读得太慢', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', size: '启动脚本太大', verify: '插件后端没有应答', screen: '页面状态读不到', busy: '另一次刷新还在进行', dependencies: '插件依赖还没有运行', missing: '启动清单里有插件已经不见了', network: '读取插件时出错', register: '插件没有登记自己', entries: '启动清单里的插件已卸载，重启应用后再刷新' }
-      : { list: 'startup info is unavailable', slow: 'the startup list answered too slowly', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete', size: 'a startup script is too large', verify: 'the plugin is not answering', screen: 'the page state cannot be read', busy: 'another rebuild is already running', dependencies: 'a plugin dependency is not running', missing: 'a plugin in the startup list is gone', network: 'the plugins could not be read', register: 'a plugin did not register itself', entries: 'a plugin in the startup list was uninstalled, so restart the app before rebuilding' };
+      ? { list: '读不到启动信息', slow: '启动信息读得太慢', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', size: '启动脚本太大', verify: '插件后端没有应答', screen: '页面状态读不到', busy: '另一次刷新还在进行', dependencies: '插件依赖还没有运行', missing: '启动清单里有插件已经不见了', network: '读取插件时出错', register: '插件没有登记自己', entries: '启动清单里的插件已卸载，重启应用后再刷新', generation: '插件刚被换过，再按一次刷新' }
+      : { list: 'startup info is unavailable', slow: 'the startup list answered too slowly', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete', size: 'a startup script is too large', verify: 'the plugin is not answering', screen: 'the page state cannot be read', busy: 'another rebuild is already running', dependencies: 'a plugin dependency is not running', missing: 'a plugin in the startup list is gone', network: 'the plugins could not be read', register: 'a plugin did not register itself', entries: 'a plugin in the startup list was uninstalled, so restart the app before rebuilding', generation: 'the plugins were replaced a moment ago, press again' };
 
     /** The last reason a readiness check refused for, or null after a check that passed. */
     let holdReason = null;
@@ -133,6 +133,26 @@ window.__ModuleLoader__.load({
      * before rebuilding looks exactly like one that never happened, and the page itself is gone by
      * the time anyone reads it.
      */
+    /**
+     * Tells the app which startup list this page was frozen with. Nothing acts on it here: the
+     * desktop shell pins the list when the window starts, so a document that never says what it got
+     * leaves every later check guessing which addresses it will actually request.
+     */
+    function reportBoot() {
+      try {
+        const boot = window?.__DSH_BOOT__;
+        if (boot === null || typeof boot !== 'object') return;
+        void fetch(`${HOST_BASE}/boot`, {
+          method: 'POST', // ui-copy-ignore
+          credentials: 'same-origin',
+          headers: { 'content-type': 'application/json', 'x-dsh-unlag': '1' }, // ui-copy-ignore
+          body: JSON.stringify({ boot: { rev: boot.rev, entries: boot.entries, batches: boot.batches } }), // ui-copy-ignore
+        }).catch(() => {});
+      } catch {
+        /* a page that cannot describe itself must still render its button */
+      }
+    }
+
     function report(event, gate, attempt = 0) {
       // The page description is the app's value, not this plugin's: a boot object whose revision
       // cannot be read must not stop a press from being written down, and this call is the one
@@ -230,6 +250,9 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** The operation the last replacement started, so its real end can be read back later. */
+    let replacedOperation = null;
+
     /** Ask the running app to replace changed plugins now; a running turn is reported, never cut. */
     async function replacePlugins() {
       try {
@@ -241,6 +264,7 @@ window.__ModuleLoader__.load({
         }));
         if (!response.ok) return 'failed';
         const data = await withTimeout(response.json());
+        replacedOperation = typeof data?.operationId === 'number' ? data.operationId : null;
         return reloadVerdict(data);
       } catch {
         // Nothing answered: the update may or may not have happened, and only the set can say.
@@ -344,7 +368,7 @@ window.__ModuleLoader__.load({
       register: 'plugin', // ui-copy-ignore
       slow: 'slow', // ui-copy-ignore
       dependencies: 'covers',
-      entries: 'entries',
+      entries: 'entries', generation: 'generation',
       list: 'list', // ui-copy-ignore
     };
 
@@ -614,6 +638,30 @@ window.__ModuleLoader__.load({
       } catch {
         return true;
       }
+    }
+
+    /**
+     * The real end of the update a press started. The press's own answer is bounded by the time a
+     * page waits, so an update that outlasted it is answered as still applying; the app writes that
+     * same operation's end as it happens, and this reads it instead of leaving the press undecided.
+     */
+    async function settledOperation(id) {
+      if (typeof id !== 'number') return null;
+      for (const wait of [500, 1200, 2500]) { // ui-copy-ignore
+        await new Promise((resolve) => setTimeout(resolve, wait));
+        try {
+          const response = await withTimeout(fetch(`${HOST_BASE}/state`, { cache: 'no-store', credentials: 'same-origin' }));
+          if (!response.ok) continue;
+          const data = await withTimeout(response.json());
+          const operation = data?.operation;
+          if (operation === null || typeof operation !== 'object') continue;
+          if (typeof operation.id !== 'number' || operation.id < id) continue;
+          if (operation.status !== 'applying') return operation;
+        } catch {
+          /* the answer is a nicety here: the press already has one of its own */
+        }
+      }
+      return null;
     }
 
     async function servedBootGraph() {
@@ -933,6 +981,18 @@ window.__ModuleLoader__.load({
                         ? 'blocked'
                         : 'failed';
               report('plugin-held', key);
+              /**
+               * Still applying when the page stops waiting: the update is not the page's to finish,
+               * but its real end is read back so a press that later broke an entry is not left
+               * looking like a press that worked.
+               */
+              if (key === 'applying' || key === 'queued') {
+                const settled = await settledOperation(replacedOperation);
+                if (settled !== null && settled.status === 'failed') {
+                  report('plugin-held', 'late-failed');
+                  return stop('failed');
+                }
+              }
               return stop(key);
             }
             replaced = status === 'done';
@@ -1034,6 +1094,7 @@ window.__ModuleLoader__.load({
         if (!desktop) return;
         // Leave a line in the log per rebuilt interface: it is the one place that shows which
         // plugin code a running page actually loaded.
+        reportBoot();
         report('mounted');
         ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
           name: 'conversation.session.header.utilities',

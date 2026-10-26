@@ -5,7 +5,7 @@ import { runInNewContext } from 'node:vm'
 // button whether it could rebuild right now, using the startup list the app really renders, and
 // prints the answer. It never presses: only a person may swap plugin code. A host that is not
 // listening is a skip, so the script is safe to run anywhere the app is not.
-const HOST = process.env.DSH_UNLAG_HOST ?? 'http://127.0.0.1:52847'
+const HOST = process.env.DSH_UNLAG_HOST ?? 'http://127.0.0.1:54601'
 const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
 
 async function json(path) {
@@ -90,6 +90,7 @@ contract.push(['verify without header', await status('/dsh-unlag/verify', { meth
 // The button header is one half of the gate; the other half is that a page on another origin can
 // never send it, so the same request carrying a foreign origin must be refused too.
 contract.push(['report without header', await status('/dsh-unlag/report', { method: 'POST' }), 403])
+contract.push(['boot without header', await status('/dsh-unlag/boot', { method: 'POST' }), 403])
 contract.push(['verify from another origin', await status('/dsh-unlag/verify', { method: 'POST', headers: { 'x-dsh-unlag': '1', origin: 'https://evil.example', 'content-type': 'application/json' }, body: '{"rows":[]}' }), 403])
 contract.push(['report from another origin', await status('/dsh-unlag/report', { method: 'POST', headers: { origin: 'https://evil.example', 'content-type': 'application/json' }, body: '{"kind":"done"}' }), 403])
 const contractHeld = contract.every(([, got, want]) => got === want)
@@ -107,6 +108,37 @@ const shimBehaviour = {
   unknownPlugin: oldestReply?.status ?? 0,
 }
 const shimHeld = shimBehaviour.staleRev.status === 200 && shimBehaviour.staleRev.bytes > 0 && shimBehaviour.unknownPlugin === 404
+
+/**
+ * The startup list the running page really was frozen with, as that page reported it to the host.
+ * The whole reason this plugin exists is a document that replays frozen addresses; this asks the
+ * live document's own list instead of a list fabricated here, and requires every address in it to
+ * still answer bytes. `unknown` means no document has reported yet, which is not a failure of the
+ * routes, only of this check's reach.
+ */
+async function liveFrozenBoot() {
+  const reported = stated.boot
+  if (reported === null || typeof reported !== 'object' || !Array.isArray(reported.urls)) {
+    return { status: 'unknown', why: 'no page has reported the list it booted with' }
+  }
+  const answered = []
+  for (const url of reported.urls.slice(0, 200)) {
+    const path = String(url).startsWith('/') ? String(url) : `/${String(url)}`
+    const reply = await fetch(`${HOST}${path}`, { headers: { 'x-dsh-unlag': '1' } }).catch(() => null)
+    const bytes = reply === null ? 0 : (await reply.arrayBuffer().catch(() => new ArrayBuffer(0))).byteLength
+    answered.push({ path: path.split('?')[0], status: reply?.status ?? 0, bytes })
+  }
+  const bad = answered.filter((row) => row.status !== 200 || row.bytes === 0)
+  return {
+    status: bad.length === 0 ? 'ok' : 'bad',
+    rev: reported.rev,
+    entries: reported.entries,
+    ageMs: typeof reported.at === 'number' ? Date.now() - reported.at : null,
+    addresses: answered.length,
+    bad,
+  }
+}
+const live = await liveFrozenBoot().catch((error) => ({ status: 'unknown', why: String(error?.message ?? error) }))
 
 // Rehearsal, not a press: run the bytes the next document would load for the startup list the
 // desktop shell froze, with the same loader surface a document gives them, and see whether every
@@ -237,9 +269,10 @@ console.log(JSON.stringify({
   holdReason: verdict ? null : probe.startupHoldReason(),
   pressPath,
   verify: verifyProbe,
+  live,
   shim: shimBehaviour,
   rehearsal: { ok: rehearsalOk, ...rehearsal },
   asked: requests,
   contract: Object.fromEntries(contract.map(([label, got, want]) => [label, `${got}${got === want ? '' : ` (wanted ${want})`}`])),
 }, null, 2))
-process.exitCode = verdict === true && contractHeld && shimHeld && rehearsalOk && verifyHeld ? 0 : 1
+process.exitCode = verdict === true && contractHeld && shimHeld && rehearsalOk && verifyHeld && live.status !== 'bad' ? 0 : 1

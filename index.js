@@ -75,6 +75,13 @@ const WORK_KEY = Symbol.for('dsh-unlag.work')
 const BASE_PATH = '/dsh-unlag'
 /** A same-origin page sets this itself; a cross-site form post cannot, and fails the preflight. */
 const BUTTON_HEADER = 'x-dsh-unlag'
+
+/**
+ * The startup list the running page really was frozen with, as that page reported it. The desktop
+ * shell pins the list when a window starts, so the only place the truth about a live document
+ * exists is inside that document; this is where it is kept for a check to read.
+ */
+const liveBoot = { current: null }
 const CODE_EXTENSIONS = new Set(['.js', '.mjs', '.cjs'])
 /** Build output and dependency trees change without the source a developer edits changing. */
 const IGNORED_PATH = /(^|\/)(node_modules|\.git|\.cache|dist|build|coverage)([./]|$)/u
@@ -456,6 +463,30 @@ function pluginReloader(ctx, config) {
    * the plugin set stopped, and a document started in that state does not boot.
    * @returns what the service reported, so the caller can tell done from partly done.
    */
+  /**
+   * What the app said was not running at the end of the last settled update. A warning that shows up
+   * here again was already true before this press; one that does not is a breakage this press caused,
+   * and a press that broke something must not be followed by a page built on it.
+   */
+  const knownInactive = { health: null }
+
+  /**
+   * What the last operation really ended as. The answer to a press is bounded by the time a page
+   * waits, so an update that outlasts it is answered as still applying; this record is where the
+   * same operation writes its real end, and the page reads it back instead of guessing.
+   */
+  const operation = { id: 0, state: null }
+
+  const noteOperation = (id, outcome) => {
+    operation.state = {
+      id,
+      status: String(outcome?.status ?? 'failed'), // ui-copy-ignore
+      pending: Array.isArray(outcome?.pending) ? outcome.pending.length : 0,
+      failed: Array.isArray(outcome?.failedEntries) ? outcome.failedEntries.length : 0,
+      restart: outcome?.restartReason ?? null,
+    }
+  }
+
   const reload = async (hmr) => {
     /**
      * Queue the recomposition through the service's own queue. A watcher callback created while a
@@ -538,17 +569,30 @@ function pluginReloader(ctx, config) {
      * written down because a person sees them afterwards, and they must not stop the page from
      * coming up on the set that is running now.
      */
-    const inactiveEntries = warnings.map((warning) => (typeof warning === 'string' ? warning : String(warning?.message ?? warning)))
+    const listed = warnings.map((warning) => (typeof warning === 'string' ? warning : String(warning?.message ?? warning)))
+    // Compared with what the same set reported last time, not with what a press is assumed to do:
+    // a warning that was already there is leftover state, one that was not is a new breakage.
+    // A reconcile that returns does not newly break an entry the app would have rejected, so the
+    // first list this app reports is a baseline rather than this press's result. Only a warning that
+    // was missing from a baseline already seen is a breakage no earlier read can account for.
+    const hasBaseline = Array.isArray(knownInactive.health)
+    const before = new Set(hasBaseline ? knownInactive.health : [])
+    const inactiveEntries = hasBaseline ? listed.filter((entry) => before.has(entry)) : listed
+    const failedEntries = hasBaseline ? listed.filter((entry) => !before.has(entry)) : []
+    knownInactive.health = listed
     log(
-      `plugins reloaded (inactive before this press=${inactiveEntries.length} pending=${pending.length}${restartReason === null ? '' : ` restart=${restartReason}`})`,
+      `plugins reloaded (already not running=${inactiveEntries.length} newly not running=${failedEntries.length} pending=${pending.length}${restartReason === null ? '' : ` restart=${restartReason}`})`,
     )
     for (const entry of inactiveEntries.slice(0, 5)) log(`a plugin was already not running and still is not: ${entry.slice(0, 200)}`)
-    if (inactiveEntries.length > 5) log(`and ${inactiveEntries.length - 5} more were already not running`)
-    return { status: 'done', warnings, pending, restartReason, inactiveEntries, failedEntries: [] }
+    for (const entry of failedEntries.slice(0, 5)) log(`a plugin stopped running with this update: ${entry.slice(0, 200)}`)
+    return { status: failedEntries.length > 0 ? 'failed' : 'done', warnings, pending, restartReason, inactiveEntries, failedEntries }
   }
 
   const flush = async () => {
     timer = null
+    // A callback armed before the plugin was disposed can still run: this plugin may be gone, and a
+    // recomposition asked for by a plugin nothing owns any more can only end in a half-stopped set.
+    if (stopped) return
     // A queue request that outlived its wait is still applying: a second flush would ask the plugin
     // set to recompose beside it, which can leave half of it stopped.
     if (running || workState.current !== null) {
@@ -599,6 +643,10 @@ function pluginReloader(ctx, config) {
         else {
           const release = () => {
             running = false
+            if (stopped) {
+              again = false
+              return
+            }
             if (again) {
               again = false
               if (timer === null) timer = unrefTimer(setTimeout(() => void flush(), debounce))
@@ -610,7 +658,7 @@ function pluginReloader(ctx, config) {
     } catch (error) {
       log(`reload did not finish; the plugin set may be partly applied: ${error?.message ?? error}`)
     } finally {
-      if (again) {
+      if (again && stopped === false) {
         again = false
         if (timer === null) timer = unrefTimer(setTimeout(() => void flush(), debounce))
       }
@@ -700,8 +748,11 @@ function pluginReloader(ctx, config) {
     running = true
     deferrals = 0
     lastRun = Date.now()
+    const id = (operation.id += 1)
+    operation.state = { id, status: 'applying', pending: 0, failed: 0, restart: null } // ui-copy-ignore
     try {
       const outcome = await reload(hmr)
+      noteOperation(id, outcome)
       /**
        * `pending` means the changed modules are not loaded yet and need a restart this plugin does
        * not perform; it is not a queued update that finishes on its own.
@@ -738,7 +789,18 @@ function pluginReloader(ctx, config) {
             if (timer === null) timer = unrefTimer(setTimeout(() => void flush(), debounce))
           }
         }
-        workState.current.then(release, release)
+        // The update outlasted the press's answer: the operation it belongs to ends here, when the
+        // queue request really ends, and that end is what the page is told is final.
+        workState.current.then(
+          (late) => {
+            noteOperation(id, late)
+            release()
+          },
+          (error) => {
+            noteOperation(id, { status: 'failed', pending: [], failedEntries: [], restartReason: error ?? null })
+            release()
+          },
+        )
       }
     }
   }
@@ -749,6 +811,12 @@ function pluginReloader(ctx, config) {
    */
   const reloadNow = async (force = false) => {
     try {
+      if (stopped) {
+        // A press can arrive while the plugin is being torn down. Nothing would finish that update,
+        // so it is answered as not applied instead of starting work on a dead instance.
+        log('a press arrived while this plugin was stopping; nothing was replaced')
+        return { status: 'failed', warnings: [], pending: [], restartReason: null, failedEntries: [] }
+      }
       return await runNow(force)
     } catch (error) {
       log(`a press could not be answered: ${error?.message ?? error}`)
@@ -793,7 +861,7 @@ function pluginReloader(ctx, config) {
     timer = null
   }
 
-  return { reloadNow, startWatching, available, stop }
+  return { reloadNow, startWatching, available, stop, operation: () => operation.state }
 }
 
 /** Write one JSON answer; a response already gone must not throw into the caller. */
@@ -1617,10 +1685,20 @@ function registeredIds(body) {
   return ids
 }
 
+/**
+ * The entry id a `require` address really names. The app serves a few aliases of the same module —
+ * `@local/b`, `@local/b/client`, `@local/b/external`, `@local/b/inject` — and the startup list and
+ * the plugin table both name the short one, so an alias read as an id would look like a plugin
+ * nothing serves and be skipped instead of checked.
+ */
+function entryIdOf(id) {
+  return id.replace(/\/(?:client|external|inject)$/u, '')
+}
+
 /** Ids a body reads from the loader's table through `require`, which must already be registered. */
 function requiredIds(body) {
   const ids = new Set()
-  for (const match of body.matchAll(/\brequire\s*\(\s*(["'])([^"']+)\1\s*\)/gu)) ids.add(match[2])
+  for (const match of body.matchAll(/\brequire\s*\(\s*(["'])([^"']+)\1\s*\)/gu)) ids.add(entryIdOf(match[2]))
   return ids
 }
 
@@ -1705,6 +1783,13 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
    * nothing, so the boot comes up without the plugin; the check reads the same way and does not
    * demand a registration the set cannot give.
    */
+  // The set a check reads is the one the next document boots, so the revision that set was at when
+  // the first body left must still be the revision when the last one arrives: a recomposition in
+  // between means the bodies came from two different generations and no one answer describes them.
+  let revisionAtStart = null
+  try {
+    revisionAtStart = typeof graph?.rev === 'string' ? graph.rev : null
+  } catch {}
   const served = new Set(entries.keys())
   const leftOut = new Set()
   const listed = new Set()
@@ -1797,6 +1882,16 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
    * stand-in body that registers nothing fails the boot after the press was allowed. Refusing here
    * costs one press; the page that would come up costs the running turns.
    */
+  if (revisionAtStart !== null) {
+    let revisionNow = revisionAtStart
+    try {
+      const after = graph?.rev
+      revisionNow = typeof after === 'string' ? after : revisionAtStart
+    } catch {}
+    if (revisionNow !== revisionAtStart) {
+      return { status: 'blocked', reason: 'generation', detail: 'the plugin set was replaced while its scripts were read' }
+    }
+  }
   if (leftOut.size > 0) {
     return {
       status: 'blocked', // ui-copy-ignore
@@ -1825,9 +1920,14 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
  */
 export async function readStartupScript(clientModules, url) {
   try {
+    // The document asks the app's own route first and the mapping only answers a request that route
+    // no longer knows, so the check reads in that same order: bytes taken from the mapping while the
+    // route had an answer were bytes the next page would never run.
+    const served = await fetchBundleAt(clientModules, url, 'GET')
+    if (served !== null && served.status === 200) return served
     const answer = await currentBundleAnswer(clientModules, 'GET', url)
     // `standIn` rides along: these bytes stand in for a plugin the set no longer has, and the check
-    // says so when it passes, so the log can tell that from a body the app really serves.
+    // says so when it refuses, so the log can tell that from a body the app really serves.
     if (answer !== null) return { status: 200, standIn: answer.standIn === true, arrayBuffer: async () => answer.body }
   } catch (error) {
     // The fallback is still the right answer; the failure itself must not vanish.
@@ -1932,7 +2032,7 @@ function serveButton(ctx, controller, config) {
           // answers a method it does not serve.
           const method = String(req?.method ?? 'GET').toUpperCase()
           if (method !== 'GET' && method !== 'HEAD') return sendJson(res, 405, { status: 'method' })
-          sendJson(res, 200, { version: VERSION, code: CODE_STAMP, plugins: settings.reloadPlugins, page: settings.reloadInterface, shim: bundleShimStatus(ctx) })
+          sendJson(res, 200, { version: VERSION, code: CODE_STAMP, plugins: settings.reloadPlugins, page: settings.reloadInterface, shim: bundleShimStatus(ctx), operation: controller.operation?.() ?? null, boot: liveBoot.current })
         } catch (error) {
           log(`cannot describe this copy of the plugin: ${error?.message ?? error}`)
           sendJson(res, 500, { status: 'error' })
@@ -1954,6 +2054,42 @@ function serveButton(ctx, controller, config) {
           // that the answer was empty, and this line is what explains it afterwards.
           log(`cannot describe the plugin list: ${error?.message ?? error}`)
           sendJson(res, 500, { status: 'error', detail: String(error?.message ?? error) })
+        }
+      },
+    ],
+    [
+      `${BASE_PATH}/boot`,
+      async (req, res) => {
+        // A page saying what it booted with. Nothing here acts on it: it is the frozen list a check
+        // compares the served scripts against, and a malformed report is refused rather than stored.
+        try {
+          const method = String(req?.method ?? 'GET').toUpperCase()
+          if (method !== 'POST') return sendJson(res, 405, { status: 'method' })
+          if (buttonAllowed(req) === false) return sendJson(res, 403, { status: 'forbidden' })
+          const body = await readJsonBody(req)
+          if (body === TOO_LARGE) return sendJson(res, 200, { status: 'blocked' })
+          const boot = body?.boot
+          if (boot === null || typeof boot !== 'object') return sendJson(res, 200, { status: 'blocked' })
+          const urls = []
+          for (const batch of Array.isArray(boot.batches) ? boot.batches.slice(0, 200) : []) {
+            const url = typeof batch?.url === 'string' ? batch.url : ''
+            if (url !== '') urls.push(url.slice(0, 500))
+          }
+          const entries = (Array.isArray(boot.entries) ? boot.entries : [])
+            .map((entry) => (typeof entry === 'string' ? entry : entry?.id))
+            .filter((id) => typeof id === 'string')
+            .slice(0, 200)
+          liveBoot.current = {
+            rev: typeof boot.rev === 'string' ? boot.rev.slice(0, 64) : null,
+            entries: entries.length,
+            urls,
+            at: Date.now(),
+          }
+          log(`the page reported the startup list it was frozen with (${String(urls.length)} script address(es))`)
+          sendJson(res, 200, { status: 'done' })
+        } catch (error) {
+          log(`cannot record the page's startup list: ${error?.message ?? error}`)
+          sendJson(res, 500, { status: 'error' })
         }
       },
     ],
@@ -2102,7 +2238,7 @@ function serveButton(ctx, controller, config) {
               (error) => log(`the update failed after the page was told it is still applying: ${error?.message ?? error}`),
             )
           }
-          sendJson(res, 200, outcome)
+          sendJson(res, 200, { ...outcome, operationId: controller.operation?.()?.id ?? null })
         } catch (error) {
           log(`cannot apply a plugin reload: ${error?.message ?? error}`)
           sendJson(res, 500, { status: 'failed', detail: String(error?.message ?? error) })
