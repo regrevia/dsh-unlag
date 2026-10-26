@@ -513,5 +513,19 @@ for (const [label, options] of [
   check('an update that finished after the wait is not a failure', !/did not finish/i.test(String(page.notice())), String(page.notice()))
 }
 
+// --- the app's record claims done while its own fields say a restart is still needed --------
+// A page that trusts the single `done` would navigate onto a plugin set the app has not loaded,
+// which is the failure this press exists to avoid. The contradiction resolves to "not finished".
+{
+  const page = harness({
+    reload: { status: 'applying', operationId: 9, warnings: [], pending: [], restartReason: null },
+    lateOperation: (rid) => ({ id: 9, status: 'done', pending: 1, failed: 0, restart: null, requestId: rid }),
+  })
+  await page.press()
+  check('a done record with a pending module keeps the page', page.navigations.length === 0, String(page.navigations.length))
+  check('a done record with a pending module says a reopen is needed', /reopen/iu.test(String(page.notice())), String(page.notice()))
+  check('a done record with a pending module leaves the button usable', page.render().button.props.style.opacity !== 0.6, String(page.render().button.props.style.opacity))
+}
+
 console.log(out.join('\n'))
 console.log(out.every((line) => line.startsWith('PASS')) ? 'ok' : 'failed')

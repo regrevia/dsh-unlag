@@ -291,7 +291,7 @@ window.__ModuleLoader__.load({
       // Entries that were already not running before the press are not its result: the app rejects
       // a reload that newly breaks one, so the press stands whatever that leftover list says.
       if (Array.isArray(data.pending) && data.pending.length > 0) return 'restart';
-      if (typeof data.restartReason === 'string' && data.restartReason !== '') return 'failed';
+      if (typeof data.restartReason === 'string' && data.restartReason !== '') return 'restart';
       return status;
     }
 
@@ -671,12 +671,26 @@ window.__ModuleLoader__.load({
      * read as this press's success. Null means the app never showed an end for this press.
      * @returns 'done' | 'restart' | 'failed' | null
      */
-    async function settledPress(requestId) {
-      const operation = await settledOperation(null, requestId);
-      if (operation === null) return null;
-      if (operation.status === 'done') return 'done';
+    /**
+     * The verdict one written record supports. A record can contradict itself: `done` while its
+     * own fields still name a module waiting for a restart is not a finished update, and the
+     * restart fields win. A record that already says it did not finish stays that way.
+     * @returns 'done' | 'restart' | 'failed' | null
+     */
+    function verdictOfOperation(operation) {
+      if (operation === null || typeof operation !== 'object') return null;
+      if (operation.status === 'done') {
+        if (typeof operation.pending === 'number' && operation.pending > 0) return 'restart';
+        if (typeof operation.restart === 'string' && operation.restart !== '') return 'restart';
+        return 'done';
+      }
       if (operation.status === 'restart') return 'restart';
       return 'failed';
+    }
+
+    async function settledPress(requestId) {
+      const operation = await settledOperation(null, requestId);
+      return verdictOfOperation(operation);
     }
 
     async function servedBootGraph() {
@@ -1164,10 +1178,16 @@ window.__ModuleLoader__.load({
                * looking like a press that worked.
                */
               if (key === 'applying' || key === 'queued') {
-                const settled = await settledOperation(replacedOperation, replacedRequest);
-                if (settled !== null && settled.status === 'failed') {
+                const settled = verdictOfOperation(await settledOperation(replacedOperation, replacedRequest));
+                if (settled === 'failed') {
                   report('plugin-held', 'late-failed');
                   return stop('failed');
+                }
+                // The update did not finish after all: the page is told it needs a reopen instead
+                // of being left on "still applying" forever.
+                if (settled === 'restart') {
+                  report('plugin-held', 'late-restart');
+                  return stop('restart');
                 }
               }
               return stop(key);

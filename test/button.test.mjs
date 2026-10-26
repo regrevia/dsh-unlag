@@ -430,13 +430,13 @@ const unfinished = fakeRes()
 const unfinishedRoutes = outcomeRoutes({ pending: ['@local/a'] })
 await unfinishedRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, unfinished)
 const unfinishedBody = JSON.parse(unfinished.body)
-check('an update still starting is not reported done', unfinishedBody.status === 'failed', unfinished.body)
+check('an update still starting is not reported done', unfinishedBody.status === 'restart', unfinished.body)
 check('an update still starting names what is pending', Array.isArray(unfinishedBody.pending) && unfinishedBody.pending.length === 1, unfinished.body)
 
 const needsRestart = fakeRes()
 const restartRoutes = outcomeRoutes({ restartReason: 'native' })
 await restartRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, needsRestart)
-check('an update the page cannot take is not reported done', JSON.parse(needsRestart.body).status === 'failed', needsRestart.body)
+check('an update the page cannot take is not reported done', JSON.parse(needsRestart.body).status === 'restart', needsRestart.body)
 
 // --- a reload asked for from a context a previous reload left behind ---------------------------
 // A watch callback made while a reload was restarting this plugin carries that reload's context;

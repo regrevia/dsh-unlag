@@ -509,15 +509,19 @@ function pluginReloader(ctx, config) {
    * same operation instead of each judging from its own partial view.
    */
   const noteOperation = (id, outcome, requestId = null) => {
-    const status = String(outcome?.status ?? 'failed') // ui-copy-ignore
-    const pending = Array.isArray(outcome?.pending) ? outcome.pending.length : 0
-    const restart = outcome?.restartReason ?? null
+    const pending = Array.isArray(outcome?.pending) ? outcome.pending : []
+    const restart = typeof outcome?.restartReason === 'string' && outcome.restartReason !== '' ? outcome.restartReason : null
+    /**
+     * A set that is not running cannot end as `done`, whichever path wrote the end: the queue's
+     * late answer carries no status of its own, and the same record is read by the route, by
+     * `/state`, and by a retry of the same request id. Normalizing here keeps those three in
+     * agreement instead of letting each caller judge the raw shape.
+     */
+    const status = pending.length > 0 || restart !== null ? 'restart' : String(outcome?.status ?? 'failed') // ui-copy-ignore
     operation.state = {
       id,
-      // The status is the terminal state every route reports; `pending` and `restart` say why a
-      // `failed` did not finish. Only `done` means the new set is running.
       status, // ui-copy-ignore
-      pending,
+      pending: pending.length,
       failed: Array.isArray(outcome?.failedEntries) ? outcome.failedEntries.length : 0,
       restart,
       requestId: typeof requestId === 'string' && requestId !== '' ? requestId : (operation.state?.requestId ?? null),
@@ -842,7 +846,7 @@ function pluginReloader(ctx, config) {
         // The app accepted the update but has not finished starting the new plugin set. Rebuilding
         // the page now would start a document against a set that is still settling.
         return {
-          status: 'failed', // ui-copy-ignore
+          status: 'restart', // ui-copy-ignore
           warnings: outcome.warnings, // ui-copy-ignore
           pending: outcome.pending, // ui-copy-ignore
           restartReason: outcome.restartReason,

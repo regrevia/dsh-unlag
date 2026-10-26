@@ -401,7 +401,7 @@ check('an update in flight is not an update yet', verdictOf({ status: 'applying'
 check('an update the app put on hold is not an update', verdictOf({ status: 'queued' }) === 'queued')
 check('a leftover entry the app names does not fail the press', verdictOf({ status: 'done', warnings: ['@local/a: failed to import'], failedEntries: ['@local/a'] }) === 'done')
 check('an entry waiting for a restart is still not an update', verdictOf({ status: 'done', pending: [{ url: 'x' }] }) === 'restart')
-check('a replacement the running page cannot take is not an update', verdictOf({ status: 'done', restartReason: 'native' }) === 'failed')
+check('a replacement the running page cannot take needs a restart, not a rebuild', verdictOf({ status: 'done', restartReason: 'native' }) === 'restart')
 check('no answer at all is not an update', verdictOf(null) === 'failed')
 
 // A startup check that ran out of time is its own reason: the notice must not claim a script was
