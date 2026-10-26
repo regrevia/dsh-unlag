@@ -77,6 +77,8 @@ dsh plugin install dsh-unlag
 - 状态：`GET /dsh-unlag/state` → `{"version":"<当前版本>","code":"<index.js 写入时间>","plugins":true,"page":true,"shim":{...}}`。`code` 用来分清「版本号没刷」和「旧代码真的还在跑」。
 - 重建后的日志带起页面代次：`interface rebuilt; the page runs the plugins as served now (page <rev>)`，据此判断新文档加载的是新脚本还是旧脚本。
 
+每类说法对应的测试与现场输出整理在 [EVIDENCE.md](EVIDENCE.md)，含还没证到的两件事。
+
 ## 与官方文档的对照
 
 判定按下后能不能重建，依赖的是 Client Modules 的读接口和它自己公布的路由规则。逐条核对的是 App 内随包发布的文档 `.research/asar-dsh/dsh-client-modules/README.zh.md`（15968 B，sha256 前缀 `33cee13e7b61a151`）。
