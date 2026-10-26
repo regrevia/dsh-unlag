@@ -6,8 +6,8 @@ window.__ModuleLoader__.load({
 
     const zh = /^zh/i.test(navigator.language || '');
     const COPY = zh
-      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', off: '两个开关都关着，先在设置里打开一个', replaced: '插件代码已更新，页面保持不动', stayedReplaced: '插件代码已更新，页面没有重建；稍后再按一次', stayed: '页面没有重建；稍后再按一次', done: '插件代码已是最新', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次' } // ui-copy-ignore
-      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', off: 'Both switches are off; turn one on in settings', replaced: 'Plugin code updated; the page stayed as it is', stayedReplaced: 'Plugin code updated; the page did not rebuild; press again shortly', stayed: 'The page did not rebuild; press again shortly', done: 'Plugin code is already up to date', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later' };
+      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', off: '两个开关都关着，先在设置里打开一个', replaced: '插件代码已更新，页面保持不动', stayedReplaced: '插件代码已更新，页面没有重建；稍后再按一次', stayed: '页面没有重建；稍后再按一次', done: '插件代码已是最新', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次', attachments: '还有没发出去的附件，先发出去再按' } // ui-copy-ignore
+      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', off: 'Both switches are off; turn one on in settings', replaced: 'Plugin code updated; the page stayed as it is', stayedReplaced: 'Plugin code updated; the page did not rebuild; press again shortly', stayed: 'The page did not rebuild; press again shortly', done: 'Plugin code is already up to date', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later', attachments: 'Files are attached but not sent; send them first' };
 
     /**
      * Why the interface was left as it is, in words a person can act on. The checks below record
@@ -822,6 +822,25 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * A draft attachment lives only in this document: it is previewed from a local blob, or still
+     * sits in a file picker. Neither survives the rebuild, so the page stays and says why. Not
+     * every build names these parts in its markup, so an unreadable page answers "none" and the
+     * press is not held for a guess.
+     * @returns true when the composer still holds something that was never sent.
+     */
+    function draftHasAttachments() {
+      try {
+        if (document.querySelectorAll?.('img[src^="blob:"]')?.length > 0) return true;
+        for (const picker of document.querySelectorAll?.('input[type="file"]') ?? []) {
+          if ((picker?.files?.length ?? 0) > 0) return true;
+        }
+        return false;
+      } catch {
+        return false;
+      }
+    }
+
+    /**
      * The automatic judgement: every reason a rebuild would take something away is checked here,
      * in the order that costs the user least. A null answer means the interface can go.
      * @returns the copy key of the reason to stop, or null when a rebuild is safe.
@@ -836,6 +855,7 @@ window.__ModuleLoader__.load({
        */
       try {
         if (screenHasOpenWindow()) return 'dialog';
+        if (draftHasAttachments()) return 'attachments';
         await commitFocusedField();
         const ready = await otherPluginsAreReady();
         if (!ready || stillHeldBack()) return 'unsaved';

@@ -31,7 +31,7 @@ function show(tree) {
   return pill === undefined ? null : String(Array.isArray(pill.children) ? pill.children.join('') : pill.children)
 }
 
-function harnessWith(sourceText, { settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], lateOperation = null, revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, language = 'en-US', href } = {}) {
+function harnessWith(sourceText, { settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], lateOperation = null, revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, draftImages = 0, draftFiles = 0, language = 'en-US', href } = {}) {
   const requests = []
   const navigations = []
   const current = { rev: graph.rev, code: 'c1' }
@@ -84,6 +84,13 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
     querySelector: () => {
       if (brokenSelector) throw new Error('selector blew up')
       return openWindow ? {} : null
+    },
+    // What the composer holds: a draft image is previewed from a local blob, and a picked file
+    // still sits in its input. Both are what a rebuild would drop.
+    querySelectorAll: (selector) => {
+      if (String(selector).includes('blob:')) return Array.from({ length: draftImages }, () => ({}))
+      if (String(selector).includes('input[type="file"]')) return Array.from({ length: draftFiles }, () => ({ files: { length: 1 } }))
+      return []
     },
   }
   const store = new Map()

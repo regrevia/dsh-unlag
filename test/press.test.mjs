@@ -341,6 +341,29 @@ for (const [label, options] of [
   check('a rebuild the page held takes its pacing stamp back', page.stamp() === 0, String(page.stamp()))
 }
 
+// --- a file the composer still holds ---------------------------------------------------------
+// A draft attachment lives only in this document, so a rebuild drops it. The press stops and says
+// so instead of replacing the page under a file that was never sent.
+{
+  const page = harness({ draftImages: 1 })
+  await page.press()
+  check('a press with an unsent image does not rebuild', page.navigations.length === 0 && page.reloads.length === 0, JSON.stringify({ navigations: page.navigations, reloads: page.reloads }))
+  check('and it says the file has to go first', /attach|send/iu.test(String(page.notice())), String(page.notice()))
+  check('and the page is left as it is', page.stamp() === 0, String(page.stamp()))
+}
+{
+  const page = harness({ draftFiles: 1 })
+  await page.press()
+  check('a press with a picked file does not rebuild', page.navigations.length === 0 && page.reloads.length === 0, JSON.stringify({ navigations: page.navigations, reloads: page.reloads }))
+  check('and it names the file too', /attach|send/iu.test(String(page.notice())), String(page.notice()))
+}
+{
+  const page = harness()
+  await page.press()
+  const rebuilt = page.reloads.length + page.navigations.length
+  check('a press with an empty composer still rebuilds', rebuilt >= 1, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+}
+
 // --- an update that outlasted the page's wait and then failed -------------------------------
 // The page stops waiting after a bounded time and is told the update is still applying. The host
 // writes that update's real end as it happens, so a press that later broke a plugin must show the

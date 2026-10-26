@@ -17,9 +17,12 @@ const host = read('index.js')
 const client = read('client.js')
 
 // --- what a press keeps ------------------------------------------------------------------------
-// An unsent attachment lives only in the page that is about to be replaced, so the docs must say so.
+// An unsent attachment lives only in the page that is about to be replaced, so the docs and the
+// page must both say so: the docs explain it, and the press itself is held.
 check('the readme no longer says attachments survive a rebuild', !/草稿、附件/u.test(readme))
-check('it says an unsent attachment is lost', /附件/u.test(readme) && /没发出去|过不了/u.test(readme))
+check('and that such a press is held', /附件/u.test(readme) && /没发出去/u.test(readme) && /按钮会停住|先发出去/u.test(readme))
+check('the readme no longer says attachments survive a rebuild', !/草稿、附件/u.test(readme))
+check('it says an unsent attachment holds the press', /附件/u.test(readme) && /没发出去/u.test(readme) && /按钮会停住|先发出去/u.test(readme))
 check('it tells the reader to send first', /先发/u.test(readme))
 check('it does not claim drafts are lost either', /文字草稿/u.test(readme))
 
@@ -43,5 +46,9 @@ check('the host keeps that report', host.includes("`${BASE_PATH}/boot`") && host
 check('the state route carries it', /boot: liveBoot\.current/u.test(host))
 
 
+check('the page holds a press while a draft attachment is there', /function draftHasAttachments/.test(client) && /if \(draftHasAttachments\(\)\) return 'attachments'/.test(client))
+check('and it checks both previews and picked files', /img\[src\^="blob:"\]/.test(client) && /input\[type="file"\]/.test(client))
+
 console.log(out.join('\n'))
 console.log(out.every((line) => line.startsWith('PASS')) ? 'ok' : 'failed')
+
