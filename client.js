@@ -152,9 +152,20 @@ window.__ModuleLoader__.load({
       } catch {
         born = '';
       }
+      // How this document was reached is not something this plugin decides: a reload, a fresh
+      // navigation and a history walk look identical from inside the page afterwards, so the only
+      // way to say which happened is to write down how it arrived.
+      let nav = '';
+      try {
+        const entry = performance?.getEntriesByType?.('navigation')?.[0];
+        nav = String(entry?.type ?? '').replace(/[^a-z_]/gu, '').slice(0, 16);
+      } catch {
+        nav = '';
+      }
       const named = gate === undefined ? `event=${event}` : `event=${event}&gate=${encodeURIComponent(gate)}`;
       const withPage = page === '' ? named : `${named}&rev=${page}`;
-      const query = born === '' ? withPage : `${withPage}&born=${born}`;
+      const withBorn = born === '' ? withPage : `${withPage}&born=${born}`;
+      const query = nav === '' ? withBorn : `${withBorn}&nav=${nav}`;
       /**
        * The route belongs to the instance this press is replacing. Its answer can land while the old
        * one is gone and the new one is not listening yet, and a lost line is a press nobody can

@@ -207,6 +207,13 @@ check(
   'a document says which document it is, so two of them are not read as one',
   readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('(page bad58412ac96, born 1792875929483)'),
 )
+const navRes = fakeRes()
+liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/report?event=mounted&rev=bad58412ac96&born=1792875929483&nav=reload' }, navRes)
+await new Promise((resolve) => setTimeout(resolve, 30))
+check(
+  'and how it got here, so a reload is not read as a navigation',
+  readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes(', nav reload)'),
+)
 const forgedRes = fakeRes()
 liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/report?event=mounted&rev=%3Cscript%3Ealert(1)' }, forgedRes)
 await new Promise((resolve) => setTimeout(resolve, 30))

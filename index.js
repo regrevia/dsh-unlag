@@ -2035,9 +2035,11 @@ function serveButton(ctx, controller, config) {
           // from two documents coming up. Without it a double reload and a doubled report read
           // the same.
           const born = (params.get('born') ?? '').replace(/[^0-9]/gu, '').slice(0, 16)
-          const from = pageRev === '' && born === ''
-            ? ''
-            : ` (page ${pageRev === '' ? '?' : pageRev}${born === '' ? '' : `, born ${born}`})`
+          const navType = (params.get('nav') ?? '').replace(/[^a-z_]/gu, '').slice(0, 16)
+          const first = [pageRev === '' ? '' : `page ${pageRev}`, born === '' ? '' : `born ${born}`, navType === '' ? '' : `nav ${navType}`]
+            .filter((part) => part !== '')
+            .join(', ')
+          const from = first === '' ? '' : ` (${first})`
           /**
            * Every outcome the page reports is written down. A press whose line was missing left the
            * log unable to say what happened; an outcome with no line of its own (a failed
