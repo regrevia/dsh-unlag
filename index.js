@@ -525,15 +525,26 @@ function pluginReloader(ctx, config) {
   const settleEntryHealth = (required) => {
     const states = loaderEntryStates(ctx)
     if (states === null) return { unhealthy: [], readable: false }
-    const remembered = Array.isArray(knownInactive.unhealthy) ? knownInactive.unhealthy : []
     const unhealthy = []
-    for (const id of new Set([...remembered, ...required])) {
+    const wanted = new Set(required)
+    for (const id of wanted) {
       if (id === SELF_ENTRY_ID) continue
       const state = states.get(id)
       // Absent from the Loader means the profile no longer has it: nothing left to wait for.
       if (state === undefined) continue
       if (state !== 2) unhealthy.push(id)
     }
+    /**
+     * An entry that was already stopped when this update started is not something this update broke.
+     * It is logged and left out of the refusal: a plugin that was down before the press was down in
+     * the document the person is looking at, and a page rebuilt into the same state is no worse than
+     * the page that is there. Counting it would keep the button failing on every press, which is the
+     * one thing this plugin must never do.
+     */
+    const alreadyDown = (Array.isArray(knownInactive.unhealthy) ? knownInactive.unhealthy : []).filter(
+      (id) => !wanted.has(id) && states.get(id) !== undefined && states.get(id) !== 2,
+    )
+    if (alreadyDown.length > 0) log(`left out of the refusal, already stopped before this press: ${alreadyDown.slice(0, 5).join(', ')}`)
     knownInactive.unhealthy = unhealthy
     return { unhealthy, readable: true }
   }
@@ -559,7 +570,13 @@ function pluginReloader(ctx, config) {
   const presses = globalThis[Symbol.for('dsh-unlag.presses')] ?? (globalThis[Symbol.for('dsh-unlag.presses')] = new Map())
   const doneOf = (outcome, id = null) => ({
     id,
-    status: Array.isArray(outcome?.pending) && outcome.pending.length > 0 ? 'restart' : String(outcome?.status ?? 'failed'), // ui-copy-ignore
+    // The same rule noteOperation uses: one record, one meaning, so a retry of the same request id
+    // cannot be told `done` while the newest operation says `restart` for the same update.
+    status:
+      (Array.isArray(outcome?.pending) && outcome.pending.length > 0) ||
+      (typeof outcome?.restartReason === 'string' && outcome.restartReason !== '')
+        ? 'restart' // ui-copy-ignore
+        : String(outcome?.status ?? 'failed'), // ui-copy-ignore
     pending: (Array.isArray(outcome?.pending) ? outcome.pending : []).slice(0, 16),
     failed: (Array.isArray(outcome?.failedEntries) ? outcome.failedEntries : []).slice(0, 16),
     restart: typeof outcome?.restartReason === 'string' && outcome.restartReason !== '' ? outcome.restartReason : null,
@@ -649,11 +666,18 @@ function pluginReloader(ctx, config) {
     }
     /** Whether the bundle route was wrapped when this update started, so a re-wrap is written down. */
     const shimWrappedBefore = bundleShimStatus(ctx).wrapped
+    /**
+     * The whole update — asking the queue, then reading health, re-wrapping the route and writing
+     * down what happened — is one promise. A press may stop waiting for it, but stopping the wait
+     * must not stop the work: the page is told "still applying" while the chain runs on, and the end
+     * it reaches is the end every reader is given, including a late one.
+     */
+    const work = (async () => {
     let result = null
     try {
     for (let attempt = 0; ; attempt += 1) {
       try {
-        result = await Promise.race([tracked(ask(hmr)), abandoned()])
+        result = await ask(hmr)
         break
       } catch (error) {
         const message = String(error?.message ?? error)
@@ -662,10 +686,6 @@ function pluginReloader(ctx, config) {
           const step = Number(process.env.DSH_UNLAG_RETRY_MS ?? '') || 250
           await new Promise((resolve) => setTimeout(resolve, step * (attempt + 1)))
           continue
-        }
-        if (message.includes('did not finish in time')) {
-          error.stillRunning = workState.current !== null
-          throw error
         }
         throw error
       }
@@ -711,17 +731,38 @@ function pluginReloader(ctx, config) {
     const health = settleEntryHealth(requiredBefore)
     const failedEntries = health.unhealthy
     const inactiveEntries = listed
-    if (!health.readable) log('the plugin list could not be read after the update; this update is not marked as finished')
+    if (!health.readable) log('the plugin list could not be read after the update; the update ends without a verdict on the set')
     log(
       `plugins reloaded (already not running=${inactiveEntries.length} newly not running=${failedEntries.length} pending=${pending.length}${restartReason === null ? '' : ` restart=${restartReason}`})`,
     )
     for (const entry of inactiveEntries.slice(0, 5)) log(`a plugin was already not running and still is not: ${entry.slice(0, 200)}`)
     for (const entry of failedEntries.slice(0, 5)) log(`a plugin stopped running with this update: ${entry.slice(0, 200)}`)
-    return { status: failedEntries.length > 0 ? 'failed' : 'done', warnings, pending, restartReason, inactiveEntries, failedEntries }
+    /**
+     * A list that could not be read after the update leaves the entries unjudged, and unjudged is
+     * not the same as broken: reporting `failed` here would tell the person the update broke
+     * something nothing observed. The reading is written down beside the verdict instead, so a
+     * press that ends `done` while the list was unreadable can be explained afterwards.
+     */
+    return {
+      status: failedEntries.length > 0 ? 'failed' : 'done', // ui-copy-ignore
+      warnings,
+      pending,
+      restartReason,
+      inactiveEntries,
+      failedEntries,
+      healthReadable: health.readable,
+    }
     } catch (error) {
       // The update failed part-way: what it was required to keep running is still the right list to
       // judge the next press against, so the memory is settled before the failure travels on.
       settleEntryHealth(requiredBefore)
+      throw error
+    }
+    })()
+    try {
+      return await Promise.race([tracked(work), abandoned()])
+    } catch (error) {
+      error.stillRunning = workState.current !== null
       throw error
     }
   }
@@ -1196,7 +1237,10 @@ async function captureBootSnapshot(clientModules, boot) {
   if (typeof clientModules?.fetchBundle !== 'function') return null
   const urls = []
   for (const url of Array.isArray(boot?.urls) ? boot.urls.slice(0, MAX_STARTUP_ROWS) : []) {
-    if (typeof url === 'string' && url !== '') urls.push(url)
+    // Stored in the shape the check and the snapshot lookup both use, so a row read at boot is a
+    // row the check can recognise later.
+    const path = startupPath(url)
+    if (path !== '' && !urls.includes(path)) urls.push(path)
   }
   let revision = null
   let entries = []
@@ -1351,8 +1395,26 @@ function currentBundleUrls(graph, request) {
  * older ones take the method and address on their own, so both shapes are offered instead of one
  * silently failing on the other.
  */
+/**
+ * One address shape for every startup path. The app hands the document a document-relative address
+ * (`plugins/??a/client.js&rev=1`), the check reads absolute paths (`/plugins/??...`), and a snapshot
+ * key has to match both: every reader goes through this function so a row captured while booting is
+ * found again by the check. Concatenating a host and a relative path builds `hostplugins/...`, which
+ * answers 404 for a script the app serves, so the address is resolved by the URL parser instead.
+ */
+export function startupPath(url) {
+  const text = typeof url === 'string' ? url.trim() : ''
+  if (text === '') return ''
+  try {
+    const parsed = new URL(text, 'http://unlag.invalid')
+    return `${parsed.pathname}${parsed.search}`
+  } catch {
+    return text.startsWith('/') ? text : `/${text.replace(/^\.?\//u, '')}`
+  }
+}
+
 async function fetchBundleAt(clientModules, url, method) {
-  const address = `http://unlag.invalid${url}`
+  const address = new URL(startupPath(url), 'http://unlag.invalid').href
   /**
    * A table that accepts the question and then never answers would hold the request that asked it:
    * the document waits on this script and the page stops. The wait is bounded, and a table that
@@ -2866,12 +2928,6 @@ function serveButton(ctx, controller, config) {
   }
 }
 
-/**
- * Nothing a route body does may reach the server as a rejection or a throw: an answer that never
- * settles is a page that waits forever, and a rejected handler can take down the request instead of
- * saying what happened. Each body already answers from its own guard; this one is the floor under
- * them, so a future edit that misses a path still costs a status rather than the answer.
- */
 export function guardRoute(path, handler) {
   /**
    * Nothing a route body does may reach the server as a rejection or a throw: an answer that never
