@@ -2037,7 +2037,8 @@ function serveButton(ctx, controller, config) {
           const born = (params.get('born') ?? '').replace(/[^0-9]/gu, '').slice(0, 16)
           const navType = (params.get('nav') ?? '').replace(/[^a-z_]/gu, '').slice(0, 16)
           const loadFrom = (params.get('from') ?? '').replace(/[^a-z]/gu, '').slice(0, 12)
-          const first = [pageRev === '' ? '' : `page ${pageRev}`, born === '' ? '' : `born ${born}`, navType === '' ? '' : `nav ${navType}`, loadFrom === '' ? '' : `from ${loadFrom}`]
+          const view = (params.get('view') ?? '').replace(/[^a-zA-Z0-9/._x-]/gu, '').slice(0, 52)
+          const first = [pageRev === '' ? '' : `page ${pageRev}`, born === '' ? '' : `born ${born}`, navType === '' ? '' : `nav ${navType}`, loadFrom === '' ? '' : `from ${loadFrom}`, view === '' ? '' : `at ${view}`]
             .filter((part) => part !== '')
             .join(', ')
           const suffix = first === '' ? '' : ` (${first})`

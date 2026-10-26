@@ -175,11 +175,23 @@ window.__ModuleLoader__.load({
       } catch {
         from = '';
       }
+      // Which window this is: the same page is opened by more than the workspace window, and a
+      // document that is not the one the person is looking at should not be read as a refresh.
+      let view = '';
+      try {
+        const path = String(location.pathname ?? '').replace(/[^a-zA-Z0-9/._-]/gu, '').slice(0, 40);
+        const width = Math.round(Number(window?.innerWidth ?? 0));
+        const height = Math.round(Number(window?.innerHeight ?? 0));
+        view = `${path}|${width}x${height}`;
+      } catch {
+        view = '';
+      }
       const named = gate === undefined ? `event=${event}` : `event=${event}&gate=${encodeURIComponent(gate)}`;
       const withPage = page === '' ? named : `${named}&rev=${page}`;
       const withBorn = born === '' ? withPage : `${withPage}&born=${born}`;
       const withNav = nav === '' ? withBorn : `${withBorn}&nav=${nav}`;
-      const query = from === '' ? withNav : `${withNav}&from=${from}`;
+      const withFrom = from === '' ? withNav : `${withNav}&from=${from}`;
+      const query = view === '' ? withFrom : `${withFrom}&view=${encodeURIComponent(view)}`;
       /**
        * The route belongs to the instance this press is replacing. Its answer can land while the old
        * one is gone and the new one is not listening yet, and a lost line is a press nobody can
