@@ -1,7 +1,7 @@
 // What a press ends as, and what the next press is judged against. Three separate truths are
-// checked here: a plugin that was already stopped before the press is not this update's failure,
-// a plugin this press stopped makes it fail, and the end of an update that outlasted the answer is
-// still written down so the next press and a late reader see it.
+// checked here: a plugin stopped by an earlier press keeps failing the next one until it runs
+// again, a plugin this press stopped makes it fail, and the end of an update that outlasted the
+// answer is still written down so the next press and a late reader see it.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -120,7 +120,7 @@ check('an empty address stays empty', startupPath('') === '')
   check('and the capture is complete now that the address reads', state.body.bootSnapshot?.complete === true, JSON.stringify(state.body.bootSnapshot))
 }
 
-// --- a plugin that was already stopped is not this press's failure ----------------------------
+// --- a plugin an earlier press stopped keeps failing the next one ------------------------------
 {
   writeFileSync(LOG, '')
   const { routes } = mount({
@@ -130,11 +130,14 @@ check('an empty address stays empty', startupPath('') === '')
   // The first press is the one that took the plugin down, so it is the update's failure and says so.
   const failed = await press(routes)
   check('a press that stopped a plugin ends failed', failed.body.status === 'failed', JSON.stringify(failed.body))
-  // It is still down, but it went down with that press: the next one is judged against the state it
-  // finds instead of being turned away by a record nothing on the page can fix.
+  // It is still down, and the only press that could have taken it down is the one before this one:
+  // the record of that failure is kept until the plugin runs again or leaves the profile, so a
+  // second press cannot turn a stopped plugin into a done one.
   const next = await pressSlow(routes)
-  check('the next press ends done even though the plugin is still stopped', next.body.status === 'done', JSON.stringify(next.body))
-  check('and the log says that plugin was left out of the refusal', lines().some((line) => /left out of the refusal, already stopped before this press: @local\/envoy/u.test(line)), lines().slice(-5).join(' | '))
+  check('the next press still ends failed while that plugin is stopped', next.body.status === 'failed', JSON.stringify(next.body))
+  check('and it names the plugin as stopped before this press', Array.isArray(next.body.carriedEntries) && next.body.carriedEntries.includes('@local/envoy'), JSON.stringify(next.body))
+  check('and the page is told the rebuild is not safe', next.body.rebuild === 'unsafe', JSON.stringify(next.body))
+  check('and the log says that plugin is still stopped from an earlier press', lines().some((line) => /still stopped from an earlier press: @local\/envoy/u.test(line)), lines().slice(-6).join(' | '))
 }
 
 // --- a plugin this press stopped fails it ----------------------------------------------------
@@ -172,11 +175,21 @@ check('an empty address stays empty', startupPath('') === '')
   await settle()
   const state = await stateOf(routes)
   check('an update that failed after the answer ends failed', state.body.operation?.status === 'failed', JSON.stringify(state.body.operation))
-  // The plugin is still down, but it went down with that failed update, so this press may run
-  // again instead of being turned away by a record nothing can fix. The answer is allowed to wait
-  // for the whole update here, so the verdict is read directly.
+  // The plugin is still down because that failed update took it down. The record of that failure is
+  // kept until the plugin runs again or leaves the profile, so pressing again cannot make it go
+  // away: the retry is judged against the same stopped plugin and fails too.
   const retry = await pressSlow(routes)
-  check('and the next press is allowed to run', retry.body.status === 'done', JSON.stringify(retry.body))
+  check('and the next press does not turn that failure into done', retry.body.status === 'failed', JSON.stringify(retry.body))
+  check('and it names the plugin that was already stopped', (retry.body.carriedEntries ?? []).includes('@local/a'), JSON.stringify(retry.body))
+}
+
+// --- the record of a stopped plugin clears when that plugin runs again ------------------------
+{
+  writeFileSync(LOG, '')
+  const { routes } = mount({ before: [{ id: '@local/a', state: 2 }], after: [{ id: '@local/a', state: 2 }] })
+  const answer = await pressSlow(routes)
+  check('a press after the plugin runs again ends done', answer.body.status === 'done', JSON.stringify(answer.body))
+  check('and nothing is carried as stopped before it', Array.isArray(answer.body.carriedEntries) && answer.body.carriedEntries.length === 0, JSON.stringify(answer.body))
 }
 
 rmSync(HOME, { recursive: true, force: true })

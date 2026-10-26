@@ -1,0 +1,101 @@
+// The refresh button as a tool: offered only when the settings row allows it, and otherwise
+// refusing in one line instead of pressing. The press it makes goes through the same path as the
+// button, so the process is never restarted and a failed swap is reported as one.
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+const HOME = mkdtempSync(join(tmpdir(), 'unlag-agent-'))
+process.env.HOME = HOME
+process.env.DSH_UNLAG_LOG = join(HOME, 'agent.log')
+process.env.DSH_UNLAG_ANSWER_MS = '2000'
+
+const { apply } = await import('../index.js')
+
+const out = []
+const check = (label, ok, extra = '') => {
+  out.push(`${ok ? 'PASS' : 'FAIL'}  ${label}${extra === '' ? '' : `  (${extra})`}`)
+  if (!ok) process.exitCode = 1
+}
+
+function mount(config = {}, options = {}) {
+  const routes = new Map()
+  const tools = []
+  let applies = 0
+  let state = (options.before ?? [{ id: '@local/a', state: 2 }]).map((entry) => ({ ...entry }))
+  const clientModules = {
+    graph: () => ({ entries: state.map((entry) => ({ id: entry.id, rev: 'old' })) }),
+    fetchBundle: async () => ({ status: 200, arrayBuffer: async () => new TextEncoder().encode('module').buffer }),
+  }
+  const ctx = {
+    get: (key) => {
+      if (key === 'webServer') {
+        return { collectIndexInjections: () => [], register: (route) => { routes.set(route.path, route.handler); return () => routes.delete(route.path) } }
+      }
+      if (key === 'loader') return { entries: () => state.map((entry) => ({ options: { id: entry.id }, fiber: { state: entry.state } })) }
+      if (key === 'clientModules') return clientModules
+      if (key === 'hmr') {
+        return {
+          baseDir: join(HOME, 'profile'),
+          runExclusive: async (work) => work(),
+          reconcileProfile: async () => {
+            applies += 1
+            state = (options.after ?? state).map((entry) => ({ ...entry }))
+            if (options.fail === true) throw new Error('the swap failed')
+            return { warnings: [], pending: [] }
+          },
+        }
+      }
+      return undefined
+    },
+    on: () => {},
+    tools: { register: (definition) => { tools.push(definition); return () => {} } },
+    effect: (factory) => { factory(); return () => {} },
+  }
+  apply(ctx, config)
+  return { routes, tools, applies: () => applies }
+}
+
+// --- the switch decides whether the tool presses at all ---------------------------------------
+{
+  const { tools, applies } = mount({})
+  check('one refresh tool is offered to the model', tools.length === 1 && tools[0].name === 'unlag_refresh', JSON.stringify(tools.map((tool) => tool.name)))
+  const description = String(tools[0]?.description ?? '')
+  check('its description is one line', description !== '' && !description.includes('\n'), description)
+  const blocked = await tools[0].execute({})
+  check('with the switch off the call is refused', blocked.status === 'blocked', JSON.stringify(blocked))
+  check('and the refusal names where to turn it on', typeof blocked.reason === 'string' && blocked.reason.includes('右键菜单'), JSON.stringify(blocked))
+  check('and nothing was reloaded', applies() === 0, String(applies()))
+  const text = tools[0].output.render({}, blocked)[0]?.text ?? ''
+  check('the page is shown one line for that refusal', typeof text === 'string' && !text.includes('\n'), text)
+}
+
+// --- with the switch on it makes the same press the button makes ------------------------------
+{
+  const { tools, applies } = mount({ agentRefresh: true })
+  const pressed = await tools[0].execute({ requestId: 'agent-1' })
+  check('with the switch on the call ends done', pressed.status === 'done', JSON.stringify(pressed))
+  check('and the plugin set was composed once', applies() === 1, String(applies()))
+  check('and the rebuild is called safe', pressed.rebuild === 'safe', JSON.stringify(pressed))
+  check('and the reason is one sentence', typeof pressed.reason === 'string' && !pressed.reason.includes('\n'), JSON.stringify(pressed))
+  const again = await tools[0].execute({ requestId: 'agent-1' })
+  check('the same request id is answered from its own record', again.status === 'done' && applies() === 1, JSON.stringify({ again, applies: applies() }))
+}
+
+// --- the press switch still gates it, and a failed swap is reported as one -------------------
+{
+  const { tools, applies } = mount({ agentRefresh: true, reloadPlugins: false })
+  const blocked = await tools[0].execute({})
+  check('with the press switch off the call is refused', blocked.status === 'blocked', JSON.stringify(blocked))
+  check('and nothing was reloaded', applies() === 0, String(applies()))
+}
+{
+  const { tools } = mount({ agentRefresh: true }, { fail: true })
+  const failed = await tools[0].execute({})
+  check('a swap that fails is reported as failed', failed.status === 'failed', JSON.stringify(failed))
+  check('and the rebuild is not called safe', failed.rebuild !== 'safe', JSON.stringify(failed))
+}
+
+rmSync(HOME, { recursive: true, force: true })
+console.log(out.join('\n'))
+console.log(out.every((line) => line.startsWith('PASS')) ? 'ok' : 'failed')

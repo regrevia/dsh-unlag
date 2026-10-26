@@ -153,6 +153,26 @@ const state = async (routes) => {
   check('and the state keeps the automatic row out of its answer', now?.autoReload === undefined, JSON.stringify(now))
 }
 
+// --- the agent switch is optional in the write and named in every answer ----------------------
+{
+  const routes = mount({})
+  const fresh = await state(routes)
+  check('the state names the agent switch as off by default', fresh?.agentRefresh === false, JSON.stringify(fresh))
+  // An older page writes only the two press switches. That write must still be accepted, and the
+  // agent switch keeps the value the settings row gave it.
+  const older = fakeRes()
+  await routes.get('/dsh-unlag/switches')(request('/dsh-unlag/switches', { payload: JSON.stringify({ plugins: true, page: true }) }), older)
+  check('a write without the agent switch is still accepted', body(older)?.status === 'done' && body(older)?.agentRefresh === false, older.body)
+  const on = fakeRes()
+  await routes.get('/dsh-unlag/switches')(request('/dsh-unlag/switches', { payload: JSON.stringify({ plugins: true, page: true, agentRefresh: true }) }), on)
+  check('the agent switch can be turned on', body(on)?.agentRefresh === true, on.body)
+  check('and the file keeps it', JSON.parse(readFileSync(SWITCH_FILE, 'utf8')).agent === true)
+  check('and the state reports it on', (await state(routes))?.agentRefresh === true)
+  const wrong = fakeRes()
+  await routes.get('/dsh-unlag/switches')(request('/dsh-unlag/switches', { payload: JSON.stringify({ plugins: true, page: true, agentRefresh: 'yes' }) }), wrong)
+  check('a value that is not a boolean is refused', wrong.status === 400, `${wrong.status} ${wrong.body}`)
+}
+
 console.log(out.join('\n'))
 if (process.exitCode === 1) console.log('\nFAIL')
 else console.log('\nall checks passed')

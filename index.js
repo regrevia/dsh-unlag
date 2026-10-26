@@ -189,7 +189,8 @@ const SCHEMA = {
     2: { type: 'boolean', meta: { default: true, description: '按下刷新时换掉插件代码' } }, // ui-copy-ignore
     5: { type: 'boolean', meta: { default: true, description: '按下刷新时重建界面' } }, // ui-copy-ignore
     7: { type: 'boolean', meta: { default: false, description: '改完文件自动刷新，不必按按钮' } }, // ui-copy-ignore
-    6: { type: 'object', meta: { default: {} }, dict: { reloadPlugins: 2, reloadInterface: 5, autoReload: 7 } }, // ui-copy-ignore
+    8: { type: 'boolean', meta: { default: false, description: '允许在 Agent 里按刷新按钮' } }, // ui-copy-ignore
+    6: { type: 'object', meta: { default: {} }, dict: { reloadPlugins: 2, reloadInterface: 5, autoReload: 7, agentRefresh: 8 } }, // ui-copy-ignore
   },
 }
 
@@ -198,6 +199,7 @@ const FIELDS = {
   reloadPlugins: { type: 'boolean', meta: { default: true, description: '按下刷新时换掉插件代码' } },
   reloadInterface: { type: 'boolean', meta: { default: true, description: '按下刷新时重建界面' } },
   autoReload: { type: 'boolean', meta: { default: false, description: '改完文件自动刷新，不必按按钮' } },
+  agentRefresh: { type: 'boolean', meta: { default: false, description: '允许在 Agent 里按刷新按钮' } },
 }
 
 /**
@@ -251,6 +253,7 @@ function settingsOf(config) {
     reloadPlugins: booleanSwitch(config, 'reloadPlugins', true),
     reloadInterface: booleanSwitch(config, 'reloadInterface', true),
     autoReload: config?.plugins === 'off' ? false : booleanSwitch(config, 'autoReload', false),
+    agentRefresh: booleanSwitch(config, 'agentRefresh', false),
   }
 }
 
@@ -523,10 +526,26 @@ function pluginReloader(ctx, config) {
    * @returns {{unhealthy: string[], readable: boolean}}
    */
   const settleEntryHealth = (required) => {
+    const remembered = (Array.isArray(knownInactive.unhealthy) ? knownInactive.unhealthy : []).filter((id) => typeof id === 'string' && id !== '')
     const states = loaderEntryStates(ctx)
-    if (states === null) return { unhealthy: [], readable: false }
+    /**
+     * A list that cannot be read is not a set of stopped entries either. Nothing was looked at, so
+     * no id here is a breakage this update caused: the answer says the health could not be read and
+     * holds no entry back, because a press failed on a list nobody saw is worse than an unverified
+     * done. The memory itself is left untouched for the next press that can read it.
+     */
+    if (states === null) {
+      return { unhealthy: [], readable: false, carried: [] }
+    }
+    const asked = new Set(required)
     const unhealthy = []
-    const wanted = new Set(required)
+    /**
+     * The set to judge is this press's own required entries plus everything an earlier press left
+     * stopped. A plugin that broke under an earlier update is still broken, and a record that forgot
+     * it would let the next press answer `done` for a set that is missing part of itself. Only the
+     * Loader dropping an entry clears it: absent means the profile no longer has it at all.
+     */
+    const wanted = new Set([...asked, ...remembered])
     for (const id of wanted) {
       if (id === SELF_ENTRY_ID) continue
       const state = states.get(id)
@@ -535,18 +554,15 @@ function pluginReloader(ctx, config) {
       if (state !== 2) unhealthy.push(id)
     }
     /**
-     * An entry that was already stopped when this update started is not something this update broke.
-     * It is logged and left out of the refusal: a plugin that was down before the press was down in
-     * the document the person is looking at, and a page rebuilt into the same state is no worse than
-     * the page that is there. Counting it would keep the button failing on every press, which is the
-     * one thing this plugin must never do.
+     * The two reasons a stopped entry is in the refusal are said apart in the log: one was running
+     * when this press started, the other was already stopped by an earlier press and is still down.
+     * Both are held, neither is dropped: the first may be this press's doing, the second is the
+     * memory the next press needs.
      */
-    const alreadyDown = (Array.isArray(knownInactive.unhealthy) ? knownInactive.unhealthy : []).filter(
-      (id) => !wanted.has(id) && states.get(id) !== undefined && states.get(id) !== 2,
-    )
-    if (alreadyDown.length > 0) log(`left out of the refusal, already stopped before this press: ${alreadyDown.slice(0, 5).join(', ')}`)
-    knownInactive.unhealthy = unhealthy
-    return { unhealthy, readable: true }
+    const carried = unhealthy.filter((id) => !asked.has(id))
+    if (carried.length > 0) log(`still stopped from an earlier press: ${carried.slice(0, 5).join(', ')}`)
+    knownInactive.unhealthy = unhealthy.slice(0, 64)
+    return { unhealthy, readable: true, carried }
   }
 
   /**
@@ -568,6 +584,22 @@ function pluginReloader(ctx, config) {
    * record is bounded and old entries are dropped by age, never kept for the life of the process.
    */
   const presses = globalThis[Symbol.for('dsh-unlag.presses')] ?? (globalThis[Symbol.for('dsh-unlag.presses')] = new Map())
+  /**
+   * Whether the page that asked may be rebuilt on what this update left behind. It is a separate
+   * word from `status` on purpose: an update can arrive with every plugin stopped cleanly and still
+   * leave a set nobody could read, and a page built on that set is the one thing that must not
+   * happen. `unknown` is not a soft `safe`: it means no verdict was reached.
+   */
+  const rebuildOf = (outcome) => {
+    const explicit = outcome?.rebuild
+    if (explicit === 'safe' || explicit === 'unsafe' || explicit === 'unknown' || explicit === 'pending') return explicit
+    if (outcome?.healthReadable === false) return 'unknown'
+    const pending = Array.isArray(outcome?.pending) ? outcome.pending : []
+    const restart = typeof outcome?.restartReason === 'string' && outcome.restartReason !== ''
+    const failed = Array.isArray(outcome?.failedEntries) ? outcome.failedEntries : []
+    if (pending.length > 0 || restart || failed.length > 0) return 'unsafe'
+    return String(outcome?.status ?? '') === 'done' ? 'safe' : 'unsafe'
+  }
   const doneOf = (outcome, id = null) => ({
     id,
     // The same rule noteOperation uses: one record, one meaning, so a retry of the same request id
@@ -580,6 +612,9 @@ function pluginReloader(ctx, config) {
     pending: (Array.isArray(outcome?.pending) ? outcome.pending : []).slice(0, 16),
     failed: (Array.isArray(outcome?.failedEntries) ? outcome.failedEntries : []).slice(0, 16),
     restart: typeof outcome?.restartReason === 'string' && outcome.restartReason !== '' ? outcome.restartReason : null,
+    rebuild: rebuildOf(outcome), // ui-copy-ignore
+    healthReadable:
+      outcome?.healthReadable === true || outcome?.healthReadable === false ? outcome.healthReadable : null,
     at: Date.now(),
   })
   /** Remember one press's end, dropping the oldest and the stale as it goes. */
@@ -613,6 +648,11 @@ function pluginReloader(ctx, config) {
       pending: pending.length,
       failed: Array.isArray(outcome?.failedEntries) ? outcome.failedEntries.length : 0,
       restart,
+      // The verdict the page reads before it rebuilds, written by the same single writer as the
+      // status so the two cannot disagree about the same update.
+      rebuild: rebuildOf({ ...outcome, status }), // ui-copy-ignore
+      healthReadable:
+        outcome?.healthReadable === true || outcome?.healthReadable === false ? outcome.healthReadable : null,
       requestId: typeof requestId === 'string' && requestId !== '' ? requestId : (operation.state?.requestId ?? null),
     }
     rememberPress(requestId, outcome, id)
@@ -733,7 +773,7 @@ function pluginReloader(ctx, config) {
     const inactiveEntries = listed
     if (!health.readable) log('the plugin list could not be read after the update; the update ends without a verdict on the set')
     log(
-      `plugins reloaded (already not running=${inactiveEntries.length} newly not running=${failedEntries.length} pending=${pending.length}${restartReason === null ? '' : ` restart=${restartReason}`})`,
+      `plugins reloaded (already not running=${inactiveEntries.length} newly not running=${failedEntries.length} still stopped=${health.carried.length} pending=${pending.length}${restartReason === null ? '' : ` restart=${restartReason}`})`,
     )
     for (const entry of inactiveEntries.slice(0, 5)) log(`a plugin was already not running and still is not: ${entry.slice(0, 200)}`)
     for (const entry of failedEntries.slice(0, 5)) log(`a plugin stopped running with this update: ${entry.slice(0, 200)}`)
@@ -741,8 +781,10 @@ function pluginReloader(ctx, config) {
      * A list that could not be read after the update leaves the entries unjudged, and unjudged is
      * not the same as broken: reporting `failed` here would tell the person the update broke
      * something nothing observed. The reading is written down beside the verdict instead, so a
-     * press that ends `done` while the list was unreadable can be explained afterwards.
+     * press that ends `done` while the list was unreadable can be explained afterwards, and the
+     * page is told the rebuild is not proven either way.
      */
+    const rebuild = !health.readable ? 'unknown' : failedEntries.length > 0 || pending.length > 0 || restartReason !== null ? 'unsafe' : 'safe'
     return {
       status: failedEntries.length > 0 ? 'failed' : 'done', // ui-copy-ignore
       warnings,
@@ -750,7 +792,9 @@ function pluginReloader(ctx, config) {
       restartReason,
       inactiveEntries,
       failedEntries,
+      carriedEntries: health.carried,
       healthReadable: health.readable,
+      rebuild, // ui-copy-ignore
     }
     } catch (error) {
       // The update failed part-way: what it was required to keep running is still the right list to
@@ -894,17 +938,27 @@ function pluginReloader(ctx, config) {
     return 'queued'
   }
 
-  /** The answer shape a press always gets, whether or not a reload was started. */
-  const queuedAnswer = (answer) => ({
-    status: answer === 'unavailable' ? 'unavailable' : 'queued',
+  /**
+   * The answer shape a press always gets, whether or not a reload was started. `rebuild` is the
+   * page's question, not the update's: only an update that ended `done` on a set that was read back
+   * healthy lets a page rebuild, and an answer that carried no verdict says so instead of guessing.
+   */
+  const plainAnswer = (status, extra = {}) => ({
+    status, // ui-copy-ignore
     warnings: [],
     pending: [],
     restartReason: null,
     failedEntries: [],
+    rebuild: status === 'done' ? 'safe' : status === 'applying' || status === 'queued' || status === 'restart' ? 'pending' : 'unsafe', // ui-copy-ignore
+    healthReadable: null,
+    ...(extra ?? {}),
   })
 
+  /** The answer shape a press always gets, whether or not a reload was started. */
+  const queuedAnswer = (answer) => plainAnswer(answer === 'unavailable' ? 'unavailable' : 'queued')
+
   /** A press made while an update is still running joins that update instead of queueing another. */
-  const busyAnswer = () => (workState.current !== null ? { status: 'applying', warnings: [], pending: [], restartReason: null, failedEntries: [] } : queuedAnswer(queueReload()))
+  const busyAnswer = () => (workState.current !== null ? plainAnswer('applying') : queuedAnswer(queueReload()))
 
   /**
    * The button path: run now and report what happened, so the page can tell the user why the
@@ -933,23 +987,35 @@ function pluginReloader(ctx, config) {
         pending: remembered.pending.slice(), // ui-copy-ignore
         restartReason: remembered.restart,
         failedEntries: remembered.failed.slice(),
+        rebuild: remembered.rebuild, // ui-copy-ignore
+        healthReadable: remembered.healthReadable ?? null,
       }
     }
     const state = operation.state
     if (state === null || state.requestId !== requestId) return null
-    if (state.status === 'applying') return { status: 'applying', warnings: [], pending: [], restartReason: null, failedEntries: [] } // ui-copy-ignore
+    if (state.status === 'applying') return plainAnswer('applying')
     return {
       status: state.status, // ui-copy-ignore
       warnings: [],
       pending: [],
       restartReason: state.restart,
       failedEntries: [],
+      rebuild: state.rebuild ?? 'unknown', // ui-copy-ignore
+      healthReadable: state.healthReadable ?? null,
     }
   }
 
-  const runNow = async (force = false, requestId = null) => {
+  /**
+   * One press, one run. The same request id arriving while its run is still going joins that run
+   * instead of starting a second update: a page retries the press it lost the answer to, and two
+   * updates at once would each meet the other's half-applied set. The map lives on the process so a
+   * self-update replacing this closure does not lose the press it is waiting on.
+   */
+  const runningPresses = globalThis[Symbol.for('dsh-unlag.presses-live')] ?? (globalThis[Symbol.for('dsh-unlag.presses-live')] = new Map())
+
+  const runPress = async (force = false, requestId = null) => {
     const hmr = hmrService()
-    if (hmr === null) return { status: 'unavailable', warnings: [], pending: [], restartReason: null, failedEntries: [] }
+    if (hmr === null) return plainAnswer('unavailable')
     const already = seenRequest(requestId)
     if (already !== null) return already
     log('manual reload: the refresh button was pressed')
@@ -962,7 +1028,7 @@ function pluginReloader(ctx, config) {
      * context is gone and starting an update through it would leave half a set behind. The press is
      * answered as unavailable instead, which is what a stopped plugin is.
      */
-    if (stopped || hmrService() === null) return { status: 'unavailable', warnings: [], pending: [], restartReason: null, failedEntries: [] }
+    if (stopped || hmrService() === null) return plainAnswer('unavailable')
     if (running || workState.current !== null || (force === false && busy())) return busyAnswer()
     if (timer !== null) {
       clearTimeout(timer)
@@ -972,7 +1038,7 @@ function pluginReloader(ctx, config) {
     deferrals = 0
     lastRun = Date.now()
     const id = (operation.id += 1)
-    operation.state = { id, status: 'applying', pending: 0, failed: 0, restart: null, requestId } // ui-copy-ignore
+    operation.state = { id, status: 'applying', pending: 0, failed: 0, restart: null, rebuild: 'pending', healthReadable: null, requestId } // ui-copy-ignore
     try {
       const outcome = await reload(hmr)
       noteOperation(id, outcome, requestId)
@@ -983,23 +1049,24 @@ function pluginReloader(ctx, config) {
       if (outcome.pending.length > 0 || outcome.restartReason !== null) {
         // The app accepted the update but has not finished starting the new plugin set. Rebuilding
         // the page now would start a document against a set that is still settling.
-        return {
-          status: 'restart', // ui-copy-ignore
-          warnings: outcome.warnings, // ui-copy-ignore
-          pending: outcome.pending, // ui-copy-ignore
+        return plainAnswer('restart', {
+          warnings: outcome.warnings,
+          pending: outcome.pending,
           restartReason: outcome.restartReason,
           failedEntries: outcome.failedEntries,
-        }
+          rebuild: 'pending', // ui-copy-ignore
+          healthReadable: outcome.healthReadable ?? null,
+        })
       }
       return outcome
     } catch (error) {
       if (error?.stillRunning === true) {
         // The queue still holds the request: it may yet apply, so the press is not called failed.
-        return { status: 'applying', warnings: [], pending: [], restartReason: null, failedEntries: [] }
+        return plainAnswer('applying')
       }
       log(`reload did not finish; the plugin set may be partly applied: ${error?.message ?? error}`)
       noteOperation(id, { status: 'failed', pending: [], failedEntries: [] }, requestId)
-      return { status: 'failed', warnings: [], pending: [], restartReason: null, failedEntries: [] }
+      return plainAnswer('failed')
     } finally {
       if (workState.current === null) {
         running = false
@@ -1021,12 +1088,53 @@ function pluginReloader(ctx, config) {
             release()
           },
           (error) => {
-            noteOperation(id, { status: 'failed', pending: [], failedEntries: [], restartReason: null })
+            // The same press ends here, so the same request id is written with it; a record keyed
+            // by nothing would leave the page's retry looking like a press with no answer at all.
+            noteOperation(id, { status: 'failed', pending: [], failedEntries: [], restartReason: null }, requestId)
             release()
           },
         )
       }
     }
+  }
+
+  /**
+   * The press path: one request id is one run, however many times the page asks. The answer is kept
+   * for the life of the record, so a retry after a lost response reads the same end instead of
+   * starting a second update under the same id.
+   */
+  const runNow = async (force = false, requestId = null) => {
+    if (typeof requestId !== 'string' || requestId === '') return runPress(force, null)
+    /**
+     * A press already on the record is answered from that record whatever it says: a retry that
+     * meets its own run in flight is told it is still applying now, and waiting here would hold the
+     * retry until the update ends, which is the very answer the page is asking about.
+     */
+    const remembered = seenRequest(requestId)
+    if (remembered !== null) return remembered
+    const held = runningPresses.get(requestId)
+    if (held !== undefined) {
+      log('the same press arrived again; it joins the run already under way')
+      return held.promise
+    }
+    const work = runPress(force, requestId).then(
+      (answer) => answer,
+      (error) => {
+        log(`a press ended without an answer: ${error?.message ?? error}`)
+        return plainAnswer('failed')
+      },
+    )
+    runningPresses.set(requestId, { promise: work, at: Date.now() })
+    const forget = () => {
+      // Only entries past their age are dropped: a retry of the same id must still read the same end,
+      // and deleting a live entry would let a third run start on the same press.
+      const limit = Date.now() - MAX_PRESS_AGE_MS
+      for (const [key, row] of runningPresses) {
+        if (runningPresses.size > MAX_PRESSES * 4 || (typeof row?.at === 'number' && row.at < limit)) runningPresses.delete(key)
+      }
+    }
+    work.then(forget, forget)
+    return work
   }
 
   /**
@@ -1039,12 +1147,12 @@ function pluginReloader(ctx, config) {
         // A press can arrive while the plugin is being torn down. Nothing would finish that update,
         // so it is answered as not applied instead of starting work on a dead instance.
         log('a press arrived while this plugin was stopping; nothing was replaced')
-        return { status: 'failed', warnings: [], pending: [], restartReason: null, failedEntries: [] }
+        return plainAnswer('failed')
       }
       return await runNow(force, requestId)
     } catch (error) {
       log(`a press could not be answered: ${error?.message ?? error}`)
-      return { status: 'failed', warnings: [], pending: [], restartReason: null, failedEntries: [] }
+      return plainAnswer('failed')
     }
   }
 
@@ -1277,6 +1385,7 @@ async function captureBootSnapshot(clientModules, boot) {
         digest: createHash('sha256').update(buffer).digest('hex').slice(0, 16),
         ids: [...registeredIds(text)],
         required: [...requiredIds(text)],
+        lazy: [...lazyChunkFiles(text)],
       })
     } catch (error) {
       log(`cannot freeze one startup script: ${oneLine(error?.message ?? error)}`)
@@ -1399,8 +1508,9 @@ function currentBundleUrls(graph, request) {
  * One address shape for every startup path. The app hands the document a document-relative address
  * (`plugins/??a/client.js&rev=1`), the check reads absolute paths (`/plugins/??...`), and a snapshot
  * key has to match both: every reader goes through this function so a row captured while booting is
- * found again by the check. Concatenating a host and a relative path builds `hostplugins/...`, which
- * answers 404 for a script the app serves, so the address is resolved by the URL parser instead.
+ * found again by the check. Joining the page's address and a relative path by hand builds
+ * `hostplugins/...`, which answers 404 for a script the app serves, so the address is resolved by the
+ * URL parser instead.
  */
 export function startupPath(url) {
   const text = typeof url === 'string' ? url.trim() : ''
@@ -1728,7 +1838,11 @@ function entryRevisionFor(graph, rawUrl) {
   const rows = Array.isArray(graph?.entries) ? graph.entries : []
   for (const row of rows) {
     if (typeof row?.id !== 'string' || row.id === '' || typeof row?.rev !== 'string' || row.rev === '') continue
-    if (path === `${BUNDLE_ROUTE}/${row.id}` || path.startsWith(`${BUNDLE_ROUTE}/${row.id}/`)) return row.rev
+    // Only a request for one plugin's whole document is answered at that plugin's revision. A chunk
+    // names a file of a generation, and rewriting its revision puts another generation's bytes next
+    // to the document that asked for it: the document's main script is already running, its later
+    // chunk is not, and the two meet in one page. A chunk is left to the table's own answer.
+    if (path === `${BUNDLE_ROUTE}/${row.id}`) return row.rev
   }
   return null
 }
@@ -2091,15 +2205,23 @@ function releaseBundleShim(shim) {
  * matter (a reload, a page asking for the graph) asks again instead of trusting an earlier answer.
  */
 function ensureBundleShim(ctx) {
+  const owner = globalThis[INSTANCE_KEY] ?? null
   const shim = globalThis[SHIM_KEY]
   if (shim !== null && shim !== undefined) {
     const route = ctx.get('webServer')?.prefixes?.get?.(BUNDLE_ROUTE)
-    if (route === shim.route && route[shim.slot] === shim.wrapped && route[SHIM_MARK] === shim.wrapped) return shim
+    /**
+     * A wrap made by an earlier copy of this plugin closes over that copy's context: reusing it
+     * would answer pages from a closure the app already disposed, and a reload in this copy would
+     * wait on a service lookup that belongs to nobody. Only a wrap this owner made is reused.
+     */
+    if (shim.owner === owner && route === shim.route && route[shim.slot] === shim.wrapped && route[SHIM_MARK] === shim.wrapped) return shim
     releaseBundleShim(shim)
     globalThis[SHIM_KEY] = null
   }
-  globalThis[SHIM_KEY] = serveBundlesAtCurrentRevision(ctx)
-  return globalThis[SHIM_KEY]
+  const installed = serveBundlesAtCurrentRevision(ctx)
+  if (installed !== null && installed !== undefined) installed.owner = owner
+  globalThis[SHIM_KEY] = installed
+  return installed
 }
 
 /** What the bundle route looks like from here, so a stale answer can be told from a missing wrap. */
@@ -2146,6 +2268,16 @@ function registeredIds(body) {
  */
 function entryIdOf(id) {
   return id.replace(/\/(?:client|external|inject)$/u, '')
+}
+
+/** The chunk files a body loads after boot: the pieces of one plugin generation, by file name. */
+function lazyChunkFiles(body) {
+  const files = new Set()
+  for (const match of body.matchAll(/\brequire\s*\.\s*async\s*\(\s*(["'])([^"']+)\1\s*\)/gu)) {
+    const name = String(match[2]).split('/').pop() ?? ''
+    if (name !== '') files.add(name)
+  }
+  return files
 }
 
 /** Ids a body reads from the loader's table through `require`, which must already be registered. */
@@ -2303,7 +2435,7 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
     }
     // Only what the cross-checks below need from this body is kept; the text itself is let go here,
     // so a list of large scripts costs one script of memory rather than the whole list.
-    const record = { url: item.url, ids: item.ids, registered, required: requiredIds(text) }
+    const record = { url: item.url, ids: item.ids, registered, required: requiredIds(text), lazy: [...lazyChunkFiles(text)] }
     record.digest = createHash('sha256').update(bytes).digest('hex').slice(0, 16)
     bodies.push(record)
   }
@@ -2485,6 +2617,17 @@ async function bootGenerationProof(answer) {
       if (currentIds.has(id)) continue
       return { status: 'blocked', reason: 'boot', detail: `the newer scripts no longer register ${oneLine(String(id))}, which this page loads` }
     }
+    /**
+     * The same rule for the files a body loads after boot. Those are asked for under this page's own
+     * revision, so a newer generation that renamed them answers 404 to the page that is already
+     * running; a rebuild is held here rather than handed documents whose later chunks are gone.
+     */
+    const frozenChunks = Array.isArray(row.lazy) ? row.lazy : []
+    const currentChunks = new Set([...(script?.lazy ?? [])])
+    for (const file of frozenChunks) {
+      if (currentChunks.has(file)) continue
+      return { status: 'blocked', reason: 'generation', detail: `the newer plugin no longer loads ${oneLine(String(file))}, which this page's copy asks for` }
+    }
   }
   return null
 }
@@ -2511,7 +2654,7 @@ async function withDeadline(work, ms) {
 }
 
 /** What one press is told when the update it waits for did not answer in time. */
-const STILL_APPLYING = Object.freeze({ status: 'applying', warnings: [], pending: [], restartReason: null, failedEntries: [] });
+const STILL_APPLYING = Object.freeze({ status: 'applying', warnings: [], pending: [], restartReason: null, failedEntries: [], rebuild: 'pending', healthReadable: null });
 
 /**
  * The answer a press waits for, bounded in time. The update is asked for at most once and its
@@ -2526,7 +2669,7 @@ export async function answerReload(controller, limitMs, requestId = null) {
     work = Promise.resolve(controller.reloadNow(false, requestId))
   } catch (error) {
     log(`a press could not be started: ${error?.message ?? error}`)
-    return { outcome: { status: 'failed', warnings: [], pending: [], restartReason: null, failedEntries: [] }, timeRanOut: false, work: Promise.resolve() }
+    return { outcome: { status: 'failed', warnings: [], pending: [], restartReason: null, failedEntries: [], rebuild: 'unsafe', healthReadable: null }, timeRanOut: false, work: Promise.resolve() }
   }
   let timer = null
   let timeRanOut = false
@@ -2543,7 +2686,7 @@ export async function answerReload(controller, limitMs, requestId = null) {
       if (outcome !== null && typeof outcome === 'object' && typeof outcome.status === 'string') return { outcome, timeRanOut, work }
     } catch {}
     // An update that answers nothing usable is still a press that has to be answered.
-    return { outcome: { status: 'failed', warnings: [], pending: [], restartReason: null, failedEntries: [] }, timeRanOut, work }
+    return { outcome: { status: 'failed', warnings: [], pending: [], restartReason: null, failedEntries: [], rebuild: 'unsafe', healthReadable: null }, timeRanOut, work }
   } finally {
     if (timer !== null) clearTimeout(timer)
   }
@@ -2559,21 +2702,23 @@ const SWITCH_PATH = join(homedir(), '.dsh', 'unlag-switches.json') // ui-copy-ig
 
 /** The settings row this plugin was started with, written down so a saved choice can tell. */
 function switchFingerprint(settings) {
-  return createHash('sha256').update(JSON.stringify({ plugins: settings.reloadPlugins, page: settings.reloadInterface, auto: settings.autoReload })).digest('hex').slice(0, 16)
+  return createHash('sha256').update(JSON.stringify({ plugins: settings.reloadPlugins, page: settings.reloadInterface, auto: settings.autoReload, agent: settings.agentRefresh })).digest('hex').slice(0, 16)
 }
 
 /** The switches a press uses: the saved menu choice when it was made against this settings row. */
 function switchesFor(config) {
   const settings = settingsOf(config ?? {})
   const fingerprint = switchFingerprint(settings)
-  const fallback = { plugins: settings.reloadPlugins, page: settings.reloadInterface, fingerprint, saved: false }
+  const fallback = { plugins: settings.reloadPlugins, page: settings.reloadInterface, agent: settings.agentRefresh, fingerprint, saved: false }
   try {
     if (!existsSync(SWITCH_PATH)) return fallback
     const raw = JSON.parse(readFileSync(SWITCH_PATH, 'utf8'))
     if (raw === null || typeof raw !== 'object') return fallback
     if (raw.fingerprint !== fingerprint) return fallback
     if (typeof raw.plugins !== 'boolean' || typeof raw.page !== 'boolean') return fallback
-    return { plugins: raw.plugins, page: raw.page, fingerprint, saved: true }
+    // A file written before the agent switch existed has no word for it: the settings row answers.
+    const agent = typeof raw.agent === 'boolean' ? raw.agent : settings.agentRefresh
+    return { plugins: raw.plugins, page: raw.page, agent, fingerprint, saved: true }
   } catch {
     return fallback
   }
@@ -2583,13 +2728,86 @@ function switchesFor(config) {
 function saveSwitches(switches) {
   try {
     mkdirSync(join(homedir(), '.dsh'), { recursive: true })
-    const body = JSON.stringify({ plugins: switches.plugins, page: switches.page, fingerprint: switches.fingerprint })
+    const body = JSON.stringify({ plugins: switches.plugins, page: switches.page, agent: switches.agent === true, fingerprint: switches.fingerprint })
     const temporary = `${SWITCH_PATH}.${process.pid}.tmp`
     writeFileSync(temporary, body)
     renameSync(temporary, SWITCH_PATH)
     return true
   } catch (error) {
     log(`cannot save the button settings: ${error?.message ?? error}`)
+    return false
+  }
+}
+
+/** What a tool call is told when the switch that allows it is off. */
+const AGENT_REFRESH_OFF = '在右键菜单里打开 Agent 可以自己刷新' // ui-copy-ignore
+
+/** One answer for the tool: a status, one line a model can repeat, and what the rebuild proved. */
+function agentAnswer(outcome) {
+  const status = typeof outcome?.status === 'string' ? outcome.status : 'failed'
+  const rebuild = typeof outcome?.rebuild === 'string' ? outcome.rebuild : 'unknown'
+  const answer = { status, rebuild, reason: '刷新没有完成，插件还在用旧代码' }
+  if (typeof outcome?.healthReadable === 'boolean') answer.healthReadable = outcome.healthReadable
+  if (status === 'done') answer.reason = '插件已换成新代码'
+  else if (status === 'applying' || status === 'queued') answer.reason = '还在刷新，稍后再按一次'
+  else if (status === 'restart') answer.reason = '有新插件要重启后才能生效'
+  else if (status === 'unavailable') answer.reason = '这里没有可以换插件的服务'
+  return answer
+}
+
+/**
+ * The press as a tool, so an agent working in the app can refresh without a person. It is offered
+ * only when the settings row says so, and it goes through the same press, the same switches and the
+ * same safety gate as the button: the process is never restarted and no service is ever started.
+ */
+function registerAgentTool(ctx, controller, config) {
+  const tools = ctx?.tools ?? (typeof ctx?.get === 'function' ? ctx.get('tools') : undefined)
+  if (tools === undefined || tools === null || typeof tools.register !== 'function') return false
+  if (typeof ctx.effect !== 'function') return false
+  try {
+    ctx.effect(() => tools.register({
+      name: 'unlag_refresh', // ui-copy-ignore
+      description: '按一下刷新按钮；关闭时说明原因',
+      parameters: {
+        type: 'object', // ui-copy-ignore
+        properties: {
+          requestId: { type: 'string', description: '这次刷新的名字；同样的名字只刷新一次' },
+        },
+        additionalProperties: false,
+      },
+      output: { // ui-copy-ignore
+        presentationMeta: (_args, value) => ({ kind: 'unlag-refresh', status: value.status }),
+        schema: {
+          type: 'object', // ui-copy-ignore
+          properties: {
+            status: { type: 'string', enum: ['done', 'failed', 'blocked', 'applying', 'queued', 'restart', 'unavailable'] },
+            reason: { type: 'string' }, // ui-copy-ignore
+            rebuild: { type: 'string', enum: ['safe', 'unsafe', 'unknown', 'pending'] },
+            healthReadable: { type: 'boolean' },
+          },
+          required: ['status'], // ui-copy-ignore
+          additionalProperties: false,
+        },
+        render: (_args, value) => [{ type: 'text', text: `刷新 · ${value.reason ?? value.status}` }],
+      },
+      execute: async (args) => { // ui-copy-ignore
+        try {
+          const switches = switchesFor(config ?? {})
+          if (switches.agent !== true) return { status: 'blocked', reason: AGENT_REFRESH_OFF, rebuild: 'unknown' }
+          if (switches.plugins !== true) return { status: 'blocked', reason: '刷新按钮里的换插件是关的，先在那里打开', rebuild: 'unknown' }
+          const raw = args?.requestId
+          const requestId = typeof raw === 'string' && raw !== '' && raw.length <= 120 ? raw : null
+          const { outcome } = await answerReload(controller, RELOAD_ANSWER_MS, requestId)
+          return agentAnswer(outcome)
+        } catch (error) {
+          log(`the refresh tool could not press: ${error?.message ?? error}`)
+          return { status: 'failed', reason: '刷新没有完成，插件还在用旧代码', rebuild: 'unknown' }
+        }
+      },
+    }), 'unlag: unlag_refresh')
+    return true
+  } catch (error) {
+    log(`cannot offer the refresh tool: ${error?.message ?? error}`)
     return false
   }
 }
@@ -2619,7 +2837,7 @@ function serveButton(ctx, controller, config) {
           // answers a method it does not serve.
           const method = String(req?.method ?? 'GET').toUpperCase()
           if (method !== 'GET' && method !== 'HEAD') return sendJson(res, 405, { status: 'method' })
-          sendJson(res, 200, { version: VERSION, code: CODE_STAMP, plugins: switches.plugins, page: switches.page, saved: switches.saved, shim: bundleShimStatus(ctx), operation: controller.operation?.() ?? null, boot: liveBoot.current, bootSnapshot: liveBoot.snapshot })
+          sendJson(res, 200, { version: VERSION, code: CODE_STAMP, plugins: switches.plugins, page: switches.page, agentRefresh: switches.agent === true, saved: switches.saved, shim: bundleShimStatus(ctx), operation: controller.operation?.() ?? null, boot: liveBoot.current, bootSnapshot: liveBoot.snapshot })
         } catch (error) {
           log(`cannot describe this copy of the plugin: ${error?.message ?? error}`)
           sendJson(res, 500, { status: 'error' })
@@ -2864,12 +3082,15 @@ function serveButton(ctx, controller, config) {
           if (body === null || typeof body !== 'object') return sendJson(res, 400, { status: 'body' })
           const plugins = body.plugins
           const page = body.page
+          const agent = body.agentRefresh
           if (typeof plugins !== 'boolean' || typeof page !== 'boolean') return sendJson(res, 400, { status: 'body' })
+          if (agent !== undefined && typeof agent !== 'boolean') return sendJson(res, 400, { status: 'body' })
           switches.plugins = plugins
           switches.page = page
+          if (agent !== undefined) switches.agent = agent
           switches.saved = saveSwitches(switches)
-          log(`the button switches were changed: plugins=${plugins ? 'on' : 'off'} page=${page ? 'on' : 'off'}`)
-          sendJson(res, 200, { status: 'done', plugins: switches.plugins, page: switches.page, saved: switches.saved })
+          log(`the button switches were changed: plugins=${plugins ? 'on' : 'off'} page=${page ? 'on' : 'off'} agent=${switches.agent === true ? 'on' : 'off'}`)
+          sendJson(res, 200, { status: 'done', plugins: switches.plugins, page: switches.page, agentRefresh: switches.agent === true, saved: switches.saved })
         } catch (error) {
           log(`cannot change the button switches: ${error?.message ?? error}`)
           sendJson(res, 500, { status: 'error' })
@@ -2973,6 +3194,10 @@ export function apply(ctx, config) {
     closeAll(globalThis[WATCHER_KEY])
     closeAll(globalThis[ROUTES_KEY])
     releaseBundleShim(globalThis[SHIM_KEY])
+    // A press still running belongs to the copy being replaced: its record, not its promise, is what
+    // a retry after this composition reads, and holding the dead run here would answer the new page
+    // with an update it never made.
+    globalThis[Symbol.for('dsh-unlag.presses-live')]?.clear?.()
     globalThis[WATCHER_KEY] = null
     globalThis[ROUTES_KEY] = null
     globalThis[SHIM_KEY] = null
@@ -3041,9 +3266,13 @@ export function apply(ctx, config) {
       })
     }
     globalThis[ROUTES_KEY] = serveButton(ctx, controller, config ?? {})
+    registerAgentTool(ctx, controller, config ?? {})
     own.routes = globalThis[ROUTES_KEY]
     syncBundles()
     globalThis[INSTANCE_KEY] = instance
+    // The wrap made during startup was stamped with the copy that was current a line ago; it is
+    // this instance's now, and the next reload must be able to reuse it instead of wrapping again.
+    if (own.shim !== null && own.shim !== undefined) own.shim.owner = instance
 
     ctx.on('dispose', () => {
       /**
@@ -3062,7 +3291,9 @@ export function apply(ctx, config) {
       if (globalThis[INSTANCE_KEY] !== instance) return
       closeAll(own.watchers)
       closeAll(own.routes)
-      releaseBundleShim(own.shim)
+      // Only a wrap this instance owns is put back: one a newer copy installed answers from that
+      // copy's context, and unwrapping it here would leave the route answering from nobody's.
+      if (own.shim !== null && own.shim !== undefined && own.shim.owner === instance) releaseBundleShim(own.shim)
       if (globalThis[WATCHER_KEY] === own.watchers) globalThis[WATCHER_KEY] = null
       if (globalThis[ROUTES_KEY] === own.routes) globalThis[ROUTES_KEY] = null
       if (globalThis[SHIM_KEY] === own.shim) globalThis[SHIM_KEY] = null

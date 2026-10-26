@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises'
-import { harness, graph, rows } from './support/press-harness.mjs'
+import { composerShell, harness, harnessWithComposer, graph, rows } from './support/press-harness.mjs'
 
 // A press is the one action this plugin exists for, and it runs in a page that can go away at any
 // moment. These cases drive the real button handler in a sandbox: the press must end in exactly one
@@ -468,34 +468,58 @@ for (const [label, options] of [
   await page.press()
   check('an empty retained record does not hold the rebuild', page.reloads.length + page.navigations.length >= 1, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
 }
-// A send that failed hands its words back to the draft, which the app keeps per session and the
-// next document reads again: the rebuild returns them rather than losing them, so it may go ahead.
+// A failed default send is restored by the app only into an empty composer, and the restore and the
+// draft save are one step: the words are in the composer and in the session's draft store, so the
+// next document reads them back. That failure is safe to rebuild over.
 {
-  const shell = { snapshot: { attachmentIds: [], draft: '', phase: 'idle' }, detachedDrafts: new Map(), failedDetached: new Map([['f1', { attachmentIds: [], draft: 'try again' }]]), attachmentFlights: new Map() }
-  const conversation = { draftAttachments: new Map(), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, input: { shell: () => shell } }
-  const page = harness({ conversation, sessions: { list: () => [{ id: 's1' }] } })
+  const shell = composerShell().fail('f1', { draft: 'try again' })
+  const page = harnessWithComposer(shell)
   await page.press()
-  check('a failed send whose words the app restores does not hold the rebuild', page.reloads.length + page.navigations.length >= 1, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+  check('a failed send the app restored and saved does not hold the rebuild', page.reloads.length + page.navigations.length >= 1, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
 }
-// The app's restore only runs when the composer it would write into is empty. A failed message
-// left beside newer words is then kept in this document alone: the rebuild would drop the message
-// the app did not take back, so the press waits instead of navigating over it.
+// The restore runs at failure time only, and only into an empty composer. A failure that arrived
+// beside newer words is in this document alone. Emptying the composer later does not bring it back
+// (a real edit drops the waiting records), so the press must hold on the record, not on the draft.
 {
-  const shell = { snapshot: { attachmentIds: [], draft: 'newer words', phase: 'idle' }, detachedDrafts: new Map(), failedDetached: new Map([['f1', { attachmentIds: [], draft: 'try again' }]]), attachmentFlights: new Map() }
-  const conversation = { draftAttachments: new Map(), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, input: { shell: () => shell } }
-  const page = harness({ conversation, sessions: { list: () => [{ id: 's1' }] } })
+  const shell = composerShell()
+  shell.type('newer words')
+  shell.fail('f1', { draft: 'try again' })
+  shell.clear()
+  const page = harnessWithComposer(shell)
   await page.press()
-  check('a failed send beside newer words holds the rebuild', page.reloads.length === 0 && page.navigations.length === 0, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
-  check('and the notice says the failed message is not saved', /not saved|没保存/u.test(String(page.notice())), String(page.notice()))
+  check('a failed send the app never restored holds the rebuild after the composer is emptied', page.reloads.length === 0 && page.navigations.length === 0, JSON.stringify({ reloads: page.reloads, navigations: page.navigations, draft: shell.snapshot.draft }))
+  check('and the notice says the message is not back in the input', /not back in the input|没回到输入框/u.test(String(page.notice())), String(page.notice()))
 }
-// Its files are the other half: a failed record still holding an upload is a draft whose file only
-// lives in this document, so the press waits for it like any other draft attachment.
+// The same record beside words the person is still writing: neither the composer nor the store has it.
 {
-  const shell = { snapshot: { attachmentIds: [], draft: '', phase: 'idle' }, detachedDrafts: new Map(), failedDetached: new Map([['f1', { attachmentIds: ['a1'], draft: 'try again' }]]), attachmentFlights: new Map() }
-  const conversation = { draftAttachments: new Map(), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, input: { shell: () => shell } }
-  const page = harness({ conversation, sessions: { list: () => [{ id: 's1' }] } })
+  const shell = composerShell()
+  shell.type('newer words')
+  shell.fail('f1', { draft: 'try again' })
+  const page = harnessWithComposer(shell)
+  await page.press()
+  check('a failed send the app never restored holds the rebuild even with a draft beside it', page.reloads.length === 0 && page.navigations.length === 0, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+  check('and the notice still names the failed message', /not back in the input|没回到输入框/u.test(String(page.notice())), String(page.notice()))
+}
+// A restored draft the person then edited is an ordinary saved draft: the edit dropped the records,
+// and the rebuild returns the edited words from the store.
+{
+  const shell = composerShell().fail('f1', { draft: 'try again' })
+  shell.type('try again, reworded')
+  const page = harnessWithComposer(shell)
+  await page.press()
+  check('an edited restoration is an ordinary saved draft and does not hold the rebuild', page.reloads.length + page.navigations.length >= 1, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+}
+// Files are the other half: a failed record the app did not take back still holds an upload that
+// only lives in this document, so the press waits for it like any other draft attachment.
+{
+  const shell = composerShell()
+  shell.type('newer words')
+  shell.fail('f1', { draft: 'try again', attachmentIds: ['a1'] })
+  const page = harnessWithComposer(shell)
   await page.press()
   check('a failed send still holding a file holds the rebuild', page.reloads.length === 0 && page.navigations.length === 0, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+  check('and the notice names the file to send first', /attach|send|file|附件/u.test(String(page.notice())), String(page.notice()))
+  check('it is held as an attachment, not reported as a lost message', page.requests.some((request) => request.path.includes('event=held') && /attachments%3A(composer|draft)/u.test(request.path)), page.requests.map((r) => r.path).join(' '))
 }
 // The app publishes its sessions as one snapshot keyed by id; that is the interface a page can
 // actually read, so the check must not depend on a list function that the service does not have.
@@ -637,6 +661,84 @@ for (const [label, options] of [
   check('a done record with a pending module keeps the page', page.navigations.length === 0, String(page.navigations.length))
   check('a done record with a pending module says a reopen is needed', /reopen/iu.test(String(page.notice())), String(page.notice()))
   check('a done record with a pending module leaves the button usable', page.render().button.props.style.opacity !== 0.6, String(page.render().button.props.style.opacity))
+}
+
+// --- an update that finished but whose plugin health could not be read ----------------------
+// `done` says the replacement ran; the health field says whether the plugin set that ran could
+// be checked. Unreadable health is not a broken update, but nothing in the answer proves the set
+// will load, so the page stays and the notice names the fix instead of the failure.
+{
+  const page = harness({ reload: { status: 'done', healthReadable: false } })
+  await page.press()
+  check('an update whose health could not be read keeps the page', page.navigations.length === 0 && page.reloads.length === 0, JSON.stringify({ navigations: page.navigations, reloads: page.reloads }))
+  check('and the notice says the plugin state could not be read', /could not be read|没读到插件状态/u.test(String(page.notice())), String(page.notice()))
+  check('and the notice still gives the fix', /press again shortly|稍后再按一次/u.test(String(page.notice())), String(page.notice()))
+  check('and it is not reported as a failed update', !/did not finish|没完成/u.test(String(page.notice())), String(page.notice()))
+  check('and the button is still usable', ![0.4, 0.6].includes(page.render().button.props.style.opacity), String(page.render().button.props.style.opacity))
+  check('and the hold is logged as unconfirmed, not as a rebuild', page.requests.some((request) => request.path.includes('event=plugin-held') && request.path.includes('unconfirmed')) && !page.requests.some((request) => request.path.includes('event=rebuild')))
+}
+// The same answer read back from the app's own record after the page stopped waiting: the record
+// is done, its health unreadable, so the late end is held the same way.
+{
+  const page = harness({
+    reload: { status: 'applying', operationId: 11, warnings: [], pending: [], restartReason: null },
+    lateOperation: (rid) => ({ id: 11, status: 'done', pending: 0, failed: 0, restart: null, requestId: rid, healthReadable: false }),
+  })
+  await page.press()
+  check('a done record with unreadable health keeps the page', page.navigations.length === 0 && page.reloads.length === 0, JSON.stringify({ navigations: page.navigations, reloads: page.reloads }))
+  check('and the late hold says the state could not be read', /could not be read|没读到插件状态/u.test(String(page.notice())), String(page.notice()))
+  check('and the late hold is logged as unconfirmed', page.requests.some((request) => request.path.includes('late-unconfirmed')), page.requests.map((request) => request.path).join(' '))
+  check('and the late hold leaves the button usable', ![0.4, 0.6].includes(page.render().button.props.style.opacity), String(page.render().button.props.style.opacity))
+}
+// Readable health is the ordinary case and must still rebuild: unreadable is the exception, not a
+// second way to hold a finished update.
+{
+  const page = harness({ reload: { status: 'done', healthReadable: true } })
+  await page.press()
+  check('an update whose health was read rebuilds the page', page.navigations.length === 1, String(page.navigations.length))
+}
+
+// --- the agent switch in the button's menu ----------------------------------------------------
+// Swapping code on its own is the human's decision by default. The menu carries that as a third
+// switch, read and written through the same settings route as the other two, and the row shows the
+// answer immediately. Turning it on only lets a person's own agent refresh; nothing here starts a
+// refresh.
+{
+  const labels = (view) => {
+    const found = []
+    ;(function walk(node) {
+      if (node === null || typeof node !== 'object') return
+      if (node.type === 'label') found.push(String([].concat(node.children).filter((child) => typeof child === 'string').join('')))
+      for (const child of Array.isArray(node.children) ? node.children : []) walk(child)
+    })(view.tree)
+    return found.join('|')
+  }
+  const boxes = (view) => {
+    const found = []
+    ;(function walk(node) {
+      if (node === null || typeof node !== 'object') return
+      if (node.type === 'input') found.push(node.props.checked === true)
+      for (const child of Array.isArray(node.children) ? node.children : []) walk(child)
+    })(view.tree)
+    return found
+  }
+  const h = harness()
+  const view = await h.openMenu()
+  check('the menu offers the agent switch beside the other two', labels(view) === 'Replace plugin code|Rebuild page|Agents may refresh on their own', labels(view))
+  check('and it is off unless the app says otherwise', boxes(view).join('|') === 'true|true|false', boxes(view).join('|'))
+  const written = await h.toggle(2)
+  const sent = h.requests.find((request) => request.path.startsWith('/dsh-unlag/switches'))
+  const body = JSON.parse(sent?.init?.body ?? '{}')
+  check('changing it writes all three switches, the agent one on', body.agentRefresh === true && body.plugins === true && body.page === true, sent?.init?.body)
+  check('and the row shows the answered state at once', boxes(written).join('|') === 'true|true|true', boxes(written).join('|'))
+  const refused = harness({ switchAnswer: 'error' })
+  await refused.openMenu()
+  const kept = await refused.toggle(2)
+  check('a refused agent write leaves the row off', boxes(kept).join('|') === 'true|true|false', boxes(kept).join('|'))
+  check('and the page says the settings did not change', refused.notice() === 'Settings not changed; try again later', String(refused.notice()))
+  const zhPage = harness({ language: 'zh-CN' })
+  const zhView = await zhPage.openMenu()
+  check('the Chinese menu names the agent switch in Chinese', labels(zhView) === '换掉插件代码|重建页面|Agent 可以自己刷新', labels(zhView))
 }
 
 console.log(out.join('\n'))

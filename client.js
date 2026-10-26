@@ -6,8 +6,8 @@ window.__ModuleLoader__.load({
 
     const zh = /^zh/i.test(navigator.language || '');
     const COPY = zh
-      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', off: '两个开关都关着，先在设置里打开一个', replaced: '插件代码已更新，页面保持不动', stayedReplaced: '插件代码已更新，页面没有重建；稍后再按一次', stayed: '页面没有重建；稍后再按一次', done: '插件代码已是最新', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次', attachments: '还有没发出去的附件，先发出去再按', unsent: '有一条发送失败的消息还没保存，先重发或清空再按', sending: '消息正在发送，请稍候' , menu: '按下按钮时', switchPlugins: '换掉插件代码', switchPage: '重建页面', switchesFailed: '设置没改成，稍后再试', switchesUnsaved: '设置只在这次运行里有效'} // ui-copy-ignore
-      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', off: 'Both switches are off; turn one on in settings', replaced: 'Plugin code updated; the page stayed as it is', stayedReplaced: 'Plugin code updated; the page did not rebuild; press again shortly', stayed: 'The page did not rebuild; press again shortly', done: 'Plugin code is already up to date', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later', attachments: 'Files are attached but not sent; send them first', unsent: 'A failed message is not saved yet; resend or clear it first', sending: 'A message is being sent; wait for it to finish' , menu: 'On press', switchPlugins: 'Replace plugin code', switchPage: 'Rebuild page', switchesFailed: 'Settings not changed; try again later', switchesUnsaved: 'Settings apply to this run only'};
+      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', off: '两个开关都关着，先在设置里打开一个', replaced: '插件代码已更新，页面保持不动', stayedReplaced: '插件代码已更新，页面没有重建；稍后再按一次', stayed: '页面没有重建；稍后再按一次', done: '插件代码已是最新', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次', unconfirmed: '没读到插件状态，先不重建；稍后再按一次', attachments: '还有没发出去的附件，先发出去再按', unsent: '有一条发送失败的消息还没回到输入框，先把这条重发再按', sending: '消息正在发送，请稍候' , menu: '按下按钮时', switchPlugins: '换掉插件代码', switchPage: '重建页面', switchAgent: 'Agent 可以自己刷新', switchesFailed: '设置没改成，稍后再试', switchesUnsaved: '设置只在这次运行里有效'} // ui-copy-ignore
+      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', off: 'Both switches are off; turn one on in settings', replaced: 'Plugin code updated; the page stayed as it is', stayedReplaced: 'Plugin code updated; the page did not rebuild; press again shortly', stayed: 'The page did not rebuild; press again shortly', done: 'Plugin code is already up to date', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later', unconfirmed: 'Plugin state could not be read, so the page stays; press again shortly', attachments: 'Files are attached but not sent; send them first', unsent: 'A failed message is not back in the input yet; resend it first', sending: 'A message is being sent; wait for it to finish' , menu: 'On press', switchPlugins: 'Replace plugin code', switchPage: 'Rebuild page', switchAgent: 'Agents may refresh on their own', switchesFailed: 'Settings not changed; try again later', switchesUnsaved: 'Settings apply to this run only'};
 
     /**
      * Why the interface was left as it is, in words a person can act on. The checks below record
@@ -125,7 +125,7 @@ window.__ModuleLoader__.load({
         if (!response.ok) return again();
         const data = await withTimeout(response.json());
         if (data === null || typeof data !== 'object') return again();
-        return { plugins: data.plugins !== false, page: data.page !== false };
+        return { plugins: data.plugins !== false, page: data.page !== false, agentRefresh: data.agentRefresh === true };
       } catch {
         return again();
       }
@@ -282,7 +282,7 @@ window.__ModuleLoader__.load({
      * Only a set the app has finished starting can be rebuilt against: one still starting would
      * boot a document over plugins that are not ready, and one the app says cannot be applied to a
      * running page would boot the old code behind a fresh interface.
-     * @returns 'done' | 'off' | 'queued' | 'unavailable' | 'failed' | 'lost'
+     * @returns 'done' | 'unconfirmed' | 'off' | 'queued' | 'unavailable' | 'failed' | 'lost'
      */
     function reloadVerdict(data) {
       if (data === null || typeof data !== 'object') return 'failed';
@@ -292,6 +292,10 @@ window.__ModuleLoader__.load({
       // a reload that newly breaks one, so the press stands whatever that leftover list says.
       if (Array.isArray(data.pending) && data.pending.length > 0) return 'restart';
       if (typeof data.restartReason === 'string' && data.restartReason !== '') return 'restart';
+      // A finished update whose plugin health could not be read is not a confirmed one. It is not a
+      // failure either — the plugins may be fine — but starting a document over them would be a
+      // guess, so the press holds the page and says what it could not check.
+      if (data.healthReadable === false) return 'unconfirmed';
       return status;
     }
 
@@ -674,14 +678,17 @@ window.__ModuleLoader__.load({
     /**
      * The verdict one written record supports. A record can contradict itself: `done` while its
      * own fields still name a module waiting for a restart is not a finished update, and the
-     * restart fields win. A record that already says it did not finish stays that way.
-     * @returns 'done' | 'restart' | 'failed' | null
+     * restart fields win. A record that already says it did not finish stays that way, and one
+     * whose health the app could not read is finished but unconfirmed, so it never counts as a
+     * set the page may be rebuilt over.
+     * @returns 'done' | 'unconfirmed' | 'restart' | 'failed' | null
      */
     function verdictOfOperation(operation) {
       if (operation === null || typeof operation !== 'object') return null;
       if (operation.status === 'done') {
         if (typeof operation.pending === 'number' && operation.pending > 0) return 'restart';
         if (typeof operation.restart === 'string' && operation.restart !== '') return 'restart';
+        if (operation.healthReadable === false) return 'unconfirmed';
         return 'done';
       }
       if (operation.status === 'restart') return 'restart';
@@ -877,6 +884,52 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The composer's failed sends, and whether the app has already put them back into a saved draft.
+     *
+     * These are the shipped composer's own fields, not an interface the app promises, so they are
+     * read here and nowhere else. Basis, from the session input shell in the app bundle (app.asar,
+     * client input model, `SessionInputShell`):
+     * - `failedDetached` — "Failed default sends waiting to be restored together in submission
+     *   order", a map keyed by send sequence; each record keeps the draft text it carried.
+     * - `failedRestoreRev` — "Revision of the last automatic failure restoration". The one restore
+     *   path joins the waiting records in sequence order, writes that text into the editor, then
+     *   records the draft revision the restore produced; the same publish writes the text to the
+     *   session's draft store, so a restore and its saving are one step.
+     * - `snapshot.draftRev` — the revision of the draft the composer holds now.
+     * - a real edit bumps the revision and clears both the records and the recorded revision, so a
+     *   matching pair cannot describe text the person has changed since.
+     * One consequence decides the press: the app restores a failure only at the moment it fails, and
+     * only into an empty composer. A record that no restore accounts for is therefore in neither the
+     * composer nor the draft store — clearing newer words later does not bring it back — so it holds
+     * the rebuild whatever the composer currently shows.
+     * @param shell - the session composer.
+     * @returns the failed records, whether a restore accounts for them, and whether one holds a file.
+     */
+    function failedSendDraft(shell) {
+      const records = [];
+      let attachments = false;
+      try {
+        for (const record of shell?.failedDetached?.values?.() ?? []) {
+          records.push(record);
+          // A restored record's files go back into the composer's rail; an unrestored one keeps its
+          // files in a map only this document has.
+          if ((record?.attachmentIds?.length ?? 0) > 0) attachments = true;
+        }
+      } catch {
+        // A record map that cannot be read is answered as unrestored by the caller.
+      }
+      const draftRev = shell?.snapshot?.draftRev;
+      const restoreRev = shell?.failedRestoreRev;
+      // Only the app's own revision pairing makes a record safe. An answer missing either
+      // revision cannot be read as "restored", because the words would then be assumed saved.
+      const restored = records.length > 0
+        && typeof restoreRev === 'number'
+        && typeof draftRev === 'number'
+        && restoreRev === draftRev;
+      return { records, attachments, restored };
+    }
+
+    /**
      * What the composer still holds that was never sent, if anything. The answer names the piece
      * of state that held the rebuild: a check that guesses is worse than one that says which
      * reading refused, because a false hold can then be traced to the exact field that lied.
@@ -931,16 +984,14 @@ window.__ModuleLoader__.load({
                 if ((record?.attachmentIds?.length ?? 0) > 0) return 'sending';
                 if (typeof record?.draft === 'string' && record.draft.trim() !== '') return 'sending';
               }
-              // A send that failed hands its words back to the draft store, which the next document
-              // restores, but only when the composer it would write into is empty. Its files only
-              // exist in this document either way, and a failed message left beside a newer draft is
-              // in this document alone: the app keeps the newer words and leaves the failed ones
-              // where they are, so a rebuild would drop a message the person wrote.
-              const currentDraft = typeof shell.snapshot?.draft === 'string' ? shell.snapshot.draft : '';
-              for (const record of shell.failedDetached?.values?.() ?? []) {
-                if ((record?.attachmentIds?.length ?? 0) > 0) return 'draft';
-                const unsaved = typeof record?.draft === 'string' ? record.draft.trim() : '';
-                if (unsaved !== '' && currentDraft.trim() !== '') return 'unsent';
+              // A send that failed holds the press unless a restore put it back into the draft the
+              // app already wrote down. Walking that per record, and never judging it by what the
+              // composer happens to show, is what keeps both a message the person cannot see and a
+              // message the app already saved from reading alike.
+              const failed = failedSendDraft(shell);
+              if (failed.records.length > 0 && !failed.restored) {
+                if (failed.attachments) return 'draft';
+                return 'unsent';
               }
             } catch {
               // One session whose composer cannot be read does not make the others empty; its own
@@ -1063,7 +1114,7 @@ window.__ModuleLoader__.load({
       const [pending, setPending] = React.useState(false);
       const [notice, setNotice] = React.useState(null);
       const [menu, setMenu] = React.useState(false);
-      const [switches, setSwitches] = React.useState({ plugins: true, page: true });
+      const [switches, setSwitches] = React.useState({ plugins: true, page: true, agentRefresh: false });
       const [saving, setSaving] = React.useState(false);
       const wrap = React.useRef(null);
 
@@ -1107,7 +1158,7 @@ window.__ModuleLoader__.load({
           setNotice(noticeFor('blocked'));
           return;
         }
-        setSwitches({ plugins: settings.plugins, page: settings.page });
+        setSwitches({ plugins: settings.plugins, page: settings.page, agentRefresh: settings.agentRefresh });
         setMenu(true);
       };
 
@@ -1124,11 +1175,11 @@ window.__ModuleLoader__.load({
             cache: 'no-store', // ui-copy-ignore
             credentials: 'same-origin',
             headers: { 'content-type': 'application/json', 'x-dsh-unlag': '1' }, // ui-copy-ignore
-            body: JSON.stringify({ plugins: next.plugins, page: next.page }),
+            body: JSON.stringify({ plugins: next.plugins, page: next.page, agentRefresh: next.agentRefresh }),
           });
           const data = await response.json();
           if (!response.ok || data?.status !== 'done') throw new Error('not saved');
-          setSwitches({ plugins: data.plugins === true, page: data.page === true });
+          setSwitches({ plugins: data.plugins === true, page: data.page === true, agentRefresh: data.agentRefresh === true });
           if (data.saved !== true) setNotice(COPY.switchesUnsaved);
         } catch {
           setSwitches(before);
@@ -1219,11 +1270,13 @@ window.__ModuleLoader__.load({
                   ? 'queued'
                   : status === 'applying'
                     ? 'applying'
-                    : status === 'restart'
-                      ? 'restart'
-                      : status === 'unavailable'
-                        ? 'blocked'
-                        : 'failed';
+                    : status === 'unconfirmed'
+                      ? 'unconfirmed'
+                      : status === 'restart'
+                        ? 'restart'
+                        : status === 'unavailable'
+                          ? 'blocked'
+                          : 'failed';
               report('plugin-held', key);
               /**
                * Still applying when the page stops waiting: the update is not the page's to finish,
@@ -1241,6 +1294,12 @@ window.__ModuleLoader__.load({
                 if (settled === 'restart') {
                   report('plugin-held', 'late-restart');
                   return stop('restart');
+                }
+                // The update finished but the app could not say the plugins are healthy: the page
+                // is left as it is and told why, instead of being rebuilt over an unchecked set.
+                if (settled === 'unconfirmed') {
+                  report('plugin-held', 'late-unconfirmed');
+                  return stop('unconfirmed');
                 }
                 // The answer ran out before the update did, but the update did finish: the press
                 // goes on to the rebuild it was asked for instead of asking for another press.
@@ -1325,7 +1384,10 @@ window.__ModuleLoader__.load({
               COPY.switchPlugins),
             h('label', { style: MENU_ROW_STYLE },
               h('input', { type: 'checkbox', checked: switches.page, onChange: () => toggleSwitch('page'), style: { margin: 0 } }), // ui-copy-ignore
-              COPY.switchPage))
+              COPY.switchPage),
+            h('label', { style: MENU_ROW_STYLE },
+              h('input', { type: 'checkbox', checked: switches.agentRefresh, onChange: () => toggleSwitch('agentRefresh'), style: { margin: 0 } }), // ui-copy-ignore
+              COPY.switchAgent))
         : null;
 
       return h('span', { style: WRAP_STYLE, ref: wrap, onContextMenu: openMenu },

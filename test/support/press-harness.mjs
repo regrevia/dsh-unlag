@@ -80,9 +80,10 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
         const asked = JSON.parse(String(init.body ?? '{}'))
         if (typeof asked.plugins === 'boolean') settings.plugins = asked.plugins
         if (typeof asked.page === 'boolean') settings.page = asked.page
+        if (typeof asked.agentRefresh === 'boolean') settings.agentRefresh = asked.agentRefresh
       } catch {}
       const saved = switchAnswer !== 'unsaved'
-      return new Response(JSON.stringify({ status: 'done', plugins: settings.plugins, page: settings.page, saved }), { status: 200, headers: { 'content-type': 'application/json' } })
+      return new Response(JSON.stringify({ status: 'done', plugins: settings.plugins, page: settings.page, agentRefresh: settings.agentRefresh === true, saved }), { status: 200, headers: { 'content-type': 'application/json' } })
     }
     if (path.startsWith('/dsh-unlag/verify')) return new Response(JSON.stringify({ status: 'ok' }), { status: 200, headers: { 'content-type': 'application/json' } })
     if (path.startsWith('/dsh-unlag/report')) {
@@ -269,7 +270,7 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
       await menu({ preventDefault() {} })
       return render()
     },
-    /** Change one switch from the menu: 0 is the plugins switch, 1 the page switch. */
+    /** Change one switch from the menu: 0 is plugins, 1 the page, 2 the agent switch. */
     toggle: async (index) => {
       const inputs = []
       ;(function walk(node) {
@@ -284,6 +285,83 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
     stamp: () => (store.has('dsh-unlag:at') ? Number(store.get('dsh-unlag:at')) : 0),
     conversation,
   }
+}
+
+/**
+ * The shipped composer's failure bookkeeping, modeled from the app bundle (the client input model,
+ * `SessionInput`): a draft with the revision it was published at, the sends that failed and are
+ * waiting to be restored, and the revision of the last automatic restoration.
+ *
+ * The behaviors that decide the press, and are modeled rather than assumed:
+ * - a failed send is restored only into an empty composer, or over a draft that is itself the last
+ *   restoration; the restore writes the text and the draft is published (saved) in the same turn;
+ * - a real edit moves the revision on and drops both the waiting records and the recorded revision;
+ * - clearing words the person typed after the failure is a real edit, so it never brings a record
+ *   back: the app has no later path that restores a failed send.
+ * @param {object} options - the starting draft, revision, files and phase.
+ * @returns the shell a session composer would expose, plus `type`, `clear` and `fail`.
+ */
+export function composerShell({ draft = '', draftRev = 0, attachmentIds = [], phase = 'idle' } = {}) {
+  const shell = {
+    snapshot: { draft, draftRev, attachmentIds, phase },
+    detachedDrafts: new Map(),
+    failedDetached: new Map(),
+    attachmentFlights: new Map(),
+    failedRestoreRev: undefined,
+    /**
+     * Type into the composer. The revision moves on; the failure books are dropped only once a
+     * restoration is on record (the app's own condition), so a send the app never took back keeps
+     * waiting through later edits, and clearing the composer does not make it disappear.
+     */
+    type(text) {
+      shell.snapshot.draft = text
+      shell.snapshot.draftRev += 1
+      if (shell.failedRestoreRev !== undefined) {
+        shell.failedDetached.clear()
+        shell.failedRestoreRev = undefined
+      }
+      return shell
+    },
+    /** Empty the composer. The app saves an empty draft and restores nothing it did not restore. */
+    clear() {
+      return shell.type('')
+    },
+    /** A default send fails, carrying the text and files it tried to send. */
+    fail(seq, record = {}) {
+      const files = record.attachmentIds ?? []
+      shell.failedDetached.set(seq, { draft: record.draft ?? '', attachmentIds: files })
+      // The app returns a failed send's files to the rail at the failure itself, before deciding
+      // whether the words can be restored.
+      const rail = shell.snapshot.attachmentIds.filter((id) => !files.includes(id))
+      shell.snapshot.attachmentIds = [...files, ...rail]
+      const current = shell.snapshot.draftRev
+      const restoring = shell.snapshot.draft === '' || shell.failedRestoreRev === current
+      if (!restoring) return shell
+      const text = [...shell.failedDetached.values()]
+        .map((waiting) => waiting.draft)
+        .filter((words) => words !== '')
+        .join('\n\n')
+      // A restore that writes nothing does not move the revision, but the app records the revision
+      // it restored at either way; a restore that writes text publishes a new revision.
+      if (text !== '') shell.snapshot.draftRev += 1
+      shell.snapshot.draft = text
+      shell.failedRestoreRev = shell.snapshot.draftRev
+      return shell
+    },
+  }
+  return shell
+}
+
+/** A page showing one retained session's composer, built through `composerShell`. */
+export function harnessWithComposer(shell, options = {}) {
+  const conversation = {
+    draftAttachments: new Map(),
+    pendingFileUploads: new Set(),
+    fileUploads: { getSnapshot: () => ({}) },
+    input: { shell: (id) => (options.sessionId !== undefined && id !== options.sessionId ? undefined : shell) },
+  }
+  const { sessionId = 's1', sourceText = null, ...rest } = options
+  return harnessWith(sourceText, { sessions: { list: () => [{ id: sessionId }] }, ...rest, conversation })
 }
 
 /** Today's button, over the fake host. */

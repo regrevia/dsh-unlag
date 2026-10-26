@@ -45,8 +45,14 @@ check('inject names only real services', inject.length === 1 && inject[0] === 'w
 const v = (value) => Config['~standard'].validate(value)
 check(
   'validate {} -> press on, auto off',
-  JSON.stringify(v({}).value) === '{"reloadPlugins":true,"reloadInterface":true,"autoReload":false}',
+  v({}).value.reloadPlugins === true && v({}).value.reloadInterface === true && v({}).value.autoReload === false,
   JSON.stringify(v({}).value),
+)
+// The agent refresh switch is the newest row: off unless a person asked for it.
+check(
+  'the agent switch is off unless asked',
+  v({}).value.agentRefresh === false && v({ agentRefresh: true }).value.agentRefresh === true,
+  JSON.stringify(v({ agentRefresh: true }).value),
 )
 check('auto reload needs an explicit yes', v({ autoReload: true }).value.autoReload === true)
 check('the old off switch still means off', v({ plugins: 'off', autoReload: true }).value.autoReload === false)
@@ -890,6 +896,27 @@ helperServed = false
 const renamedRes = await postJson(renamedBody.routes.get('/dsh-unlag/verify'), JSON.stringify({ rows: [frozenUrl] }))
 check('a newer body that drops an id the page loads is held', verdict(renamedRes.body) === 'blocked' && String(renamedRes.body).includes('"boot"'), renamedRes.body)
 check('and names the id it no longer registers', String(renamedRes.body).includes('@local/helper'), renamedRes.body)
+
+// The same rule covers the files a plugin loads after boot, not only the ids it registers: a newer
+// build that renamed a lazy chunk answers 404 to the page that already runs the older one.
+let lazyName = './client.old.js'
+const lazyGraph = { rev: 'old', entries: [{ id: '@local/a', rev: 'old', url: frozenUrl }], batches: [{ url: frozenUrl, entries: ['@local/a'], rev: 'old' }] }
+const lazyMix = mount(
+  {},
+  {
+    clientModules: {
+      graph: () => lazyGraph,
+      fetchBundle: async () =>
+        new Response(`window.__ModuleLoader__.load({ id: "@local/a", factory() {} }); require.async("${lazyName}")`, { status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8' } }),
+    },
+  },
+)
+await postJson(lazyMix.routes.get('/dsh-unlag/boot'), bootJson([frozenUrl], 'old'))
+await settledBoot(lazyMix.routes)
+lazyName = './client.new.js'
+const lazyRes = await postJson(lazyMix.routes.get('/dsh-unlag/verify'), JSON.stringify({ rows: [frozenUrl] }))
+check('a newer build that renamed a lazy chunk is held', verdict(lazyRes.body) === 'blocked' && String(lazyRes.body).includes('"generation"'), lazyRes.body)
+check('and names the chunk it no longer serves', String(lazyRes.body).includes('client.old.js'), lazyRes.body)
 
 // A record the app could not read is not evidence against the press: the frozen addresses stop
 // answering as the set moves on, and a window whose history cannot be read still has no other way

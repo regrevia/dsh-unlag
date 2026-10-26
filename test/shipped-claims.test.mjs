@@ -55,9 +55,10 @@ check(
 )
 check(
   'a failed send the app did not take back holds the press',
-  /shell\.failedDetached\?\.values\?\.\(\) \?\? \[\][\s\S]{0,600}?currentDraft\.trim\(\) !== ''\) return 'unsent'/u.test(client) &&
-    /unsent: 'A failed message is not saved yet/u.test(client),
-  'a failed message left beside a newer draft is lost on rebuild',
+  /function failedSendDraft[\s\S]{0,2000}?failedRestoreRev/u.test(client) &&
+    /failed\.records\.length > 0 && !failed\.restored[\s\S]{0,80}?return 'unsent'/u.test(client) &&
+    /unsent: 'A failed message is not back in the input yet/u.test(client),
+  'a failed message the app did not restore is lost on rebuild',
 )
 check('a startup record that could not be taken does not hold the press', !/could not all be read when it booted/u.test(host) && /the press is checked against the list it reported/u.test(host), 'the boot record refuses an unreadable capture')
 check('it reads the composer before the markup and keeps a file picker as the fallback', /input\[type="file"\]/.test(client) && !/img\[src\^="blob:"\]/.test(client))
