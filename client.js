@@ -182,7 +182,20 @@ window.__ModuleLoader__.load({
         const path = String(location.pathname ?? '').replace(/[^a-zA-Z0-9/._-]/gu, '').slice(0, 40);
         const width = Math.round(Number(window?.innerWidth ?? 0));
         const height = Math.round(Number(window?.innerHeight ?? 0));
-        view = `${path}|${width}x${height}`;
+        // A tab keeps its session storage across loads; a new window starts at 1. That tells a
+        // load of the window you are looking at apart from another window opening the same page.
+        let tab = 0;
+        try {
+          tab = Number(sessionStorage.getItem('dsh-unlag-tab') ?? '0') + 1;
+          sessionStorage.setItem('dsh-unlag-tab', String(tab));
+        } catch {
+          tab = 0;
+        }
+        const hist = Math.round(Number(window?.history?.length ?? 0));
+        const outerW = Math.round(Number(window?.outerWidth ?? 0));
+        const outerH = Math.round(Number(window?.outerHeight ?? 0));
+        const vis = String(document?.visibilityState ?? '').replace(/[^a-z]/gu, '').slice(0, 9);
+        view = `${path}|${width}x${height}|${outerW}x${outerH}|${tab}|${hist}|${vis}`;
       } catch {
         view = '';
       }
