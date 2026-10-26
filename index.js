@@ -66,6 +66,9 @@ const CODE_STAMP = (() => {
 })()
 /** Tests point this at a scratch file, so a test run leaves the live log readable. */
 const logTarget = () => process.env.DSH_UNLAG_LOG ?? LOG_PATH
+
+/** The last rebuild line written, so one rebuild reported twice is written once. */
+let lastRebuilt = { key: '', at: 0 }
 /** Survives a module replacement, so a reload cannot leave a second watcher behind. */
 const WATCHER_KEY = Symbol.for('dsh-unlag.watchers')
 /** The same, for the HTTP entry points the header button calls. */
@@ -280,7 +283,9 @@ function ensureLogDir(target) {
 function log(line) {
   try {
     const target = logTarget()
-    const text = `${new Date().toISOString()} ${oneLine(line)}\n`
+    // A line written by the test suite says so, so a reader never reads a test as the live app.
+    const source = process.env.DSH_UNLAG_SOURCE === 'test' ? 'test: ' : ''
+    const text = `${new Date().toISOString()} ${source}${oneLine(line)}\n`
     /**
      * A file that only grows eventually costs the app its own memory budget, and a burst of lines
      * can land between two periodic checks: the size is read before every write and the whole
@@ -1178,7 +1183,7 @@ async function regroupedBundleAnswer(clientModules, graph, request, deadline = D
   // Only ids the assembled script really registers through the loader count as an answer.
   const text = body.toString('utf8')
   if (!request.ids.every((id) => bodyNamesId(text, id))) return null
-  return { body, contentType: 'text/javascript; charset=utf-8', ids: request.ids }
+  return { body, contentType: 'text/javascript; charset=utf-8', ids: request.ids, askedRev: askedRevisionOf(request), servedRev: servedRevisionOf(graph) }
 }
 
 /**
@@ -1208,7 +1213,7 @@ async function survivingBundleAnswer(clientModules, graph, request, deadline = D
   }
   if (parts.length === 0) return null
   const body = Buffer.concat(parts.flatMap((part, index) => (index === parts.length - 1 ? [part] : [part, Buffer.from('\n;\n')])))
-  return { body, contentType: 'text/javascript; charset=utf-8', ids: request.ids, gone }
+  return { body, contentType: 'text/javascript; charset=utf-8', ids: request.ids, gone, askedRev: askedRevisionOf(request), servedRev: servedRevisionOf(graph) }
 }
 
 /**
@@ -1239,6 +1244,8 @@ async function currentBundleAnswer(clientModules, method, url, deadline = Date.n
         body,
         contentType: String(response.headers.get('content-type') ?? 'text/javascript; charset=utf-8'),
         ids: request.ids,
+        askedRev: askedRevisionOf(request),
+        servedRev: servedRevisionOf(graph),
       }
     }
   }
@@ -1251,6 +1258,37 @@ async function currentBundleAnswer(clientModules, method, url, deadline = Date.n
   return surviving === null ? null : { ...surviving, standIn: true }
 }
 
+/** The revision a stale request named, or '' when it named none. */
+function askedRevisionOf(request) {
+  return typeof request?.rev === 'string' ? request.rev : ''
+}
+
+/** The revision the app serves now, or '' when the graph cannot say. */
+function servedRevisionOf(graph) {
+  return typeof graph?.rev === 'string' ? graph.rev : ''
+}
+
+/** `rev a → b`, so the log says which revision was asked for and what it got instead. */
+function revMigration(answer) {
+  const asked = answer.askedRev === '' ? 'none' : answer.askedRev
+  const served = answer.servedRev === '' ? 'unknown' : answer.servedRev
+  return `rev ${asked} → ${served}`
+}
+
+/** The headers a replaced body carries: no cache, and which revision actually answered. */
+function replacedHeaders(answer) {
+  const headers = {
+    'content-type': answer.contentType,
+    'cache-control': 'no-store',
+    'content-length': String(answer.body.length),
+  }
+  if (answer.servedRev !== '') {
+    headers['x-dsh-unlag-served-rev'] = answer.servedRev
+    headers['access-control-expose-headers'] = 'x-dsh-unlag-served-rev'
+  }
+  return headers
+}
+
 /** Answer one stale request over the plain request/response route an app registers. */
 async function serveCurrentBundle(clientModules, req, res) {
   try {
@@ -1259,21 +1297,17 @@ async function serveCurrentBundle(clientModules, req, res) {
     const answer = await currentBundleAnswer(clientModules, method, req?.url)
     if (answer === null) return false
     if (res.writableEnded === true || res.destroyed === true) return true
-    res.writeHead(200, {
-      'content-type': answer.contentType,
-      'cache-control': 'no-store',
-      'content-length': String(answer.body.length),
-    })
+    res.writeHead(200, replacedHeaders(answer))
     res.end(method === 'HEAD' ? undefined : answer.body)
     if (Array.isArray(answer.gone) && answer.gone.length > 0) {
       const kept = answer.ids.filter((id) => !answer.gone.includes(id))
       log(
         kept.length === 0
           ? `answered an older set with an empty script in place of ${answer.gone.join(', ')}: the app would have ended on the table's 404`
-          : `served ${kept.join(', ')} at the current revision and left out ${answer.gone.join(', ')}: a page asked for an older set`,
+          : `served ${kept.join(', ')} (${revMigration(answer)}) and left out ${answer.gone.join(', ')}: a page asked for an older set`,
       )
     } else {
-      log(`served ${answer.ids.join(', ')} at the current revision: a page asked for an older one`)
+      log(`served ${answer.ids.join(', ')} (${revMigration(answer)}): a page asked for an older one`)
     }
     return true
   } catch (error) {
@@ -1328,18 +1362,14 @@ async function serveCurrentBundleResource(clientModules, request) {
       log(
         kept.length === 0
           ? `answered an older set with an empty script in place of ${answer.gone.join(', ')}: the app would have ended on the table's 404`
-          : `served ${kept.join(', ')} at the current revision and left out ${answer.gone.join(', ')}: a page asked for an older set`,
+          : `served ${kept.join(', ')} (${revMigration(answer)}) and left out ${answer.gone.join(', ')}: a page asked for an older set`,
       )
     } else {
-      log(`served ${answer.ids.join(', ')} at the current revision: a page asked for an older one`)
+      log(`served ${answer.ids.join(', ')} (${revMigration(answer)}): a page asked for an older one`)
     }
     return new Response(method === 'HEAD' ? null : answer.body, {
       status: 200,
-      headers: {
-        'content-type': answer.contentType,
-        'cache-control': 'no-store',
-        'content-length': String(answer.body.length),
-      },
+      headers: replacedHeaders(answer),
     })
   } catch (error) {
     log(`cannot serve a bundle from an older revision: ${error?.message ?? error}`)
@@ -2202,7 +2232,18 @@ function serveButton(ctx, controller, config) {
            * replacement, a press when both switches are off) says so in its own words.
            */
           const named = event.replace(/[^a-z-]/gu, '').slice(0, 24)
-          if (named === 'mounted') log(`interface rebuilt; the page runs the plugins as served now${suffix}`)
+          if (named === 'mounted') {
+            // One rebuild can report twice: the page's own readiness and the press that caused it.
+            // The same page born at the same moment is one event, so the second line is skipped.
+            const now = Date.now()
+            const key = `${pageRev}|${born}`
+            if (lastRebuilt.key === key && now - lastRebuilt.at < 2000) {
+              // ui-copy-ignore
+            } else {
+              lastRebuilt = { key, at: now }
+              log(`interface rebuilt; the page runs the plugins as served now${suffix}`)
+            }
+          }
           else if (named === 'rebuild') log('rebuild allowed: the page re-enters on the served modules')
           else if (named === 'navigating') log('the page is going for a fresh document')
           else if (named === 'held') log(`rebuild held back: ${gate === '' ? 'unknown' : gate}`)

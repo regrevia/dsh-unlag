@@ -221,6 +221,21 @@ check(
   'a load the app started says it did not come from this page',
   readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes(', nav navigate, from none)'),
 )
+// One rebuild can report twice. The same document born at the same moment is one event, so the
+// second line inside two seconds is not written again.
+{
+  const lines = () => readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').split('\n').filter((line) => line.includes('(page dup1, born 42)')).length
+  const before = lines()
+  const first = fakeRes()
+  liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/report?event=mounted&rev=dup1&born=42' }, first)
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  const after = lines() - before
+  const second = fakeRes()
+  liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/report?event=mounted&rev=dup1&born=42&nav=reload' }, second)
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  check('one rebuilt document is written once, not once per reporter', after === 1 && lines() - before === 1, `${after}/${lines() - before}`)
+}
+
 const forgedRes = fakeRes()
 liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/report?event=mounted&rev=%3Cscript%3Ealert(1)' }, forgedRes)
 await new Promise((resolve) => setTimeout(resolve, 30))

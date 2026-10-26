@@ -13,7 +13,7 @@ const files = readdirSync(dir)
 
 let failed = 0
 for (const file of files) {
-  const result = spawnSync(process.execPath, [file], { stdio: 'inherit' })
+  const result = spawnSync(process.execPath, [file], { stdio: 'inherit', env: { ...process.env, DSH_UNLAG_SOURCE: 'test' } })
   if (result.error) {
     console.error(`${file}: ${result.error.message}`)
     failed += 1

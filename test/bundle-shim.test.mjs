@@ -180,6 +180,9 @@ check('a stale batch is answered here', stale.status === 200 && stale.body.inclu
 check('the answer is not cached', stale.headers?.['cache-control'] === 'no-store', JSON.stringify(stale.headers))
 check('the answer names its length', stale.headers?.['content-length'] === String(Buffer.byteLength(stale.body)))
 
+check('the answer says which revision actually served it', stale.headers?.['x-dsh-unlag-served-rev'] === 'newrev', JSON.stringify(stale.headers))
+check('and a page can read that header', String(stale.headers?.['access-control-expose-headers'] ?? '').includes('x-dsh-unlag-served-rev'), String(stale.headers?.['access-control-expose-headers']))
+
 const staleOne = await call(first.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js&rev=old' })
 // A body written twice is a body a document never gets: the second write lands on a response that
 // has already ended, and Node turns that into an error on the connection the app is serving from.
@@ -357,7 +360,8 @@ check('the state names the route shape in use', shapeBody.shim?.kind === 'resour
 
 // --- the log tells a reader what happened -----------------------------------------------------
 const log = readFileSync(process.env.DSH_UNLAG_LOG, 'utf8')
-check('the log names the served plugin set', log.includes('served @local/a, @local/b at the current revision'), log.split('\n').filter((line) => line.includes('current revision')).join(' | '))
+check('the log names the served plugin set', log.includes('served @local/a, @local/b'), log.split('\n').filter((line) => line.includes('served @local/a, @local/b')).join(' | '))
+check('and the log says which revision was asked for and which answered', /rev [^)\s]+ → [^)\s]+/u.test(log), log.split('\n').filter((line) => line.includes('an older one')).join(' | '))
 check('the log names the wrap', log.includes('older revision are answered at the current one'))
 
 // --- the table's own old generation, when it still has one, is used untouched ----------------
