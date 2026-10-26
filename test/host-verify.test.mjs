@@ -79,7 +79,10 @@ const bothPaths = (() => {
     if (path.includes('&rev=old')) return new Response(registered('@local/a'), { status: 200 })
     return new Response(registered('@local/a') + '\n;', { status: 200 })
   }
-  return { graph: () => ({ rev: 'new', entries: [{ id: '@local/a', rev: 'new', url: '/plugins/??@local/a/client.js&rev=new' }], batches: [] }), fetchBundle, asked }
+  // A real table hands back the same object for one generation; a graph rebuilt per call would
+  // look like a replacement to a check that looks twice.
+  const stable = { rev: 'new', entries: [{ id: '@local/a', rev: 'new', url: '/plugins/??@local/a/client.js&rev=new' }], batches: [] }
+  return { graph: () => stable, fetchBundle, asked }
 })()
 const servedFirst = await verifyStartup(bothPaths, [frozenRow])
 check('a row the app route still serves is read from that route', servedFirst.status === 'ok' && bothPaths.asked[0].includes('&rev=old'), bothPaths.asked.join(' '))

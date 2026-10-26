@@ -47,7 +47,9 @@ function fakeRes() {
   res.writeHead = (status, headers) => {
     res.writeHeads += 1
     res.status = status
-    res.headers = headers
+    // The shim marks a replaced answer with a Headers instance; a response records whichever form
+    // it was given, so the test reads one shape whatever the route used.
+    res.headers = headers instanceof Headers ? Object.fromEntries(headers.entries()) : headers
     res.headersSent = true
   }
   res.write = (chunk) => {
@@ -71,6 +73,9 @@ function fakeRes() {
 /** Mount the plugin over a stand-in module table and hand back the wrapped route. */
 function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.get(path), keep = null, late = false, shape = 'handler', streams404 = false, callback404 = false, breaksMidWrite = false, hang = false, delay = 0, hmr = null } = {}) {
   const original = async (req, res) => {
+    // A HEAD answer carries the status and headers of a GET and no bytes, the way the real server
+    // answers one.
+    const head = String(req?.method ?? 'GET').toUpperCase() === 'HEAD'
     if (breaksMidWrite) {
       res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' })
       throw new Error('table died mid-write')
@@ -78,7 +83,7 @@ function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.
     const kept = keep === null ? undefined : keep(asPath(req.url))
     if (kept !== undefined) {
       res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' })
-      res.end(kept)
+      res.end(head ? undefined : kept)
       return
     }
     res.writeHead(404, { 'content-type': 'text/plain' })
@@ -180,7 +185,11 @@ check('a stale batch is answered here', stale.status === 200 && stale.body.inclu
 check('the answer is not cached', stale.headers?.['cache-control'] === 'no-store', JSON.stringify(stale.headers))
 check('the answer names its length', stale.headers?.['content-length'] === String(Buffer.byteLength(stale.body)))
 
-check('the answer says which revision actually served it', stale.headers?.['x-dsh-unlag-served-rev'] === 'newrev', JSON.stringify(stale.headers))
+// The bytes came from the application batch's own address, whose revision is `abrev`; the startup
+// list running now is `newrev`. Two different questions, so two different values.
+check('the answer says which revision actually served it', stale.headers?.['x-dsh-unlag-served-rev'] === 'abrev', JSON.stringify(stale.headers))
+check('and separately which startup list is running now', stale.headers?.['x-dsh-unlag-graph-rev'] === 'newrev', JSON.stringify(stale.headers))
+check('the answer names the bytes it returned', /^[0-9a-f]{16}$/u.test(String(stale.headers?.['x-dsh-unlag-body-sha256'] ?? '')), JSON.stringify(stale.headers))
 check('and a page can read that header', String(stale.headers?.['access-control-expose-headers'] ?? '').includes('x-dsh-unlag-served-rev'), String(stale.headers?.['access-control-expose-headers']))
 
 const staleOne = await call(first.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js&rev=old' })
@@ -192,6 +201,14 @@ check('a stale single entry is answered here', staleOne.status === 200 && staleO
 
 const staleMap = await call(first.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js.map&rev=old' })
 check('a stale source map is answered here', staleMap.status === 200 && staleMap.body === '{"version":3}', `${staleMap.status} ${staleMap.body}`)
+// Every replacement answer, not just the bundle, has to say what answered it and that nothing
+// may cache it. A map or a chunk cached under the old name outlives the update it was served for.
+for (const [name, answer] of [['source map', staleMap]]) {
+  check(`a ${name} is not cached`, answer.headers?.['cache-control'] === 'no-store', JSON.stringify(answer.headers))
+  check(`a ${name} names the revision that served it`, String(answer.headers?.['x-dsh-unlag-served-rev'] ?? '') !== '', JSON.stringify(answer.headers))
+  check(`a ${name} names the startup list running now`, answer.headers?.['x-dsh-unlag-graph-rev'] === 'newrev', JSON.stringify(answer.headers))
+  check(`a ${name} names its own bytes`, /^[0-9a-f]{16}$/u.test(String(answer.headers?.['x-dsh-unlag-body-sha256'] ?? '')), JSON.stringify(answer.headers))
+}
 
 // A document made before two plugins were grouped apart asks for a set the table never sends
 // again. Each plugin is still served on its own, so the set is answered from those bodies in the
@@ -389,6 +406,14 @@ const chunkOld = await call(chunkRoute.route.handler, { method: 'GET', url: '/pl
 check('a chunk asked at a stale revision is answered', chunkOld.status === 200 && chunkOld.body === '/* lazy @local/a */', `${chunkOld.status} ${chunkOld.body}`)
 check('the chunk is retried at the entry revision', chunkAsks.includes('/plugins/@local/a/client.lazy.js?rev=ar2'), chunkAsks.join(' '))
 check('the chunk is never asked at the plugin set revision', !chunkAsks.some((path) => path.includes('rev=newrev')), chunkAsks.join(' '))
+// The bytes here came from `ar2`, not from the revision the document asked for. The headers say
+// that, so a page can tell a re-targeted chunk from one that is already current.
+check('a re-targeted chunk is not cached', chunkOld.headers?.['cache-control'] === 'no-store', JSON.stringify(chunkOld.headers))
+check('a re-targeted chunk names the revision that served it', chunkOld.headers?.['x-dsh-unlag-served-rev'] === 'ar2', JSON.stringify(chunkOld.headers))
+check('a re-targeted chunk names the startup list running now', chunkOld.headers?.['x-dsh-unlag-graph-rev'] === 'newrev', JSON.stringify(chunkOld.headers))
+const chunkHead = await call(chunkRoute.route.handler, { method: 'HEAD', url: '/plugins/@local/a/client.lazy.js?rev=a-old' })
+check('a HEAD chunk is answered without bytes', chunkHead.status === 200 && chunkHead.body === '', `${chunkHead.status} ${chunkHead.body.length}`)
+check('a HEAD chunk still names its revision', chunkHead.headers?.['x-dsh-unlag-served-rev'] === 'ar2', JSON.stringify(chunkHead.headers))
 
 const chunkNoQuery = mount({ keep: (path) => (path === '/plugins/@local/b/client.lazy.js?rev=br2' ? '/* lazy @local/b */' : undefined) })
 const chunkMissing = await call(chunkNoQuery.route.handler, { method: 'GET', url: '/plugins/@local/b/client.lazy.js' })

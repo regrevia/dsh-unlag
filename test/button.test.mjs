@@ -4,8 +4,10 @@ import { join } from 'node:path'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { Config, apply, name, inject } from '../index.js'
 
-// Keep the live log readable: this run writes its own.
-process.env.DSH_UNLAG_LOG = join(tmpdir(), 'dsh-unlag-test.log')
+// Keep the live log readable: this run writes its own file in a directory of its own, so a second
+// run never reads the first one's lines as if they happened now.
+const LOG = join(mkdtempSync(join(tmpdir(), 'dsh-unlag-button-')), 'reload.log')
+process.env.DSH_UNLAG_LOG = LOG
 
 const verdict = (body) => {
   try {
@@ -120,7 +122,7 @@ function mount(config, extra = {}) {
 }
 
 const both = mount({})
-check('six routes registered', both.routes.size === 6, [...both.routes.keys()].join(','))
+check('seven routes registered', both.routes.size === 7, [...both.routes.keys()].join(','))
 
 const stateRes = fakeRes()
 both.routes.get('/dsh-unlag/state')({ method: 'GET' }, stateRes)
@@ -175,14 +177,14 @@ const heldRes = fakeRes()
 liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/report?event=held&gate=unsaved' }, heldRes)
 check('report accepts a post', heldRes.status === 200 && heldRes.body === '{"status":"done"}', heldRes.body)
 await new Promise((resolve) => setTimeout(resolve, 30))
-check('report names the gate that stopped it', readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('rebuild held back: unsaved'))
+check('report names the gate that stopped it', readFileSync(LOG, 'utf8').includes('rebuild held back: unsaved'))
 
 const failedRes = fakeRes()
 liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/report?event=failed&gate=press' }, failedRes)
 await new Promise((resolve) => setTimeout(resolve, 30))
 check(
   'a press that failed says so instead of going unrecorded',
-  readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('a press ended: failed (press)'),
+  readFileSync(LOG, 'utf8').includes('a press ended: failed (press)'),
 )
 
 const oddRes = fakeRes()
@@ -190,7 +192,7 @@ liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-un
 await new Promise((resolve) => setTimeout(resolve, 30))
 check(
   'an unknown outcome is written in a shape a forged one cannot forge',
-  readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('a press ended: bx'),
+  readFileSync(LOG, 'utf8').includes('a press ended: bx'),
 )
 
 const namedRes = fakeRes()
@@ -198,33 +200,33 @@ liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-un
 await new Promise((resolve) => setTimeout(resolve, 30))
 check(
   'the rebuilt line names the page generation that came up',
-  readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('(page bad58412ac96)'),
+  readFileSync(LOG, 'utf8').includes('(page bad58412ac96)'),
 )
 const bornRes = fakeRes()
 liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/report?event=mounted&rev=bad58412ac96&born=1792875929483' }, bornRes)
 await new Promise((resolve) => setTimeout(resolve, 30))
 check(
   'a document says which document it is, so two of them are not read as one',
-  readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('(page bad58412ac96, born 1792875929483)'),
+  readFileSync(LOG, 'utf8').includes('(page bad58412ac96, born 1792875929483)'),
 )
 const navRes = fakeRes()
-liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/report?event=mounted&rev=bad58412ac96&born=1792875929483&nav=reload' }, navRes)
+liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/report?event=mounted&rev=bad58412ac96&born=1792875929484&nav=reload' }, navRes)
 await new Promise((resolve) => setTimeout(resolve, 30))
 check(
   'and how it got here, so a reload is not read as a navigation',
-  readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes(', nav reload)'),
+  readFileSync(LOG, 'utf8').includes('(page bad58412ac96, born 1792875929484, nav reload)'),
 )
 const fromRes = fakeRes()
-liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/report?event=mounted&rev=bad58412ac96&born=1792875929483&nav=navigate&from=none' }, fromRes)
+liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/report?event=mounted&rev=bad58412ac96&born=1792875929485&nav=navigate&from=none' }, fromRes)
 await new Promise((resolve) => setTimeout(resolve, 30))
 check(
   'a load the app started says it did not come from this page',
-  readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes(', nav navigate, from none)'),
+  readFileSync(LOG, 'utf8').includes('(page bad58412ac96, born 1792875929485, nav navigate, from none)'),
 )
 // One rebuild can report twice. The same document born at the same moment is one event, so the
 // second line inside two seconds is not written again.
 {
-  const lines = () => readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').split('\n').filter((line) => line.includes('(page dup1, born 42)')).length
+  const lines = () => readFileSync(LOG, 'utf8').split('\n').filter((line) => line.includes('(page dup1, born 42)')).length
   const before = lines()
   const first = fakeRes()
   liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/report?event=mounted&rev=dup1&born=42' }, first)
@@ -239,14 +241,14 @@ check(
 const forgedRes = fakeRes()
 liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/report?event=mounted&rev=%3Cscript%3Ealert(1)' }, forgedRes)
 await new Promise((resolve) => setTimeout(resolve, 30))
-check('a forged page name cannot put markup in the log', !readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('<script>'))
+check('a forged page name cannot put markup in the log', !readFileSync(LOG, 'utf8').includes('<script>'))
 
 const plainRes = fakeRes()
 liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', url: '/dsh-unlag/report?event=mounted&rev=forged1' }, plainRes)
 check('report from a page that is not this one is refused', plainRes.status === 403, `${plainRes.status}`)
 check(
   'and the refused report leaves no line behind',
-  readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('(page forged1)') === false,
+  readFileSync(LOG, 'utf8').includes('(page forged1)') === false,
 )
 
 // A press that replaced the plugins and then stopped before rebuilding reports both halves. The
@@ -256,8 +258,8 @@ liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-un
 await new Promise((resolve) => setTimeout(resolve, 30))
 check(
   'a press that applied and then stopped names both halves',
-  readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('rebuild held back: applied then blocked'),
-  readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').split('\n').filter((line) => line.includes('applied then')).slice(-1).join(''),
+  readFileSync(LOG, 'utf8').includes('rebuild held back: applied then blocked'),
+  readFileSync(LOG, 'utf8').split('\n').filter((line) => line.includes('applied then')).slice(-1).join(''),
 )
 
 const junkRes = fakeRes()
@@ -265,13 +267,13 @@ liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-un
 await new Promise((resolve) => setTimeout(resolve, 30))
 check(
   'a gate with markup in it cannot put markup in the log',
-  readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('<img') === false,
+  readFileSync(LOG, 'utf8').includes('<img') === false,
 )
 
 const longRes = fakeRes()
 liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: `/dsh-unlag/report?event=held&gate=${'a'.repeat(200)}` }, longRes)
 await new Promise((resolve) => setTimeout(resolve, 30))
-const longLine = readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').split('\n').filter((line) => line.includes('rebuild held back: aaaa')).slice(-1)[0] ?? ''
+const longLine = readFileSync(LOG, 'utf8').split('\n').filter((line) => line.includes('rebuild held back: aaaa')).slice(-1)[0] ?? ''
 check(
   'a gate too long to read is cut, not refused',
   longRes.status === 200 && longLine.length < 120,
@@ -287,7 +289,7 @@ const withWarning = mount({}, { reloadWarnings: ['dsh-sibling (dsh-sibling): fai
 const warnRes = fakeRes()
 await withWarning.routes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1', host: '127.0.0.1:62542', origin: 'http://127.0.0.1:62542' } }, warnRes)
 await new Promise((resolve) => setTimeout(resolve, 30))
-check('a plugin that was already not running is named in the log', readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes('a plugin was already not running and still is not: dsh-sibling (dsh-sibling): failed to import: boom'))
+check('a plugin that was already not running is named in the log', readFileSync(LOG, 'utf8').includes('a plugin was already not running and still is not: dsh-sibling (dsh-sibling): failed to import: boom'))
 // The app rejects a reload that newly breaks an entry, so a leftover inactive entry is not the
 // press's result: it is written down, and the press still replaces the set.
 check('and it does not turn the press into a failure', verdict(warnRes.body) === 'done', warnRes.body)
@@ -604,7 +606,7 @@ check('no web server and no hmr is not fatal', survived)
 // --- replacing the module twice must not stack routes ----------------------------------------
 const first = mount({})
 const second = mount({})
-check('remount leaves one route set', first.routes.size === 0 && second.routes.size === 6, `${first.routes.size}/${second.routes.size}`)
+check('remount leaves one route set', first.routes.size === 0 && second.routes.size === 7, `${first.routes.size}/${second.routes.size}`)
 
 // --- the address a press came from: a browser always sends one -------------------------------
 const gate = mount({})

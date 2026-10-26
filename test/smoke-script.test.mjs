@@ -29,6 +29,9 @@ createServer((req, res) => {
   // plugin serves is turned down. The smoke's own probe has to see both answers to be worth running.
   if (req.url === '/dsh-unlag/verify') {
     if (!req.headers['x-dsh-unlag']) return send(403, { status: 'forbidden' })
+    // A page on another origin cannot send the button header, so the same request from one is
+    // refused here the way the app refuses it.
+    if (req.headers.origin && req.headers.origin !== 'http://127.0.0.1:${HOST_PORT}') return send(403, { status: 'forbidden' })
     let body = ''
     req.on('data', (chunk) => {
       body += chunk
@@ -72,6 +75,7 @@ const printed = (() => {
 const contract = printed?.contract ?? {}
 const checked =
   run.status === 0 &&
+  live.status === 0 &&
   contract['state GET'] === '200' &&
   contract['state DELETE'] === '405' &&
   contract['graph PUT'] === '405' &&
@@ -105,3 +109,40 @@ const shipped = JSON.parse(readFileSync(new URL('../package.json', import.meta.u
 const shippedScript = shipped.includes('scripts/live-smoke.mjs')
 console.log(`${shippedScript ? 'PASS' : 'FAIL'}  the package publishes the smoke the README tells a reader to run (${JSON.stringify(shipped)})`)
 if (!shippedScript) process.exitCode = 1
+
+// A host that breaks the route contract is the case the exit code exists for: a smoke that printed
+// a wrong answer but still left zero would tell a release gate the app was fine. One route is made
+// to answer a write with 200, and the run has to come back non-zero naming that route.
+const BROKEN_PORT = 53992
+const brokenHost = spawn(process.execPath, ['--input-type=commonjs', '-e', `
+const { createServer } = require('node:http')
+const graph = { graph: { rev: 'rev1', entries: [], batches: [{ rev: 'r1', url: 'plugins/??@local/a/client.js&rev=r1', entries: ['@local/a'] }] } }
+createServer((req, res) => {
+  const send = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
+  // The broken answer: a read route answers DELETE with 200 instead of 405.
+  if (req.url === '/dsh-unlag/state' && req.method === 'DELETE') return send(200, { status: 'deleted' })
+  if (req.url === '/dsh-unlag/state') return req.method === 'GET' ? send(200, { version: 'x', code: 'c', shim: { wrapped: true } }) : send(405, { status: 'method' })
+  if (req.url === '/dsh-unlag/graph') return req.method === 'GET' ? send(200, graph) : send(405, { status: 'method' })
+  if (req.url === '/dsh-unlag/verify') {
+    if (!req.headers['x-dsh-unlag']) return send(403, { status: 'forbidden' })
+    let body = ''
+    req.on('data', (chunk) => { body += chunk })
+    req.on('end', () => send(200, { status: 'ok' }))
+    return undefined
+  }
+  if (req.url.startsWith('/plugins/not-a-plugin/')) return send(404, {})
+  if (req.url.startsWith('/plugins/')) { res.writeHead(200, { 'content-type': 'text/javascript' }); return res.end('/* current bytes */') }
+  send(403, { status: 'forbidden' })
+}).listen(${BROKEN_PORT}, '127.0.0.1')
+`], { stdio: 'ignore' })
+await new Promise((resolve) => setTimeout(resolve, 500))
+const broken = spawnSync(process.execPath, ['scripts/live-smoke.mjs'], {
+  cwd: new URL('..', import.meta.url).pathname,
+  env: { ...process.env, DSH_UNLAG_HOST: `http://127.0.0.1:${BROKEN_PORT}` },
+  encoding: 'utf8',
+  timeout: 30000,
+})
+brokenHost.kill()
+const brokeNamed = /"state DELETE": "200 \(wanted 405\)"/u.test(broken.stdout)
+console.log(`${broken.status === 1 && brokeNamed ? 'PASS' : 'FAIL'}  a host that breaks the route contract makes the smoke exit non-zero (${broken.status} ${JSON.stringify(broken.stdout.slice(-200))})`)
+if (!(broken.status === 1 && brokeNamed)) process.exitCode = 1

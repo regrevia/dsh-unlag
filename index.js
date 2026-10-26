@@ -37,6 +37,8 @@ const RELOAD_TIMEOUT_MS = 20_000
  * finish" while the plugin set is still being replaced is a lie the person cannot check.
  */
 const RELOAD_ANSWER_MS = 10_000
+/** The longest batch address kept from a page's startup report; whole or refused, never cut. */
+const MAX_BOOT_URL = 16 * 1024
 
 
 const LOG_PATH = join(homedir(), '.dsh', 'unlag-reload.log')
@@ -405,6 +407,20 @@ function transactionContext(service) {
   return null
 }
 
+/** The ids of the Loader entries that are running now, read defensively: this is diagnostics. */
+function activeEntryIds(ctx) {
+  try {
+    const loader = typeof ctx?.get === 'function' ? ctx.get('loader') : undefined
+    const entries = typeof loader?.entries === 'function' ? [...loader.entries()] : []
+    return entries
+      .filter((entry) => entry?.fiber?.state === 2)
+      .map((entry) => entry?.options?.id)
+      .filter((id) => typeof id === 'string' && id !== '')
+  } catch {
+    return []
+  }
+}
+
 function pluginReloader(ctx, config) {
   /** HMR can start after this half, so ask per use instead of once at load. */
   const hmrService = () => {
@@ -473,22 +489,38 @@ function pluginReloader(ctx, config) {
    * here again was already true before this press; one that does not is a breakage this press caused,
    * and a press that broke something must not be followed by a page built on it.
    */
-  const knownInactive = { health: null }
+  const knownInactive = globalThis[Symbol.for('dsh-unlag.health')] ?? (globalThis[Symbol.for('dsh-unlag.health')] = { health: null, lingering: [] })
 
   /**
    * What the last operation really ended as. The answer to a press is bounded by the time a page
    * waits, so an update that outlasts it is answered as still applying; this record is where the
    * same operation writes its real end, and the page reads it back instead of guessing.
    */
-  const operation = { id: 0, state: null }
+  /**
+   * The operation record outlives this copy of the plugin: an update can replace the plugin that
+   * started it, and the page reading the record afterwards must still find it. It is kept on the
+   * process, not in this closure, so a self-update does not restart the count or lose the end.
+   */
+  const operation = globalThis[Symbol.for('dsh-unlag.operation')] ?? (globalThis[Symbol.for('dsh-unlag.operation')] = { id: 0, state: null })
 
-  const noteOperation = (id, outcome) => {
+  /**
+   * The one place an update's end is written down. Every path that can finish an update passes
+   * through here, so the route answer, `/state.operation` and the page read the same record for the
+   * same operation instead of each judging from its own partial view.
+   */
+  const noteOperation = (id, outcome, requestId = null) => {
+    const status = String(outcome?.status ?? 'failed') // ui-copy-ignore
+    const pending = Array.isArray(outcome?.pending) ? outcome.pending.length : 0
+    const restart = outcome?.restartReason ?? null
     operation.state = {
       id,
-      status: String(outcome?.status ?? 'failed'), // ui-copy-ignore
-      pending: Array.isArray(outcome?.pending) ? outcome.pending.length : 0,
+      // The status is the terminal state every route reports; `pending` and `restart` say why a
+      // `failed` did not finish. Only `done` means the new set is running.
+      status, // ui-copy-ignore
+      pending,
       failed: Array.isArray(outcome?.failedEntries) ? outcome.failedEntries.length : 0,
-      restart: outcome?.restartReason ?? null,
+      restart,
+      requestId: typeof requestId === 'string' && requestId !== '' ? requestId : (operation.state?.requestId ?? null),
     }
   }
 
@@ -501,10 +533,17 @@ function pluginReloader(ctx, config) {
      * instead of running a second recomposition beside the first.
      */
     const context = transactionContext(hmr)
+    /**
+     * The entries that are running now are the ones the page needs after the update. The app only
+     * reports an entry that was already inactive as a warning; naming these as required makes the
+     * app report the ones this update took down, so the press is judged against the state before it
+     * instead of against a list the previous update already carried.
+     */
+    const requiredBefore = activeEntryIds(ctx)
     const ask = (service) =>
       context === null
-        ? service.runExclusive(() => service.reconcileProfile([]))
-        : context.exit(() => service.runExclusive(() => service.reconcileProfile([])))
+        ? service.runExclusive(() => service.reconcileProfile(requiredBefore))
+        : context.exit(() => service.runExclusive(() => service.reconcileProfile(requiredBefore)))
     const abandoned = () =>
       new Promise((_resolve, reject) => {
         const limit = Number(process.env.DSH_UNLAG_TIMEOUT_MS ?? '') || RELOAD_TIMEOUT_MS
@@ -575,16 +614,25 @@ function pluginReloader(ctx, config) {
      * coming up on the set that is running now.
      */
     const listed = warnings.map((warning) => (typeof warning === 'string' ? warning : String(warning?.message ?? warning)))
-    // Compared with what the same set reported last time, not with what a press is assumed to do:
-    // a warning that was already there is leftover state, one that was not is a new breakage.
-    // A reconcile that returns does not newly break an entry the app would have rejected, so the
-    // first list this app reports is a baseline rather than this press's result. Only a warning that
-    // was missing from a baseline already seen is a breakage no earlier read can account for.
-    const hasBaseline = Array.isArray(knownInactive.health)
-    const before = new Set(hasBaseline ? knownInactive.health : [])
-    const inactiveEntries = hasBaseline ? listed.filter((entry) => before.has(entry)) : listed
-    const failedEntries = hasBaseline ? listed.filter((entry) => !before.has(entry)) : []
+    /**
+     * Judged from three directions, because no one of them is enough:
+     * - an entry that was running before this update and is not running now (the app was told those
+     *   ids were required, so it names them even though they predate the call);
+     * - a warning that was not in the list the last update left behind;
+     * - a warning this plugin already failed on that is still there. A breakage does not heal by
+     *   being reported twice: the third press must not turn a real failure into `done`.
+     * A warning that is on none of these lists was already true before this press and is not its
+     * result, which is what keeps leftover pending entries from blocking every update.
+     */
+    const before = new Set(Array.isArray(knownInactive.health) ? knownInactive.health : [])
+    const lingering = new Set(Array.isArray(knownInactive.lingering) ? knownInactive.lingering : [])
+    const mentionsRequired = (entry) => requiredBefore.some((id) => entry.includes(id))
+    const failedEntries = listed.filter((entry) => lingering.has(entry) || mentionsRequired(entry) || (before.size > 0 && !before.has(entry)))
+    const inactiveEntries = listed.filter((entry) => !failedEntries.includes(entry))
     knownInactive.health = listed
+    // Only entries still reported are remembered: one that went away has healed, and keeping it
+    // would fail the next update for a breakage that no longer exists.
+    knownInactive.lingering = failedEntries
     log(
       `plugins reloaded (already not running=${inactiveEntries.length} newly not running=${failedEntries.length} pending=${pending.length}${restartReason === null ? '' : ` restart=${restartReason}`})`,
     )
@@ -737,14 +785,42 @@ function pluginReloader(ctx, config) {
    * press did not replace anything instead of looking broken.
    * @returns {{status: string, warnings: string[], pending: string[], restartReason: string|null}}
    */
-  const runNow = async (force = false) => {
+  /**
+   * One page press is one request id. The same id arriving again is the page asking about the press
+   * it already made, not a second press: it gets that press's own record and never starts the work
+   * twice. Only the terminal record is read, because a press that is still applying has nothing
+   * final to say and the caller is told so.
+   */
+  const seenRequest = (requestId) => {
+    if (typeof requestId !== 'string' || requestId === '') return null
+    const state = operation.state
+    if (state === null || state.requestId !== requestId) return null
+    if (state.status === 'applying') return { status: 'applying', warnings: [], pending: [], restartReason: null, failedEntries: [] } // ui-copy-ignore
+    return {
+      status: state.status, // ui-copy-ignore
+      warnings: [],
+      pending: [],
+      restartReason: state.restart,
+      failedEntries: [],
+    }
+  }
+
+  const runNow = async (force = false, requestId = null) => {
     const hmr = hmrService()
     if (hmr === null) return { status: 'unavailable', warnings: [], pending: [], restartReason: null, failedEntries: [] }
+    const already = seenRequest(requestId)
+    if (already !== null) return already
     log('manual reload: the refresh button was pressed')
     if (turnsRunning()) log('reloading while turns are still running; they keep running')
     if (running || workState.current !== null || (force === false && busy())) return busyAnswer()
     const wait = lastRun + MIN_INTERVAL_MS - Date.now()
     if (wait > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(wait, 2000)))
+    /**
+     * The wait can outlive the plugin: if the app stopped it during that time, this closure's
+     * context is gone and starting an update through it would leave half a set behind. The press is
+     * answered as unavailable instead, which is what a stopped plugin is.
+     */
+    if (stopped || hmrService() === null) return { status: 'unavailable', warnings: [], pending: [], restartReason: null, failedEntries: [] }
     if (running || workState.current !== null || (force === false && busy())) return busyAnswer()
     if (timer !== null) {
       clearTimeout(timer)
@@ -754,10 +830,10 @@ function pluginReloader(ctx, config) {
     deferrals = 0
     lastRun = Date.now()
     const id = (operation.id += 1)
-    operation.state = { id, status: 'applying', pending: 0, failed: 0, restart: null } // ui-copy-ignore
+    operation.state = { id, status: 'applying', pending: 0, failed: 0, restart: null, requestId } // ui-copy-ignore
     try {
       const outcome = await reload(hmr)
-      noteOperation(id, outcome)
+      noteOperation(id, outcome, requestId)
       /**
        * `pending` means the changed modules are not loaded yet and need a restart this plugin does
        * not perform; it is not a queued update that finishes on its own.
@@ -780,6 +856,7 @@ function pluginReloader(ctx, config) {
         return { status: 'applying', warnings: [], pending: [], restartReason: null, failedEntries: [] }
       }
       log(`reload did not finish; the plugin set may be partly applied: ${error?.message ?? error}`)
+      noteOperation(id, { status: 'failed', pending: [], failedEntries: [] }, requestId)
       return { status: 'failed', warnings: [], pending: [], restartReason: null, failedEntries: [] }
     } finally {
       if (workState.current === null) {
@@ -798,11 +875,11 @@ function pluginReloader(ctx, config) {
         // queue request really ends, and that end is what the page is told is final.
         workState.current.then(
           (late) => {
-            noteOperation(id, late)
+            noteOperation(id, late, requestId)
             release()
           },
           (error) => {
-            noteOperation(id, { status: 'failed', pending: [], failedEntries: [], restartReason: error ?? null })
+            noteOperation(id, { status: 'failed', pending: [], failedEntries: [], restartReason: null })
             release()
           },
         )
@@ -814,7 +891,7 @@ function pluginReloader(ctx, config) {
    * The press path never rejects: a rejection here would be unhandled and end the app, and the page
    * would wait for an answer that never comes.
    */
-  const reloadNow = async (force = false) => {
+  const reloadNow = async (force = false, requestId = null) => {
     try {
       if (stopped) {
         // A press can arrive while the plugin is being torn down. Nothing would finish that update,
@@ -822,7 +899,7 @@ function pluginReloader(ctx, config) {
         log('a press arrived while this plugin was stopping; nothing was replaced')
         return { status: 'failed', warnings: [], pending: [], restartReason: null, failedEntries: [] }
       }
-      return await runNow(force)
+      return await runNow(force, requestId)
     } catch (error) {
       log(`a press could not be answered: ${error?.message ?? error}`)
       return { status: 'failed', warnings: [], pending: [], restartReason: null, failedEntries: [] }
@@ -1183,7 +1260,18 @@ async function regroupedBundleAnswer(clientModules, graph, request, deadline = D
   // Only ids the assembled script really registers through the loader count as an answer.
   const text = body.toString('utf8')
   if (!request.ids.every((id) => bodyNamesId(text, id))) return null
-  return { body, contentType: 'text/javascript; charset=utf-8', ids: request.ids, askedRev: askedRevisionOf(request), servedRev: servedRevisionOf(graph) }
+  const digest = bodyDigest(body)
+  return {
+    body,
+    contentType: 'text/javascript; charset=utf-8',
+    ids: request.ids,
+    askedRev: askedRevisionOf(request),
+    // Assembled from more than one entry, so no single generation revision describes these bytes;
+    // the graph revision still rides along to say which startup list they were taken from.
+    servedRev: digest === '' ? servedRevisionOf(graph) : `sha256:${digest}`,
+    digest,
+    graphRev: servedRevisionOf(graph),
+  }
 }
 
 /**
@@ -1213,7 +1301,17 @@ async function survivingBundleAnswer(clientModules, graph, request, deadline = D
   }
   if (parts.length === 0) return null
   const body = Buffer.concat(parts.flatMap((part, index) => (index === parts.length - 1 ? [part] : [part, Buffer.from('\n;\n')])))
-  return { body, contentType: 'text/javascript; charset=utf-8', ids: request.ids, gone, askedRev: askedRevisionOf(request), servedRev: servedRevisionOf(graph) }
+  const digest = bodyDigest(body)
+  return {
+    body,
+    contentType: 'text/javascript; charset=utf-8',
+    ids: request.ids,
+    gone,
+    askedRev: askedRevisionOf(request),
+    servedRev: digest === '' ? servedRevisionOf(graph) : `sha256:${digest}`,
+    digest,
+    graphRev: servedRevisionOf(graph),
+  }
 }
 
 /**
@@ -1240,12 +1338,17 @@ async function currentBundleAnswer(clientModules, method, url, deadline = Date.n
         const text = body.toString('utf8')
         if (!request.ids.every((id) => bodyNamesId(text, id))) continue
       }
+      const servedAt = revisionInUrl(target)
       return {
         body,
         contentType: String(response.headers.get('content-type') ?? 'text/javascript; charset=utf-8'),
         ids: request.ids,
         askedRev: askedRevisionOf(request),
-        servedRev: servedRevisionOf(graph),
+        // The bytes came from this address, so the revision in it is the one they are; the graph
+        // revision is the list running now and is reported separately.
+        servedRev: servedAt === '' ? servedRevisionOf(graph) : servedAt,
+        digest: bodyDigest(body),
+        graphRev: servedRevisionOf(graph),
       }
     }
   }
@@ -1268,10 +1371,30 @@ function servedRevisionOf(graph) {
   return typeof graph?.rev === 'string' ? graph.rev : ''
 }
 
+/**
+ * The digest of the bytes actually handed back. A revision names a generation of the whole list;
+ * a body assembled from several entries of that generation has no single revision of its own, so
+ * it says what it is by its own content instead of borrowing the generation's name.
+ */
+function bodyDigest(body) {
+  try {
+    return createHash('sha256').update(body).digest('hex').slice(0, 16)
+  } catch {
+    return ''
+  }
+}
+
+/** What a substituted body says about itself: a generation name, or its own content when it has none. */
+function servedRevisionOfAnswer(answer) {
+  if (typeof answer?.servedRev === 'string' && answer.servedRev !== '') return answer.servedRev
+  if (typeof answer?.digest === 'string' && answer.digest !== '') return `sha256:${answer.digest}`
+  return ''
+}
+
 /** `rev a → b`, so the log says which revision was asked for and what it got instead. */
 function revMigration(answer) {
   const asked = answer.askedRev === '' ? 'none' : answer.askedRev
-  const served = answer.servedRev === '' ? 'unknown' : answer.servedRev
+  const served = servedRevisionOfAnswer(answer) === '' ? 'unknown' : servedRevisionOfAnswer(answer)
   return `rev ${asked} → ${served}`
 }
 
@@ -1282,11 +1405,59 @@ function replacedHeaders(answer) {
     'cache-control': 'no-store',
     'content-length': String(answer.body.length),
   }
-  if (answer.servedRev !== '') {
-    headers['x-dsh-unlag-served-rev'] = answer.servedRev
-    headers['access-control-expose-headers'] = 'x-dsh-unlag-served-rev'
-  }
+  /**
+   * Two revisions, because they answer two different questions: `served-rev` is the generation the
+   * bytes came from, `graph-rev` is the startup list running now. A chunk answered at its entry's
+   * revision is the normal case, and reading them as one value would call that mismatch a bug.
+   */
+  const served = servedRevisionOfAnswer(answer)
+  const graph = answer.graphRev === undefined ? '' : String(answer.graphRev)
+  if (served !== '') headers['x-dsh-unlag-served-rev'] = served
+  if (graph !== '') headers['x-dsh-unlag-graph-rev'] = graph
+  if (typeof answer.digest === 'string' && answer.digest !== '') headers['x-dsh-unlag-body-sha256'] = answer.digest
+  const exposed = [
+    served === '' ? null : 'x-dsh-unlag-served-rev',
+    graph === '' ? null : 'x-dsh-unlag-graph-rev',
+    typeof answer.digest === 'string' && answer.digest !== '' ? 'x-dsh-unlag-body-sha256' : null,
+  ].filter(Boolean)
+  if (exposed.length > 0) headers['access-control-expose-headers'] = exposed.join(', ')
   return headers
+}
+
+/** The revision a bundle address names, or '' when it names none. */
+function revisionInUrl(url) {
+  try {
+    return new URL(String(url ?? ''), 'http://unlag.invalid').searchParams.get('rev') ?? ''
+  } catch {
+    return ''
+  }
+}
+
+/** Headers that mark replaced bytes: no cache, and both the served and the running revision. */
+function replacedHeaderList(headers, servedRev, graphRev) {
+  try {
+    const next = new Headers(headers)
+    next.set('cache-control', 'no-store')
+    if (servedRev !== '') next.set('x-dsh-unlag-served-rev', servedRev)
+    if (graphRev !== '') next.set('x-dsh-unlag-graph-rev', graphRev)
+    const exposed = [servedRev === '' ? null : 'x-dsh-unlag-served-rev', graphRev === '' ? null : 'x-dsh-unlag-graph-rev'].filter(Boolean)
+    if (exposed.length > 0) next.set('access-control-expose-headers', exposed.join(', '))
+    return next
+  } catch {
+    return headers
+  }
+}
+
+/** Re-wrap a substituted response so the bytes carry the same mark as the route's own answers. */
+function replacedResource(answer, servedRev, graphRev, method) {
+  if (answer === null || answer === undefined || typeof answer !== 'object') return answer
+  try {
+    const headers = replacedHeaderList(answer.headers, servedRev, graphRev)
+    const body = method === 'HEAD' ? null : answer.body
+    return new Response(body, { status: answer.status, statusText: answer.statusText, headers })
+  } catch {
+    return answer
+  }
 }
 
 /** Answer one stale request over the plain request/response route an app registers. */
@@ -1411,8 +1582,11 @@ function serveBundlesAtCurrentRevision(ctx) {
       } catch {}
       // Same reason as the handler shape below: a rejection here is unhandled and ends the process.
       let retargeted = null
+      let graphRev = ''
       try {
-        retargeted = retargetRevision(url, entryRevisionFor(clientModules.graph(), url))
+        const graph = clientModules.graph()
+        graphRev = servedRevisionOf(graph)
+        retargeted = retargetRevision(url, entryRevisionFor(graph, url))
       } catch (error) {
         log(`cannot read the plugin table for a bundle request: ${error?.message ?? error}`)
       }
@@ -1427,7 +1601,12 @@ function serveBundlesAtCurrentRevision(ctx) {
         try {
           const next = method === 'GET' || method === 'HEAD' ? new Request(retargeted, { method, headers: request.headers }) : request
           const second = await original(next)
-          if (second !== null && second !== undefined) answer = second
+          if (second !== null && second !== undefined) {
+            // These bytes come from the entry's own revision, not from the startup list running
+            // now: both revisions ride along, and the immutable caching the table puts on a
+            // generation is not put on an answer this plugin substituted.
+            answer = replacedResource(second, revisionInUrl(retargeted), graphRev, method)
+          }
         } catch (error) {
           log(`cannot answer a bundle request: ${error?.message ?? error}`)
         }
@@ -1464,8 +1643,11 @@ function serveBundlesAtCurrentRevision(ctx) {
     // route handler, where a rejection is an unhandled one and takes the whole app with it, so the
     // failure has to end here: answer the request as the table left it and say why in the log.
     let retargeted = null
+    let graphRev = ''
     try {
-      retargeted = retargetRevision(originalUrl, entryRevisionFor(clientModules.graph(), originalUrl))
+      const graph = clientModules.graph()
+      graphRev = servedRevisionOf(graph)
+      retargeted = retargetRevision(originalUrl, entryRevisionFor(graph, originalUrl))
     } catch (error) {
       log(`cannot read the plugin table for a bundle request: ${error?.message ?? error}`)
     }
@@ -1557,6 +1739,18 @@ function serveBundlesAtCurrentRevision(ctx) {
               if (status === 404) {
                 held = { status, headers: rest[0] }
                 return res
+              }
+              /**
+               * A retried answer is a substitution even though the table produced it: it is served
+               * at the entry's revision, so it carries the same two revision headers as every other
+               * replaced body and the year-long immutable cache the table puts on one generation is
+               * replaced with no cache.
+               */
+              if (url !== originalUrl) {
+                const headers = replacedHeaderList(rest[0], revisionInUrl(url), graphRev)
+                return typeof rest[1] === 'string'
+                  ? realWriteHead.call(res, status, rest[1], headers)
+                  : realWriteHead.call(res, status, headers)
               }
               return realWriteHead.call(res, status, ...rest)
             }
@@ -1974,7 +2168,26 @@ export async function verifyStartup(clientModules, rows) {
   } catch (error) {
     return { status: 'blocked', reason: 'list', detail: String(error?.message ?? error) }
   }
-  return verifyStartupRows(graph, (url) => readStartupScript(clientModules, url), rows)
+  const answer = await verifyStartupRows(graph, (url) => readStartupScript(clientModules, url), rows)
+  /**
+   * The update installs a new graph object and never mutates the old one, so a replacement during
+   * the read cannot be seen on the object the check started with; it is found by asking the table
+   * for its graph again. Bodies read from two different generations would describe a page that
+   * never boots, so a swap during the check refuses it instead of approving either side.
+   */
+  let after = null
+  try {
+    after = clientModules.graph()
+  } catch (error) {
+    // The table answered the scripts; only the second look failed. The checked answer stands, and
+    // the log keeps the reason a swap could not be ruled out.
+    log(`cannot read the plugin table again after a startup check: ${oneLine(error?.message ?? error)}`)
+    return answer
+  }
+  if (answer?.status === 'ok' && (after !== graph || servedRevisionOf(after) !== servedRevisionOf(graph))) {
+    return { status: 'blocked', reason: 'generation', detail: 'the plugin set was replaced while its scripts were read' }
+  }
+  return answer
 }
 
 /** The sentinel a read that ran past its time resolves to: a value, never an error. */
@@ -2008,10 +2221,10 @@ const STILL_APPLYING = Object.freeze({ status: 'applying', warnings: [], pending
  * the route into an error.
  * @returns {{ outcome: object, timeRanOut: boolean, work: Promise<unknown> }}
  */
-export async function answerReload(controller, limitMs) {
+export async function answerReload(controller, limitMs, requestId = null) {
   let work = null
   try {
-    work = Promise.resolve(controller.reloadNow())
+    work = Promise.resolve(controller.reloadNow(false, requestId))
   } catch (error) {
     log(`a press could not be started: ${error?.message ?? error}`)
     return { outcome: { status: 'failed', warnings: [], pending: [], restartReason: null, failedEntries: [] }, timeRanOut: false, work: Promise.resolve() }
@@ -2038,6 +2251,51 @@ export async function answerReload(controller, limitMs) {
 }
 
 /**
+ * The two switches a press reads. They start from the plugin's settings row, and the button's own
+ * menu can change them without reopening the app. The saved choice is filed next to the settings
+ * it was made against: editing that row changes the file it was read from, and the saved choice is
+ * then stale rather than silently overriding a person's newer decision.
+ */
+const SWITCH_PATH = join(homedir(), '.dsh', 'unlag-switches.json') // ui-copy-ignore
+
+/** The settings row this plugin was started with, written down so a saved choice can tell. */
+function switchFingerprint(settings) {
+  return createHash('sha256').update(JSON.stringify({ plugins: settings.reloadPlugins, page: settings.reloadInterface, auto: settings.autoReload })).digest('hex').slice(0, 16)
+}
+
+/** The switches a press uses: the saved menu choice when it was made against this settings row. */
+function switchesFor(config) {
+  const settings = settingsOf(config ?? {})
+  const fingerprint = switchFingerprint(settings)
+  const fallback = { plugins: settings.reloadPlugins, page: settings.reloadInterface, fingerprint, saved: false }
+  try {
+    if (!existsSync(SWITCH_PATH)) return fallback
+    const raw = JSON.parse(readFileSync(SWITCH_PATH, 'utf8'))
+    if (raw === null || typeof raw !== 'object') return fallback
+    if (raw.fingerprint !== fingerprint) return fallback
+    if (typeof raw.plugins !== 'boolean' || typeof raw.page !== 'boolean') return fallback
+    return { plugins: raw.plugins, page: raw.page, fingerprint, saved: true }
+  } catch {
+    return fallback
+  }
+}
+
+/** Write the menu choice down. A press that cannot save it still uses it until the app restarts. */
+function saveSwitches(switches) {
+  try {
+    mkdirSync(join(homedir(), '.dsh'), { recursive: true })
+    const body = JSON.stringify({ plugins: switches.plugins, page: switches.page, fingerprint: switches.fingerprint })
+    const temporary = `${SWITCH_PATH}.${process.pid}.tmp`
+    writeFileSync(temporary, body)
+    renameSync(temporary, SWITCH_PATH)
+    return true
+  } catch (error) {
+    log(`cannot save the button settings: ${error?.message ?? error}`)
+    return false
+  }
+}
+
+/**
  * The entry points the header button calls. Each answers with the current switches so the page
  * never guesses: with both off it does nothing, and a turn still running is reported rather than
  * cut. The press outcome is written to the log, because a press that stopped before rebuilding
@@ -2049,7 +2307,7 @@ function serveButton(ctx, controller, config) {
     log('no web server: the header button cannot ask for a reload')
     return null
   }
-  const settings = settingsOf(config)
+  const switches = switchesFor(config)
   /** One counter for the whole route set: the check is the only body that reads scripts. */
   let checking = 0
   const handlers = [
@@ -2062,7 +2320,7 @@ function serveButton(ctx, controller, config) {
           // answers a method it does not serve.
           const method = String(req?.method ?? 'GET').toUpperCase()
           if (method !== 'GET' && method !== 'HEAD') return sendJson(res, 405, { status: 'method' })
-          sendJson(res, 200, { version: VERSION, code: CODE_STAMP, plugins: settings.reloadPlugins, page: settings.reloadInterface, shim: bundleShimStatus(ctx), operation: controller.operation?.() ?? null, boot: liveBoot.current })
+          sendJson(res, 200, { version: VERSION, code: CODE_STAMP, plugins: switches.plugins, page: switches.page, saved: switches.saved, shim: bundleShimStatus(ctx), operation: controller.operation?.() ?? null, boot: liveBoot.current })
         } catch (error) {
           log(`cannot describe this copy of the plugin: ${error?.message ?? error}`)
           sendJson(res, 500, { status: 'error' })
@@ -2103,7 +2361,14 @@ function serveButton(ctx, controller, config) {
           const urls = []
           for (const batch of Array.isArray(boot.batches) ? boot.batches.slice(0, 200) : []) {
             const url = typeof batch?.url === 'string' ? batch.url : ''
-            if (url !== '') urls.push(url.slice(0, 500))
+            if (url === '') continue
+            /**
+             * A batch address is real evidence or it is nothing: the app's own list runs to several
+             * kilobytes, and a shortened address would name a different set. One too long to keep
+             * refuses the report rather than storing a value that cannot be compared later.
+             */
+            if (url.length > MAX_BOOT_URL) return sendJson(res, 200, { status: 'blocked', reason: 'url' })
+            urls.push(url)
           }
           const entries = (Array.isArray(boot.entries) ? boot.entries : [])
             .map((entry) => (typeof entry === 'string' ? entry : entry?.id))
@@ -2257,15 +2522,45 @@ function serveButton(ctx, controller, config) {
       },
     ],
     [
+      `${BASE_PATH}/switches`,
+      async (req, res) => {
+        try {
+          const method = String(req?.method ?? 'GET').toUpperCase()
+          if (method !== 'POST') return sendJson(res, 405, { status: 'method' })
+          if (buttonAllowed(req) === false) return sendJson(res, 403, { status: 'forbidden' })
+          const body = await readJsonBody(req)
+          if (body === null || typeof body !== 'object') return sendJson(res, 400, { status: 'body' })
+          const plugins = body.plugins
+          const page = body.page
+          if (typeof plugins !== 'boolean' || typeof page !== 'boolean') return sendJson(res, 400, { status: 'body' })
+          switches.plugins = plugins
+          switches.page = page
+          switches.saved = saveSwitches(switches)
+          log(`the button switches were changed: plugins=${plugins ? 'on' : 'off'} page=${page ? 'on' : 'off'}`)
+          sendJson(res, 200, { status: 'done', plugins: switches.plugins, page: switches.page, saved: switches.saved })
+        } catch (error) {
+          log(`cannot change the button switches: ${error?.message ?? error}`)
+          sendJson(res, 500, { status: 'error' })
+        }
+      },
+    ],
+    [
       `${BASE_PATH}/reload`,
       async (req, res) => {
         try {
           const method = String(req?.method ?? 'GET').toUpperCase()
           if (method !== 'POST') return sendJson(res, 405, { status: 'method' })
           if (buttonAllowed(req) === false) return sendJson(res, 403, { status: 'forbidden' })
-          if (!settings.reloadPlugins) return sendJson(res, 200, { status: 'off' })
+          if (!switches.plugins) return sendJson(res, 200, { status: 'off' })
           const limit = Number(process.env.DSH_UNLAG_ANSWER_MS ?? '') || RELOAD_ANSWER_MS
-          const { outcome, timeRanOut, work } = await answerReload(controller, limit)
+          // The page names this press so a lost answer can be checked against the same operation
+          // instead of against a revision that anything else could have moved.
+          let requestId = null
+          try {
+            requestId = new URL(String(req?.url ?? ''), 'http://dsh.invalid').searchParams.get('requestId')
+          } catch {}
+          if (requestId !== null && (requestId === '' || requestId.length > 120)) requestId = null
+          const { outcome, timeRanOut, work } = await answerReload(controller, limit, requestId)
           /**
            * The answer the page waits for is bounded, but the update is not. Whatever the update
            * did after the page was told it is still applying is written down here: a replacement

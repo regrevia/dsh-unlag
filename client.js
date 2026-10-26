@@ -6,8 +6,8 @@ window.__ModuleLoader__.load({
 
     const zh = /^zh/i.test(navigator.language || '');
     const COPY = zh
-      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', off: '两个开关都关着，先在设置里打开一个', replaced: '插件代码已更新，页面保持不动', stayedReplaced: '插件代码已更新，页面没有重建；稍后再按一次', stayed: '页面没有重建；稍后再按一次', done: '插件代码已是最新', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次', attachments: '还有没发出去的附件，先发出去再按' } // ui-copy-ignore
-      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', off: 'Both switches are off; turn one on in settings', replaced: 'Plugin code updated; the page stayed as it is', stayedReplaced: 'Plugin code updated; the page did not rebuild; press again shortly', stayed: 'The page did not rebuild; press again shortly', done: 'Plugin code is already up to date', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later', attachments: 'Files are attached but not sent; send them first' };
+      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', off: '两个开关都关着，先在设置里打开一个', replaced: '插件代码已更新，页面保持不动', stayedReplaced: '插件代码已更新，页面没有重建；稍后再按一次', stayed: '页面没有重建；稍后再按一次', done: '插件代码已是最新', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次', attachments: '还有没发出去的附件，先发出去再按' , menu: '按下按钮时', switchPlugins: '换掉插件代码', switchPage: '重建页面', switchesFailed: '设置没改成，稍后再试', switchesUnsaved: '设置只在这次运行里有效'} // ui-copy-ignore
+      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', off: 'Both switches are off; turn one on in settings', replaced: 'Plugin code updated; the page stayed as it is', stayedReplaced: 'Plugin code updated; the page did not rebuild; press again shortly', stayed: 'The page did not rebuild; press again shortly', done: 'Plugin code is already up to date', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later', attachments: 'Files are attached but not sent; send them first' , menu: 'On press', switchPlugins: 'Replace plugin code', switchPage: 'Rebuild page', switchesFailed: 'Settings not changed; try again later', switchesUnsaved: 'Settings apply to this run only'};
 
     /**
      * Why the interface was left as it is, in words a person can act on. The checks below record
@@ -15,8 +15,8 @@ window.__ModuleLoader__.load({
      * repeating one generic sentence.
      */
     const REASONS = zh
-      ? { list: '读不到启动信息', slow: '启动信息读得太慢', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', size: '启动脚本太大', verify: '插件后端没有应答', screen: '页面状态读不到', busy: '另一次刷新还在进行', dependencies: '插件依赖还没有运行', missing: '启动清单里有插件已经不见了', network: '读取插件时出错', register: '插件没有登记自己', entries: '启动清单里的插件已卸载，重启应用后再刷新', generation: '插件刚被换过，再按一次刷新' }
-      : { list: 'startup info is unavailable', slow: 'the startup list answered too slowly', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete', size: 'a startup script is too large', verify: 'the plugin is not answering', screen: 'the page state cannot be read', busy: 'another rebuild is already running', dependencies: 'a plugin dependency is not running', missing: 'a plugin in the startup list is gone', network: 'the plugins could not be read', register: 'a plugin did not register itself', entries: 'a plugin in the startup list was uninstalled, so restart the app before rebuilding', generation: 'the plugins were replaced a moment ago, press again' };
+      ? { list: '读不到启动信息', slow: '启动信息读得太慢', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', size: '启动脚本太大', verify: '插件后端没有应答', screen: '页面状态读不到', busy: '另一次刷新还在进行', dependencies: '插件依赖还没有运行', missing: '启动清单里有插件已经不见了', network: '读取插件时出错', register: '插件没有登记自己', entries: '启动清单里的插件已卸载，重启应用后再刷新', generation: '插件刚被换过，再按一次刷新', url: '启动信息太长，读不全' }
+      : { list: 'startup info is unavailable', slow: 'the startup list answered too slowly', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete', size: 'a startup script is too large', verify: 'the plugin is not answering', screen: 'the page state cannot be read', busy: 'another rebuild is already running', dependencies: 'a plugin dependency is not running', missing: 'a plugin in the startup list is gone', network: 'the plugins could not be read', register: 'a plugin did not register itself', entries: 'a plugin in the startup list was uninstalled, so restart the app before rebuilding', generation: 'the plugins were replaced a moment ago, press again', url: 'the startup info is too long to keep' };
 
     /** The last reason a readiness check refused for, or null after a check that passed. */
     let holdReason = null;
@@ -252,11 +252,13 @@ window.__ModuleLoader__.load({
 
     /** The operation the last replacement started, so its real end can be read back later. */
     let replacedOperation = null;
+    /** The name the last press gave its update, so its answer can be asked for by that name. */
+    let replacedRequest = null;
 
     /** Ask the running app to replace changed plugins now; a running turn is reported, never cut. */
-    async function replacePlugins() {
+    async function replacePlugins(requestId) {
       try {
-        const response = await withTimeout(fetch(`${HOST_BASE}/reload`, {
+        const response = await withTimeout(fetch(`${HOST_BASE}/reload?requestId=${encodeURIComponent(requestId)}`, {
           method: 'POST', // ui-copy-ignore
           credentials: 'same-origin',
           headers: { 'content-type': 'application/json', 'x-dsh-unlag': '1' }, // ui-copy-ignore
@@ -617,17 +619,6 @@ window.__ModuleLoader__.load({
      * without changing which bundles are served keeps the startup list's revision, so the graph
      * alone cannot tell a lost answer from a failed press; the code stamp can.
      */
-    async function hostCodeStamp() {
-      try {
-        const response = await withTimeout(fetch(`${HOST_BASE}/state`, { cache: 'no-store', credentials: 'same-origin' }));
-        if (!response.ok) return null;
-        const data = await withTimeout(response.json());
-        return typeof data?.code === 'string' ? data.code : null;
-      } catch {
-        return null;
-      }
-    }
-
     /** Whether a plugin no longer in the running set still has its script answered. */
     async function hostShimAnswersGone() {
       try {
@@ -645,8 +636,8 @@ window.__ModuleLoader__.load({
      * page waits, so an update that outlasted it is answered as still applying; the app writes that
      * same operation's end as it happens, and this reads it instead of leaving the press undecided.
      */
-    async function settledOperation(id) {
-      if (typeof id !== 'number') return null;
+    async function settledOperation(id, requestId = null) {
+      if (typeof id !== 'number' && typeof requestId !== 'string') return null;
       for (const wait of [500, 1200, 2500]) { // ui-copy-ignore
         await new Promise((resolve) => setTimeout(resolve, wait));
         try {
@@ -655,13 +646,31 @@ window.__ModuleLoader__.load({
           const data = await withTimeout(response.json());
           const operation = data?.operation;
           if (operation === null || typeof operation !== 'object') continue;
-          if (typeof operation.id !== 'number' || operation.id < id) continue;
+          // A named press is answered only by the operation that carries its name: an id that
+          // happens to be at least as high may belong to somebody else's update.
+          if (typeof requestId === 'string') {
+            if (operation.requestId !== requestId) continue;
+          } else if (typeof operation.id !== 'number' || operation.id < id) continue;
           if (operation.status !== 'applying') return operation;
         } catch {
           /* the answer is a nicety here: the press already has one of its own */
         }
       }
       return null;
+    }
+
+    /**
+     * What a lost replacement answer really did, read from the app's own record of that press.
+     * A moved revision or a changed code stamp proves only that some update happened, so neither is
+     * read as this press's success. Null means the app never showed an end for this press.
+     * @returns 'done' | 'restart' | 'failed' | null
+     */
+    async function settledPress(requestId) {
+      const operation = await settledOperation(null, requestId);
+      if (operation === null) return null;
+      if (operation.status === 'done') return 'done';
+      if (operation.status === 'restart') return 'restart';
+      return 'failed';
     }
 
     async function servedBootGraph() {
@@ -822,13 +831,52 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * A draft attachment lives only in this document: it is previewed from a local blob, or still
-     * sits in a file picker. Neither survives the rebuild, so the page stays and says why. Not
-     * every build names these parts in its markup, so an unreadable page answers "none" and the
-     * press is not held for a guess.
+     * A draft attachment lives only in this document. The composer keeps it in its own state, not
+     * always in the markup: the file picker clears its input as soon as it takes the files, and a
+     * session the person left keeps its draft away from the page. Reading the service that owns
+     * that state is the only answer that covers all three, with the markup as a fallback for a
+     * page whose service cannot be reached.
      * @returns true when the composer still holds something that was never sent.
      */
     function draftHasAttachments() {
+      try {
+        const conversation = appContext?.get?.('conversation');
+        if (conversation !== null && conversation !== undefined) {
+          // Files picked into the draft, still uploading, or on their way out in a send that has
+          // not settled: each one exists only here until the app keeps it.
+          if ((conversation.draftAttachments?.size ?? 0) > 0) return true;
+          if ((conversation.pendingFileUploads?.size ?? 0) > 0) return true;
+          if ((conversation.fileUploadOperations?.size ?? 0) > 0) return true;
+          const uploads = conversation.fileUploads?.getSnapshot?.() ?? conversation.fileUploads ?? {};
+          if (Object.keys(uploads).length > 0) return true;
+          /**
+           * A draft belongs to the session its composer was mounted for, and leaving that session
+           * does not throw the draft away: the composer keeps it, attachments included, so the
+           * person can come back to it. Those sessions are retained by the app, not shown in this
+           * document, so the only complete answer names every retained session and reads its
+           * composer through the app's own registry.
+           */
+          const sessions = appContext?.get?.('sessions');
+          const shells = conversation.input;
+          for (const session of sessions?.list?.() ?? []) {
+            if (session === null || session === undefined) continue;
+            try {
+              const shell = shells?.shell?.(session.id);
+              if (shell === null || shell === undefined) continue;
+              if ((shell.snapshot?.attachmentIds?.length ?? 0) > 0) return true;
+              if ((shell.detachedDrafts?.size ?? 0) > 0) return true;
+              if ((shell.failedDetached?.size ?? 0) > 0) return true;
+              if ((shell.attachmentFlights?.size ?? 0) > 0) return true;
+            } catch {
+              // One session whose composer cannot be read does not make the others empty; its own
+              // composer still answers below through the markup fallback when it can.
+            }
+          }
+          return false;
+        }
+      } catch {
+        // The service answers nothing readable; the markup below is still worth a look.
+      }
       try {
         if (document.querySelectorAll?.('img[src^="blob:"]')?.length > 0) return true;
         for (const picker of document.querySelectorAll?.('input[type="file"]') ?? []) {
@@ -896,16 +944,109 @@ window.__ModuleLoader__.load({
       whiteSpace: 'nowrap', // ui-copy-ignore
     };
 
+    const MENU_STYLE = {
+      position: 'absolute', // ui-copy-ignore
+      top: 30, // ui-copy-ignore
+      right: 0, // ui-copy-ignore
+      display: 'grid', // ui-copy-ignore
+      gap: 6, // ui-copy-ignore
+      padding: '8px 10px', // ui-copy-ignore
+      borderRadius: 8,
+      border: '1px solid var(--dsh-color-border, rgba(127,127,127,0.28))',
+      background: 'var(--dsh-color-surface, Canvas)',
+      color: 'var(--dsh-color-text, inherit)',
+      fontSize: 12, // ui-copy-ignore
+      textAlign: 'left', // ui-copy-ignore
+      whiteSpace: 'nowrap', // ui-copy-ignore
+      boxShadow: '0 4px 12px rgba(0,0,0,0.16)', // ui-copy-ignore
+    };
+
+    const MENU_ROW_STYLE = {
+      display: 'flex', // ui-copy-ignore
+      alignItems: 'center', // ui-copy-ignore
+      gap: 6, // ui-copy-ignore
+      cursor: 'pointer', // ui-copy-ignore
+    };
+
     function ReloadButton() {
       const [hover, setHover] = React.useState(false);
       const [pending, setPending] = React.useState(false);
       const [notice, setNotice] = React.useState(null);
+      const [menu, setMenu] = React.useState(false);
+      const [switches, setSwitches] = React.useState({ plugins: true, page: true });
+      const [saving, setSaving] = React.useState(false);
+      const wrap = React.useRef(null);
 
       React.useEffect(() => {
         if (notice === null) return undefined;
         const timer = setTimeout(() => setNotice(null), 8000);
         return () => clearTimeout(timer);
       }, [notice]);
+
+      // A menu left open over a page that is about to be rebuilt would name switches that no
+      // longer describe the press that follows it.
+      React.useEffect(() => {
+        if (!menu) return undefined;
+        const close = (event) => {
+          if (wrap.current !== null && wrap.current.contains?.(event.target)) return;
+          setMenu(false);
+        };
+        const escape = (event) => {
+          if (event.key === 'Escape') setMenu(false);
+        };
+        document.addEventListener('mousedown', close);
+        document.addEventListener('keydown', escape);
+        return () => {
+          document.removeEventListener('mousedown', close);
+          document.removeEventListener('keydown', escape);
+        };
+      }, [menu]);
+
+      /**
+       * The switches are read when the menu opens, so it never shows a stale answer. A page that
+       * cannot read them keeps the menu closed: a checkbox that changes nothing is worse than none.
+       */
+      const openMenu = async (event) => {
+        event.preventDefault();
+        if (pressInFlight || pending) {
+          setNotice(COPY.applying);
+          return;
+        }
+        const settings = await readSettings();
+        if (settings === null) {
+          setNotice(noticeFor('blocked'));
+          return;
+        }
+        setSwitches({ plugins: settings.plugins, page: settings.page });
+        setMenu(true);
+      };
+
+      /** Save one switch, and put it back if the app did not take it. */
+      const toggleSwitch = async (key) => {
+        if (saving) return;
+        const before = switches;
+        const next = { ...before, [key]: !before[key] };
+        setSwitches(next);
+        setSaving(true);
+        try {
+          const response = await fetch(`${HOST_BASE}/switches`, {
+            method: 'POST', // ui-copy-ignore
+            cache: 'no-store', // ui-copy-ignore
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json', 'x-dsh-unlag': '1' }, // ui-copy-ignore
+            body: JSON.stringify({ plugins: next.plugins, page: next.page }),
+          });
+          const data = await response.json();
+          if (!response.ok || data?.status !== 'done') throw new Error('not saved');
+          setSwitches({ plugins: data.plugins === true, page: data.page === true });
+          if (data.saved !== true) setNotice(COPY.switchesUnsaved);
+        } catch {
+          setSwitches(before);
+          setNotice(COPY.switchesFailed);
+        } finally {
+          setSaving(false);
+        }
+      };
 
 
       const style = pending
@@ -930,6 +1071,7 @@ window.__ModuleLoader__.load({
           return;
         }
         pressInFlight = true;
+        setMenu(false);
         setPending(true);
         setNotice(null);
         let navigated = false;
@@ -966,28 +1108,19 @@ window.__ModuleLoader__.load({
              * as a failure even though the plugins did change. The startup list says which set is
              * serving now, so a lost answer is checked against it before the press claims to fail.
              */
-            const before = await hostBootGraph();
-            const revBefore = typeof before?.rev === 'string' ? before.rev : null;
-            const codeBefore = await hostCodeStamp();
-            let status = await withTimeout(replacePlugins()).catch(() => 'lost');
-            if (status === 'lost' && (revBefore !== null || codeBefore !== null)) {
-              for (const wait of [400, 900, 1800]) { // ui-copy-ignore
-                await new Promise((resolve) => setTimeout(resolve, wait));
-                const after = await hostBootGraph();
-                const revNow = typeof after?.rev === 'string' ? after.rev : null;
-                if (revNow !== null && revBefore !== null && revNow !== revBefore) {
-                  status = 'done';
-                  break;
-                }
-                const codeNow = await hostCodeStamp();
-                if (codeNow !== null && codeBefore !== null && codeNow !== codeBefore) {
-                  status = 'done';
-                  break;
-                }
-              }
-              // Still `lost` after the set was read twice: no revision moved, so nothing proves the
-              // update went through and the press says it failed.
-              if (status === 'lost') status = 'failed';
+            /**
+             * The press names its update before asking, so a lost answer can be looked up by that
+             * name. A revision that moved, or a code stamp that changed, may belong to any other
+             * update — including one already running — and is never read as this press succeeding.
+             */
+            const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`; // ui-copy-ignore
+            replacedRequest = requestId;
+            let status = await withTimeout(replacePlugins(requestId)).catch(() => 'lost');
+            if (status === 'lost') {
+              const settled = await settledPress(requestId);
+              // No end shown for this press: nothing proves the update went through, and the page
+              // is not rebuilt on a guess.
+              status = settled === null ? 'failed' : settled;
             }
             if (status !== 'done' && status !== 'off') {
               const key =
@@ -1007,7 +1140,7 @@ window.__ModuleLoader__.load({
                * looking like a press that worked.
                */
               if (key === 'applying' || key === 'queued') {
-                const settled = await settledOperation(replacedOperation);
+                const settled = await settledOperation(replacedOperation, replacedRequest);
                 if (settled !== null && settled.status === 'failed') {
                   report('plugin-held', 'late-failed');
                   return stop('failed');
@@ -1028,6 +1161,12 @@ window.__ModuleLoader__.load({
             const gate = reason === 'blocked' && holdReason !== null ? `blocked:${holdReason}` : reason;
             report('held', replaced ? `applied:${gate}` : gate);
             return stop(reason, replaced);
+          }
+          // The checks above can take a moment; a file can be picked into the draft while they run.
+          // This is the last look before the document goes, and it costs one read of the composer.
+          if (draftHasAttachments()) {
+            report('held', replaced ? 'applied:attachments' : 'attachments');
+            return stop('attachments', replaced);
           }
           // Written only now, when the document really is about to go: a press that was held changed
           // nothing, so the next press must not be turned away as if this one had been answered.
@@ -1064,10 +1203,21 @@ window.__ModuleLoader__.load({
         }
       };
 
-      return h('span', { style: WRAP_STYLE },
+      const menuPanel = menu
+        ? h('span', { style: MENU_STYLE, role: 'group', 'aria-label': COPY.menu },
+            h('span', { style: { opacity: 0.7 } }, COPY.menu), // ui-copy-ignore
+            h('label', { style: MENU_ROW_STYLE },
+              h('input', { type: 'checkbox', checked: switches.plugins, onChange: () => toggleSwitch('plugins'), style: { margin: 0 } }), // ui-copy-ignore
+              COPY.switchPlugins),
+            h('label', { style: MENU_ROW_STYLE },
+              h('input', { type: 'checkbox', checked: switches.page, onChange: () => toggleSwitch('page'), style: { margin: 0 } }), // ui-copy-ignore
+              COPY.switchPage))
+        : null;
+
+      return h('span', { style: WRAP_STYLE, ref: wrap, onContextMenu: openMenu },
         h('button', {
           type: 'button', // ui-copy-ignore
-          title: notice ?? COPY.hint, // ui-copy-ignore
+          title: notice ?? (zh ? `${COPY.hint}；右键设置` : `${COPY.hint}; right-click for settings`), // ui-copy-ignore
           'aria-label': COPY.label,
           style,
           onMouseEnter: () => setHover(true),
@@ -1086,6 +1236,7 @@ window.__ModuleLoader__.load({
         },
         h('path', { d: 'M13 8a5 5 0 1 1-1.9-3.94' }),
         h('path', { d: 'M13 2.7v3.6H9.4' }))),
+        menuPanel,
         notice === null ? null : h('span', { role: 'status', 'aria-live': 'polite', style: PILL_STYLE }, notice));
     }
 
@@ -1094,6 +1245,9 @@ window.__ModuleLoader__.load({
      * must never cause is a navigation the saved startup list cannot survive, and that question is
      * worth asking without starting a desktop app.
      */
+    /** The page's own plugin context, kept so the composer's state can be read at press time. */
+    let appContext = null;
+
     const PROBE = {
       prepareInterface,
       readSettings,
@@ -1111,6 +1265,7 @@ window.__ModuleLoader__.load({
       inject: ['slots'], // ui-copy-ignore
       ...(window.__DSH_UNLAG_PROBE__ === true ? { probe: PROBE } : {}), // ui-copy-ignore
       apply(ctx) {
+        appContext = ctx;
         if (!desktop) return;
         // Leave a line in the log per rebuilt interface: it is the one place that shows which
         // plugin code a running page actually loaded.

@@ -64,7 +64,7 @@ try {
   blockedAnswer = JSON.parse(applyBlocked.stdout.trim().split('\n').pop())
 } catch {}
 check('an unwritable log does not throw', applyBlocked.status === 0, applyBlocked.stderr.slice(0, 160))
-check('the plugin still mounts and answers state', blockedAnswer?.status === 200 && blockedAnswer?.routes === 6, JSON.stringify(blockedAnswer))
+check('the plugin still mounts and answers state', blockedAnswer?.status === 200 && blockedAnswer?.routes === 7, JSON.stringify(blockedAnswer))
 check('and nothing is written through the unwritable path', statSync(blocked).isDirectory())
 
 // A log directory that exists but refuses writes: the press path answers from what it did, never

@@ -14,5 +14,5 @@
 - id: hmr
   disabled: false
   config:
-    base: !!js 'process.cwd().startsWith("/") ? "file://" + process.cwd() : "file:///" + process.cwd().replace(/\\/g, "/")'
+    base: !!js 'process.getBuiltinModule("node:url").pathToFileURL(process.cwd()).href'
     root: []

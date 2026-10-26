@@ -130,24 +130,41 @@ check('and the pressed page still rebuilt', swapped.navigations.length === 1, sw
   check('an unanswered replacement is logged', page.requests.some((request) => request.path.includes('event=plugin-held')))
 }
 
-// --- the replacement answer is lost, but the set did change ------------------------------------
+// --- a lost answer with nothing that names the press ------------------------------------------
+// A revision that moved while the answer was lost may belong to somebody else's update. Only the
+// app's record of this press — found by the name the press gave it — can say it finished, so a
+// moved revision alone leaves the press failed and the page where it is.
 {
   const page = harness({ reload: new Error('the route was replaced while it answered'), revAfterReload: 'next' })
   await page.press()
-  check('a lost answer is not a failed replacement when the set changed', page.navigations.length === 1, String(page.navigations.length))
+  check('a lost answer with no record of the press keeps the page', page.navigations.length === 0, String(page.navigations.length))
+  check('and the press says it did not finish', /did not finish/.test(String(page.notice())), String(page.notice()))
+  check('and nothing is logged as rebuilt', !page.requests.some((request) => request.path.includes('event=rebuild')))
+}
+
+// --- a lost answer the app does name ----------------------------------------------------------
+// The same press, found in the app's own record by the name it gave: that record's `done` is what
+// lets the press report a finished replacement.
+{
+  const page = harness({
+    reload: new Error('the route was replaced while it answered'),
+    lateOperation: (requestId) => ({ id: 1, status: 'done', pending: 0, failed: 0, restart: null, requestId }),
+  })
+  await page.press()
+  check('a lost answer the app records as done rebuilds the page', page.navigations.length === 1, String(page.navigations.length))
   check('and the press is logged as a rebuild', page.requests.some((request) => request.path.includes('event=rebuild')))
-  check('and the notice never says it did not finish', !/did not finish/.test(String(page.notice())))
+  check('and the notice never says it did not finish', !/did not finish/.test(String(page.notice())), String(page.notice()))
 }
 
 // --- a lost answer where only the code changed ----------------------------------------------
 // Replacing a plugin whose served bundles keep the same revision leaves the boot list unchanged, so
-// the graph cannot show that the press worked; the code stamp can, and the press must use it rather
-// than tell the user it did not finish.
+// the graph cannot show that the press worked; a code stamp cannot either, because it belongs to
+// whatever update last wrote it. With no record naming this press, the press did not finish.
 {
   const page = harness({ reload: new Error('the route was replaced while it answered'), codeAfterReload: 'c2', settings: { plugins: true, page: false } })
   await page.press()
-  check('a lost answer is a finished replacement when the code changed', page.requests.some((request) => request.path.includes('event=replaced')), page.requests.map((r) => r.path).join(' '))
-  check('and the press does not say it did not finish', !/did not finish/.test(String(page.notice())), String(page.notice()))
+  check('a lost answer with only a new code stamp is not a finished replacement', !page.requests.some((request) => request.path.includes('event=replaced')), page.requests.map((r) => r.path).join(' '))
+  check('and the press says it did not finish', /did not finish/.test(String(page.notice())), String(page.notice()))
   check('and nothing navigates when only the code was asked for', page.navigations.length === 0, String(page.navigations.length))
 }
 
@@ -362,6 +379,64 @@ for (const [label, options] of [
   await page.press()
   const rebuilt = page.reloads.length + page.navigations.length
   check('a press with an empty composer still rebuilds', rebuilt >= 1, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+}
+// The composer takes a picked file out of the file input at once and keeps it in its own state.
+// A press that only reads the markup would rebuild over a file the person can no longer see, so it
+// reads the composer itself.
+{
+  const conversation = { draftAttachments: new Map([['a1', { id: 'a1' }]]), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, detachedDrafts: new Map(), attachmentFlights: new Map() }
+  const page = harness({ conversation })
+  await page.press()
+  check('a file the picker already took still holds the rebuild', page.navigations.length === 0 && page.reloads.length === 0, JSON.stringify({ navigations: page.navigations, reloads: page.reloads }))
+  check('and it says that file has to go first', /attach|send/iu.test(String(page.notice())), String(page.notice()))
+}
+{
+  const conversation = { draftAttachments: new Map(), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, detachedDrafts: new Map(), attachmentFlights: new Map() }
+  const page = harness({ conversation })
+  await page.press()
+  check('a composer the app reports empty still rebuilds', page.reloads.length + page.navigations.length >= 1, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+}
+// A session the person left keeps its draft, attachments included, away from the page in front of
+// them. The rebuild would take that draft with it, so every retained session's own composer is read
+// through the app's registry rather than judging from the session on screen.
+{
+  const conversation = {
+    draftAttachments: new Map(),
+    pendingFileUploads: new Set(),
+    fileUploads: { getSnapshot: () => ({}) },
+    input: { shell: (id) => (id === 'elsewhere' ? { snapshot: { attachmentIds: ['kept-1'] } } : { snapshot: { attachmentIds: [] } }) },
+  }
+  const sessions = { list: () => [{ id: 'here' }, { id: 'elsewhere' }] }
+  const page = harness({ conversation, sessions })
+  await page.press()
+  check('a draft kept in another session holds the rebuild', page.navigations.length === 0 && page.reloads.length === 0, JSON.stringify({ navigations: page.navigations, reloads: page.reloads }))
+  check('and it says that draft has to go first', /attach|send/iu.test(String(page.notice())), String(page.notice()))
+}
+{
+  const conversation = {
+    draftAttachments: new Map(),
+    pendingFileUploads: new Set(),
+    fileUploads: { getSnapshot: () => ({}) },
+    input: { shell: () => ({ snapshot: { attachmentIds: [] } }) },
+  }
+  const sessions = { list: () => [{ id: 'here' }, { id: 'elsewhere' }] }
+  const page = harness({ conversation, sessions })
+  await page.press()
+  check('retained sessions with empty drafts still rebuild', page.reloads.length + page.navigations.length >= 1, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+}
+// The checks before the navigation take a moment; a file picked into the draft while they run is
+// exactly the one a rebuild would drop, so the press looks again right before the document goes.
+{
+  const conversation = { draftAttachments: new Map(), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, detachedDrafts: new Map(), attachmentFlights: new Map() }
+  const page = harness({
+    conversation,
+    hold: (event) => {
+      if (event.type === 'dsh-unlag:before') conversation.draftAttachments.set('late', { id: 'late' })
+    },
+  })
+  await page.press()
+  check('a file picked while the press checks still holds the rebuild', page.navigations.length === 0 && page.reloads.length === 0, JSON.stringify({ navigations: page.navigations, reloads: page.reloads }))
+  check('and that late file is named too', /attach|send/iu.test(String(page.notice())), String(page.notice()))
 }
 
 // --- an update that outlasted the page's wait and then failed -------------------------------

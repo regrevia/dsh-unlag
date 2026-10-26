@@ -38,7 +38,8 @@ check('test files are listed and each runs in its own process', read('scripts/te
 
 // --- the working directory on a machine whose paths are not unix --------------------------------
 check('the composition does not hand a bare path to a url parser', !/base: !!js 'process\.cwd\(\)'/u.test(patch))
-check('it builds a file url instead', /file:\/\//u.test(patch))
+check('it asks the url builder for the file address', /pathToFileURL\(process\.cwd\(\)\)/u.test(patch))
+check('it does not paste together a file url of its own', !/["']file:\/\/["'] \+ process\.cwd/u.test(patch))
 
 // --- the page's own startup list -----------------------------------------------------------------
 check('the page reports the list it booted with', client.includes('/boot') && client.includes('__DSH_BOOT__'))

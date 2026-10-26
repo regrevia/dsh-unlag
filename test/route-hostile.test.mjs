@@ -1,4 +1,4 @@
-// The six routes a page or another local process can call must answer even when the request or
+// The seven routes a page or another local process can call must answer even when the request or
 // the response cannot be read the ordinary way: a rejection here reaches the server's dispatch and
 // takes every running turn with it.
 import { mkdirSync, rmSync } from 'node:fs'

@@ -31,7 +31,7 @@ function show(tree) {
   return pill === undefined ? null : String(Array.isArray(pill.children) ? pill.children.join('') : pill.children)
 }
 
-function harnessWith(sourceText, { settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], lateOperation = null, revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, draftImages = 0, draftFiles = 0, language = 'en-US', href } = {}) {
+function harnessWith(sourceText, { settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], lateOperation = null, revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, draftImages = 0, draftFiles = 0, conversation = null, sessions = null, language = 'en-US', href, switchAnswer = 'done' } = {}) {
   const requests = []
   const navigations = []
   const current = { rev: graph.rev, code: 'c1' }
@@ -39,6 +39,8 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
   let reloadBody = reload
   let reloadAnswer = null
   const reloads = []
+  // The name a press gives its update; a fake host can answer for that same press by it.
+  let lastRequestId = null
   const location = {
     href: href ?? 'http://127.0.0.1:62542/?interface=live',
     replace: (target) => navigations.push(String(target)),
@@ -51,10 +53,14 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
       if (settings === null) return new Response('', { status: 503 })
       // A page reads this before, during and after a press: a case that changes what the host says
       // over time queues the answers it wants in order, and later reads fall back to the switches.
-      const operation = replaced && lateOperation !== null ? { operation: lateOperation } : {}
+      const operation = replaced && lateOperation !== null
+        ? { operation: typeof lateOperation === 'function' ? lateOperation(lastRequestId) : lateOperation }
+        : {}
       return new Response(JSON.stringify({ ...settings, code: current.code, ...operation }), { status: 200, headers: { 'content-type': 'application/json' } })
     }
     if (path.startsWith('/dsh-unlag/reload')) {
+      const asked = new URL(path, 'http://press.invalid').searchParams.get('requestId')
+      if (asked !== null) lastRequestId = asked
       if (revAfterReload !== undefined) current.rev = revAfterReload
       if (codeAfterReload !== undefined) current.code = codeAfterReload
       if (reloadAnswer !== null) await reloadAnswer
@@ -64,6 +70,19 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
     }
     if (path.startsWith('/dsh-unlag/graph')) {
       return new Response(JSON.stringify({ graph: current.rev === graph.rev ? graph : { ...graph, rev: current.rev } }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    if (path.startsWith('/dsh-unlag/switches')) {
+      // The menu writes the two switches the press reads, and the fake host keeps them the way the
+      // real one does: a refused write leaves the old answer in place.
+      if (switchAnswer === 'error') return new Response('{}', { status: 500, headers: { 'content-type': 'application/json' } })
+      if (switchAnswer === 'readonly') return new Response('{}', { status: 403, headers: { 'content-type': 'application/json' } })
+      try {
+        const asked = JSON.parse(String(init.body ?? '{}'))
+        if (typeof asked.plugins === 'boolean') settings.plugins = asked.plugins
+        if (typeof asked.page === 'boolean') settings.page = asked.page
+      } catch {}
+      const saved = switchAnswer !== 'unsaved'
+      return new Response(JSON.stringify({ status: 'done', plugins: settings.plugins, page: settings.page, saved }), { status: 200, headers: { 'content-type': 'application/json' } })
     }
     if (path.startsWith('/dsh-unlag/verify')) return new Response(JSON.stringify({ status: 'ok' }), { status: 200, headers: { 'content-type': 'application/json' } })
     if (path.startsWith('/dsh-unlag/report')) {
@@ -92,6 +111,8 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
       if (String(selector).includes('input[type="file"]')) return Array.from({ length: draftFiles }, () => ({ files: { length: 1 } }))
       return []
     },
+    addEventListener: () => {},
+    removeEventListener: () => {},
   }
   const store = new Map()
   const listeners = []
@@ -133,6 +154,9 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
       return [hooks[slot], (next) => { hooks[slot] = typeof next === 'function' ? next(hooks[slot]) : next }]
     },
     useEffect() {},
+    useRef(initial) {
+      return { current: initial }
+    },
   }
   // A wait the page arms for later is recorded instead of run: a test drives it by hand.
   const scheduled = []
@@ -177,7 +201,12 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
   sandbox.window.__ModuleLoader__.load = (value) => { registration.factory = value.factory }
   runInNewContext(`'use strict';\n${sourceText ?? readFileSync(new URL('../../client.js', import.meta.url), 'utf8')}`, sandbox)
   const plugin = registration.factory(() => React)
-  plugin.apply({ slots })
+  // The composer keeps picked files and settled drafts in its own state, not in the markup, so the
+  // service is what a press has to read: a stand-in can hold attachments the page never shows.
+  plugin.apply({
+    slots,
+    get: (name) => (name === 'conversation' ? conversation : name === 'sessions' ? sessions : undefined),
+  })
 
   const render = () => {
     cursor = 0
@@ -223,8 +252,34 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
     holdReload: () => { reloadAnswer = new Promise((resolve) => { setImmediate(resolve) }) },
     setReload: (value) => { reloadBody = value },
     notice: () => show(render().tree),
+    /** Right-click the button the way a person does, and render what the menu then shows. */
+    openMenu: async () => {
+      const menu = (function walk(node) {
+        if (node === null || typeof node !== 'object') return null
+        if (typeof node.props?.onContextMenu === 'function') return node.props.onContextMenu
+        for (const child of Array.isArray(node.children) ? node.children : []) {
+          const found = walk(child)
+          if (found !== null) return found
+        }
+        return null
+      })(render().tree)
+      await menu({ preventDefault() {} })
+      return render()
+    },
+    /** Change one switch from the menu: 0 is the plugins switch, 1 the page switch. */
+    toggle: async (index) => {
+      const inputs = []
+      ;(function walk(node) {
+        if (node === null || typeof node !== 'object') return
+        if (node.type === 'input') inputs.push(node)
+        for (const child of Array.isArray(node.children) ? node.children : []) walk(child)
+      })(render().tree)
+      await inputs[index].props.onChange()
+      return render()
+    },
     /** Whether this press left a pacing stamp behind, and what it says. */
     stamp: () => (store.has('dsh-unlag:at') ? Number(store.get('dsh-unlag:at')) : 0),
+    conversation,
   }
 }
 
