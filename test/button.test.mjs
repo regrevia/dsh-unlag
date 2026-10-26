@@ -214,6 +214,13 @@ check(
   'and how it got here, so a reload is not read as a navigation',
   readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes(', nav reload)'),
 )
+const fromRes = fakeRes()
+liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/report?event=mounted&rev=bad58412ac96&born=1792875929483&nav=navigate&from=none' }, fromRes)
+await new Promise((resolve) => setTimeout(resolve, 30))
+check(
+  'a load the app started says it did not come from this page',
+  readFileSync(join(tmpdir(), 'dsh-unlag-test.log'), 'utf8').includes(', nav navigate, from none)'),
+)
 const forgedRes = fakeRes()
 liveMount.routes.get('/dsh-unlag/report')({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/report?event=mounted&rev=%3Cscript%3Ealert(1)' }, forgedRes)
 await new Promise((resolve) => setTimeout(resolve, 30))

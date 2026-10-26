@@ -1,3 +1,8 @@
+## 1.9.128
+
+- 页面回报再加「这一次是哪儿来的」（`from interface` / `from self` / `from none` / `from other`）：本插件自己的导航带 `interface` 标记且来源是本页，App 自己载入的都不带。
+- 全套 729 项通过。
+
 ## 1.9.127
 
 - 每条页面回报再加该文档「怎么来的」（`nav reload` / `navigate` / `back_forward`）：没人按的时候页面也会换文档，靠这一项才分得清是 App 重载、新开窗口还是用户前进后退。

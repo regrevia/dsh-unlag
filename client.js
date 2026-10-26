@@ -162,10 +162,24 @@ window.__ModuleLoader__.load({
       } catch {
         nav = '';
       }
+      // Two things separate a page this plugin sent from one the app loaded on its own: this
+      // plugin's address carries the interface marker, and its own navigation has this page as the
+      // referrer. Neither is true of a load the app starts.
+      let from = '';
+      try {
+        const url = new URL(location.href);
+        if (url.searchParams.has('interface')) from = 'interface'; // ui-copy-ignore
+        else if (String(document?.referrer ?? '').startsWith(url.origin)) from = 'self';
+        else if (String(document?.referrer ?? '') === '') from = 'none';
+        else from = 'other';
+      } catch {
+        from = '';
+      }
       const named = gate === undefined ? `event=${event}` : `event=${event}&gate=${encodeURIComponent(gate)}`;
       const withPage = page === '' ? named : `${named}&rev=${page}`;
       const withBorn = born === '' ? withPage : `${withPage}&born=${born}`;
-      const query = nav === '' ? withBorn : `${withBorn}&nav=${nav}`;
+      const withNav = nav === '' ? withBorn : `${withBorn}&nav=${nav}`;
+      const query = from === '' ? withNav : `${withNav}&from=${from}`;
       /**
        * The route belongs to the instance this press is replacing. Its answer can land while the old
        * one is gone and the new one is not listening yet, and a lost line is a press nobody can
