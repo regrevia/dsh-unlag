@@ -100,6 +100,7 @@ dsh plugin install dsh-unlag
 2. 在插件列表里把本插件关掉再打开。这两步之后 `~/.dsh/unlag-reload.log` 会出现一行新的 `dsh-unlag <版本>`。
 3. 等约 20 秒，读 `GET /dsh-unlag/state`：`version` 是新版本、`code` 是刚才 `index.js` 的写入时间，才算真的换上了。
 4. `npm run live-smoke` 对着运行中的 App 复核一遍（见下一节）。
+5. 发布用 `./scripts/release.sh`，它发完会回查 registry 是否真的列出版本。`npm view` 读的是 CDN 缓存，发布成功后的一两分钟里可能还显示上一版；`npm view` 与 registry 不一致时，以版本号文档（`https://registry.npmjs.org/dsh-unlag/<版本>`）是否 200 为准。
 
 页面那一半（按钮点击后的重建）不在这一步里：那是按钮本人的事，只有人能按。
 
