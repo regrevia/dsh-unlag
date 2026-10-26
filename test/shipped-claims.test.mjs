@@ -48,6 +48,8 @@ check('the state route carries it', /boot: liveBoot\.current/u.test(host))
 
 
 check('the page holds a press while a draft attachment is there', /function draftAttachmentReason/.test(client) && /if \(holdDetail !== null\) return 'attachments'/.test(client))
+check('written words in a draft do not hold the press', !/shell\.snapshot\?\.draft/u.test(client), 'the composer draft is read for holding')
+check('a startup record that could not be taken does not hold the press', !/could not all be read when it booted/u.test(host) && /the press is checked against the list it reported/u.test(host), 'the boot record refuses an unreadable capture')
 check('it reads the composer before the markup and keeps a file picker as the fallback', /input\[type="file"\]/.test(client) && !/img\[src\^="blob:"\]/.test(client))
 
 console.log(out.join('\n'))

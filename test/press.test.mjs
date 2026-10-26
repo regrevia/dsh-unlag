@@ -427,23 +427,44 @@ for (const [label, options] of [
   await page.press()
   check('an empty retained record does not hold the rebuild', page.reloads.length + page.navigations.length >= 1, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
 }
-// A send that failed is handed back to the composer: it is unsent text the person can still send.
+// A send that failed hands its words back to the draft, which the app keeps per session and the
+// next document reads again: the rebuild returns them rather than losing them, so it may go ahead.
 {
   const shell = { snapshot: { attachmentIds: [], draft: '', phase: 'idle' }, detachedDrafts: new Map(), failedDetached: new Map([['f1', { attachmentIds: [], draft: 'try again' }]]), attachmentFlights: new Map() }
   const conversation = { draftAttachments: new Map(), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, input: { shell: () => shell } }
   const page = harness({ conversation, sessions: { list: () => [{ id: 's1' }] } })
   await page.press()
-  check('a failed send still holds the rebuild', page.reloads.length === 0 && page.navigations.length === 0, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+  check('a failed send whose words the app restores does not hold the rebuild', page.reloads.length + page.navigations.length >= 1, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+}
+// Its files are the other half: a failed record still holding an upload is a draft whose file only
+// lives in this document, so the press waits for it like any other draft attachment.
+{
+  const shell = { snapshot: { attachmentIds: [], draft: '', phase: 'idle' }, detachedDrafts: new Map(), failedDetached: new Map([['f1', { attachmentIds: ['a1'], draft: 'try again' }]]), attachmentFlights: new Map() }
+  const conversation = { draftAttachments: new Map(), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, input: { shell: () => shell } }
+  const page = harness({ conversation, sessions: { list: () => [{ id: 's1' }] } })
+  await page.press()
+  check('a failed send still holding a file holds the rebuild', page.reloads.length === 0 && page.navigations.length === 0, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
 }
 // The app publishes its sessions as one snapshot keyed by id; that is the interface a page can
 // actually read, so the check must not depend on a list function that the service does not have.
+// The file kept there is what proves the retained session was read through that interface.
+{
+  const shell = { snapshot: { attachmentIds: ['a1'], draft: 'typed but not sent', phase: 'idle' }, detachedDrafts: new Map(), failedDetached: new Map(), attachmentFlights: new Map() }
+  const conversation = { draftAttachments: new Map(), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, input: { shell: (id) => (id === 's1' ? shell : undefined) } }
+  const sessions = { list: { getSnapshot: () => ({ byId: { s1: { id: 's1' } } }) } }
+  const page = harness({ conversation, sessions })
+  await page.press()
+  check('a file kept by the snapshot-addressed session holds the rebuild', page.reloads.length === 0 && page.navigations.length === 0, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+  check('and the log names that session\'s composer', page.requests.some((request) => request.path.includes('event=held') && request.path.includes('attachments%3Acomposer')), page.requests.map((r) => r.path).join(' '))
+}
+// Words alone in that retained session come back from the app's store, so they hold nothing.
 {
   const shell = { snapshot: { attachmentIds: [], draft: 'typed but not sent', phase: 'idle' }, detachedDrafts: new Map(), failedDetached: new Map(), attachmentFlights: new Map() }
   const conversation = { draftAttachments: new Map(), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, input: { shell: (id) => (id === 's1' ? shell : undefined) } }
   const sessions = { list: { getSnapshot: () => ({ byId: { s1: { id: 's1' } } }) } }
   const page = harness({ conversation, sessions })
   await page.press()
-  check('a draft kept by the snapshot-addressed session holds the rebuild', page.reloads.length === 0 && page.navigations.length === 0, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+  check('a typed draft in a retained session does not hold the rebuild', page.reloads.length + page.navigations.length >= 1, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
 }
 // A composer between deciding and submitting owns the text until the send settles.
 {

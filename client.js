@@ -912,23 +912,30 @@ window.__ModuleLoader__.load({
               // held by the composer, not yet in the transcript, and a rebuild would drop both.
               const phase = shell.snapshot?.phase;
               if (phase === 'adjudicating' || phase === 'submitting') return 'sending';
+              /**
+               * Written words are not a reason to hold: the app keeps each session's draft in its
+               * own store, and the next document reads it back, so the person finds the sentence
+               * where they left it. Files are the opposite: a draft attachment is a browser file
+               * object that lives only in this document, so the composer's file list holds the
+               * press. The text a send carries is not read here for the same reason — the send
+               * itself is (below), because that is what the rebuild would interrupt.
+               */
               if ((shell.snapshot?.attachmentIds?.length ?? 0) > 0) return 'composer';
-              if (typeof shell.snapshot?.draft === 'string' && shell.snapshot.draft !== '') return 'draft';
               if ((shell.attachmentFlights?.size ?? 0) > 0) return 'sending';
               /**
-               * A send is retained with the text it carries until admission settles, and with it
-               * either files or words. Words alone are still something the person cannot get back
-               * after a rebuild, so the record's content counts, not only its attachments.
+               * A send is retained until admission settles: the composer still owns something that
+               * is neither a draft nor in the transcript, and a rebuild would leave the person
+               * without an answer or a way to ask again.
                */
               for (const record of shell.detachedDrafts?.values?.() ?? []) {
                 if ((record?.attachmentIds?.length ?? 0) > 0) return 'sending';
                 if (typeof record?.draft === 'string' && record.draft.trim() !== '') return 'sending';
               }
-              // A send that failed is handed back to the composer; until it is sent again it is an
-              // unsent draft, and the person sees it restored rather than re-typed.
+              // A send that failed hands its words back to the draft store, which the next document
+              // restores, but its files only exist in this one: a failed record still holding files
+              // is a draft the person would lose.
               for (const record of shell.failedDetached?.values?.() ?? []) {
                 if ((record?.attachmentIds?.length ?? 0) > 0) return 'draft';
-                if (typeof record?.draft === 'string' && record.draft.trim() !== '') return 'draft';
               }
             } catch {
               // One session whose composer cannot be read does not make the others empty; its own

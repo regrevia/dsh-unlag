@@ -2369,8 +2369,10 @@ export async function verifyStartup(clientModules, rows) {
  * whatever the table serves now. That is the designed path and it is sound only while the newer body
  * still registers what the older one expects to find — the ids it loaded and the modules it required.
  * The snapshot taken when the page reported its list is what those expectations are read from; a
- * frozen list whose record is missing, incomplete, or whose ids the newer bytes no longer provide is
- * a document that boots half way, so the press is held before it can take the running turns with it.
+ * newer body that drops one of those ids is a document that boots half way, so the press is held
+ * before it can take the running turns with it. A record that could not be taken, all of it, is not
+ * that evidence: addresses stop answering as the set moves on, and a page whose history cannot be
+ * read still has to be able to press, so such a press rests on the startup check alone.
  * @param answer the startup check's own verdict, over the rows the page reported.
  * @returns a refusal, or null when the two generations can meet in one document.
  */
@@ -2388,11 +2390,19 @@ async function bootGenerationProof(answer) {
       if (!(snapshot !== null && typeof snapshot === 'object' && snapshot.pending === true)) break
     }
   }
+  /**
+   * A record that is missing or short is not evidence against the press: the old addresses may have
+   * stopped answering before the capture could read them, and that says nothing about the document
+   * the press would boot. Refusing on it would leave the button dead for a window that has no other
+   * way back, so the press goes on the startup check's own verdict over the rows the page reported.
+   */
   if (snapshot === null || typeof snapshot !== 'object' || snapshot.pending === true) {
-    return { status: 'blocked', reason: 'boot', detail: 'the scripts this page booted with could not be frozen' }
+    log('the scripts this page booted with could not be frozen; the press is checked against the list it reported')
+    return null
   }
   if (snapshot.complete !== true) {
-    return { status: 'blocked', reason: 'boot', detail: 'the scripts this page booted with could not all be read when it booted' }
+    log('the scripts this page booted with could not all be read; the press is checked against the list it reported')
+    return null
   }
   /**
    * A body the app serves now is allowed to differ from the frozen one — that is the update being

@@ -891,8 +891,9 @@ const renamedRes = await postJson(renamedBody.routes.get('/dsh-unlag/verify'), J
 check('a newer body that drops an id the page loads is held', verdict(renamedRes.body) === 'blocked' && String(renamedRes.body).includes('"boot"'), renamedRes.body)
 check('and names the id it no longer registers', String(renamedRes.body).includes('@local/helper'), renamedRes.body)
 
-// A list the app cannot read in full is not a shorter list: nothing about that generation was
-// proven, so the rebuild is held rather than allowed on the rows that happened to answer.
+// A record the app could not read is not evidence against the press: the frozen addresses stop
+// answering as the set moves on, and a window whose history cannot be read still has no other way
+// back. The press then rests on the startup check over the rows the page reported.
 let bootCaptureAnswers = false
 const unreadable = mount(
   {},
@@ -911,7 +912,20 @@ const partial = await settledBoot(unreadable.routes)
 bootCaptureAnswers = true
 check('a script the app could not read leaves the snapshot incomplete', partial !== null && partial.complete === false, JSON.stringify(partial))
 const unprovenRes = await postJson(unreadable.routes.get('/dsh-unlag/verify'), JSON.stringify({ rows: [frozenUrl] }))
-check('a rebuild with no complete snapshot is held', verdict(unprovenRes.body) === 'blocked' && String(unprovenRes.body).includes('"boot"'), unprovenRes.body)
+check('a rebuild with no complete snapshot rests on the list the page reported', verdict(unprovenRes.body) === 'ok', unprovenRes.body)
+
+// A window that never reported its list is refused by nothing: its rows are checked as before.
+const silent = mount(
+  {},
+  {
+    clientModules: {
+      graph: () => stableGraph,
+      fetchBundle: async () => new Response('window.__ModuleLoader__.load({ id: "@local/a", factory() {} })', { status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8' } }),
+    },
+  },
+)
+const silentRes = await postJson(silent.routes.get('/dsh-unlag/verify'), JSON.stringify({ rows: [frozenUrl] }))
+check('a window with no startup report can still rebuild', verdict(silentRes.body) === 'ok', silentRes.body)
 
 console.log(out.join('\n'))
 process.exit(process.exitCode ?? 0)
