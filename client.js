@@ -143,8 +143,18 @@ window.__ModuleLoader__.load({
       } catch {
         page = '';
       }
+      // Each document has its own time origin. Two lines with the same origin are one page
+      // reporting twice; two lines with different origins are two documents, which is the only
+      // way to tell a double reload apart from a double report after the fact.
+      let born = '';
+      try {
+        born = String(Math.round(Number(performance?.timeOrigin ?? 0))).replace(/[^0-9]/gu, '').slice(0, 16);
+      } catch {
+        born = '';
+      }
       const named = gate === undefined ? `event=${event}` : `event=${event}&gate=${encodeURIComponent(gate)}`;
-      const query = page === '' ? named : `${named}&rev=${page}`;
+      const withPage = page === '' ? named : `${named}&rev=${page}`;
+      const query = born === '' ? withPage : `${withPage}&born=${born}`;
       /**
        * The route belongs to the instance this press is replacing. Its answer can land while the old
        * one is gone and the new one is not listening yet, and a lost line is a press nobody can
@@ -888,6 +898,9 @@ window.__ModuleLoader__.load({
           // nothing, so the next press must not be turned away as if this one had been answered.
           stampWrite();
           report('rebuild');
+          // One line for the navigation itself: the number of documents that come up after it is
+          // the number of loads the person sees, and only the log can count them afterwards.
+          report('navigating');
           navigated = true;
           reloadFreshPage();
           return undefined;
