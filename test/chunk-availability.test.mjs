@@ -164,7 +164,7 @@ await postJson(gone.routes.get('/dsh-unlag/boot'), bootJson([urlA, urlB], 'old')
 await settledBoot(gone.routes)
 const goneRes = await postJson(gone.routes.get('/dsh-unlag/verify'), JSON.stringify({ rows: [urlA, urlB] }))
 check('a chunk the old copy asks for that answers 404 holds the press', verdict(goneRes.body) === 'blocked', goneRes.body)
-check('and the reason names the chunk instead of the boot', reason(goneRes.body) === 'generation' && goneRes.body.includes('client.lazy.js'), goneRes.body)
+check('and the reason names the chunk instead of the boot', reason(goneRes.body) === 'boot' && goneRes.body.includes('client.lazy.js'), goneRes.body)
 
 // --- an unchanged plugin next to an updated one is not held back ------------------------------
 // Only B moved: the press boots a document whose A is byte for byte the page's own copy and whose
@@ -180,6 +180,13 @@ await postJson(sideBySide.routes.get('/dsh-unlag/boot'), bootJson([urlA, urlB], 
 await settledBoot(sideBySide.routes)
 const allowed = await postJson(sideBySide.routes.get('/dsh-unlag/verify'), JSON.stringify({ rows: [urlA, urlB] }))
 check('a plugin that did not change next to one that did is approved', verdict(allowed.body) === 'ok', allowed.body)
+{
+  // The answer must say which later files the check read, not only that it approved: the client
+  // rebuild and the next press use that list, and a row that silently drops it is judged incomplete.
+  const answer = JSON.parse(allowed.body)
+  const rowA = (answer.scripts ?? []).find((script) => String(script.url).includes('@local/a'))
+  check('an approved row carries the later files the page will ask for', Array.isArray(rowA?.lazy) && rowA.lazy.includes('client.lazy.js'), JSON.stringify(rowA))
+}
 
 // --- a renamed chunk of a body that also changed is still held --------------------------------
 // The main body changed and the chunk it used to ask for no longer answers: the newer generation is
@@ -195,5 +202,23 @@ await postJson(renamed.routes.get('/dsh-unlag/boot'), bootJson([urlA, urlB], 'ol
 await settledBoot(renamed.routes)
 const renamedRes = await postJson(renamed.routes.get('/dsh-unlag/verify'), JSON.stringify({ rows: [urlA, urlB] }))
 check('a body whose chunk stopped answering is held', verdict(renamedRes.body) === 'blocked', renamedRes.body)
+
+// --- a byte-identical main script is no exemption for its later files --------------------------
+// The page that reports this row booted exactly these bytes, so the main script and its chunk list
+// are the same ones. The chunk still answers only under a newer revision, which the running page
+// never asks for: approving on "the main digest did not move" would hand it a document whose later
+// file 404s.
+state = {
+  bodyA: bodyOf('a', 'client.lazy.js'),
+  bodyB: bodyOf('b', null),
+  chunks: { '@local/a': true },
+  chunkUrl: (owner) => `/plugins/${owner}/client.lazy.js?rev=new`,
+}
+const sameMain = app(state)
+await postJson(sameMain.routes.get('/dsh-unlag/boot'), bootJson([urlA, urlB], 'old'))
+await settledBoot(sameMain.routes)
+const sameRes = await postJson(sameMain.routes.get('/dsh-unlag/verify'), JSON.stringify({ rows: [urlA, urlB] }))
+check('an unchanged main script whose chunk moved revisions is held', verdict(sameRes.body) === 'blocked', sameRes.body)
+check('and the refusal names the file that answers at the wrong revision', reason(sameRes.body) === 'boot' && sameRes.body.includes('client.lazy.js'), sameRes.body)
 
 console.log(out.join('\n'))

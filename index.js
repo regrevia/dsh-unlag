@@ -469,6 +469,17 @@ function worthReloading(filename) {
  * The service keeps its transaction context in an AsyncLocalStorage on the instance. Resolve it by
  * type as well as by name, so a renamed field still works; the name stays the fast path.
  */
+/**
+ * Whether an update was refused because another one already holds the app's transaction.
+ *
+ * The app says so in one sentence, and the retry below waits that sentence out. Matching a bare
+ * word instead once turned an ordinary failure whose path happened to contain it into ten
+ * attempts of a stateful operation, so only the app's own sentence is treated as the contract.
+ */
+function isNestedTransaction(error) {
+  return /\btransactions? cannot be nested\b/iu.test(String(error?.message ?? error))
+}
+
 function transactionContext(service) {
   try {
     if (typeof service?.executing?.exit === 'function') return service.executing
@@ -625,7 +636,14 @@ function pluginReloader(ctx, config) {
      */
     const carried = unhealthy.filter((id) => !asked.has(id))
     if (carried.length > 0) log(`still stopped from an earlier press: ${carried.slice(0, 5).join(', ')}`)
-    knownInactive.unhealthy = unhealthy.slice(0, 64)
+    /**
+     * Every stopped id is remembered, not the first 64: this set is what a later press reads to
+     * decide whether the profile is whole again. Truncating it would turn the 65th stopped entry
+     * into a healthy profile, and a page rebuilt on that profile starts against a set that is still
+     * missing part of itself. The list is bounded by the Loader's own entries, and the bounds that
+     * keep a message short live where the message is written.
+     */
+    knownInactive.unhealthy = unhealthy
     return { unhealthy, readable: true, carried }
   }
 
@@ -785,8 +803,7 @@ function pluginReloader(ctx, config) {
         result = await ask(hmr)
         break
       } catch (error) {
-        const message = String(error?.message ?? error)
-        if (message.includes('nested')) {
+        if (isNestedTransaction(error)) {
           if (attempt >= 9) throw error
           const step = Number(process.env.DSH_UNLAG_RETRY_MS ?? '') || 250
           /**
@@ -2688,7 +2705,10 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
       if (chunkStatus !== 200) {
         return {
           status: 'blocked', // ui-copy-ignore
-          reason: 'generation', // ui-copy-ignore
+          // The address was built from this page's own list, and the chunk is gone from the
+          // generation that list still names. A frozen list cannot be changed by pressing again:
+          // the same address is asked next time and the next document would die on the same file.
+          reason: 'boot', // ui-copy-ignore
           detail: `${address} answers ${chunkStatus === null ? 'nothing readable' : String(chunkStatus)}, which this page's copy asks for`,
         }
       }
@@ -2868,7 +2888,9 @@ async function bootGenerationProof(answer) {
   for (const script of scripts) {
     const row = known.get(script?.url)
     if (row === undefined || row.unreadable === true || typeof row.digest !== 'string') continue
-    if (script?.digest === row.digest) continue
+    // No digest shortcut: a body that is byte for byte the frozen one is checked for the same ids
+    // and later files as any other. Identical bytes make those sets equal, so the check costs one
+    // pass and cannot hide a file the page's copy asks for but the newer generation stopped serving.
     for (const id of Array.isArray(row.ids) ? row.ids : []) {
       if (currentIds.has(id)) continue
       return { status: 'blocked', reason: 'boot', detail: `the newer scripts no longer register ${oneLine(String(id))}, which this page loads` }
@@ -2882,7 +2904,7 @@ async function bootGenerationProof(answer) {
     const currentChunks = new Set([...(script?.lazy ?? [])])
     for (const file of frozenChunks) {
       if (currentChunks.has(file)) continue
-      return { status: 'blocked', reason: 'generation', detail: `the newer plugin no longer loads ${oneLine(String(file))}, which this page's copy asks for` }
+      return { status: 'blocked', reason: 'boot', detail: `the newer plugin no longer loads ${oneLine(String(file))}, which this page's copy asks for` }
     }
   }
   return null
@@ -3005,7 +3027,7 @@ const AGENT_REFRESH_OFF = '在右键菜单里打开 Agent 可以自己刷新' //
 function agentAnswer(outcome) {
   const status = typeof outcome?.status === 'string' ? outcome.status : 'failed'
   const rebuild = typeof outcome?.rebuild === 'string' ? outcome.rebuild : 'unknown'
-  const answer = { status, rebuild, reason: '刷新没有完成，插件还在用旧代码' }
+  const answer = { status, rebuild, reason: '更新没有完成，当前插件状态需要核对' }
   if (typeof outcome?.healthReadable === 'boolean') answer.healthReadable = outcome.healthReadable
   if (status === 'done') answer.reason = '插件已换成新代码'
   else if (status === 'applying' || status === 'queued') answer.reason = '还在刷新，稍后再按一次'
@@ -3097,7 +3119,7 @@ function registerAgentTool(ctx, controller, config) {
           return agentAnswer(outcome)
         } catch (error) {
           log(`the refresh tool could not press: ${error?.message ?? error}`)
-          return { status: 'failed', reason: '刷新没有完成，插件还在用旧代码', rebuild: 'unknown' }
+          return { status: 'failed', reason: '更新没有完成，当前插件状态需要核对', rebuild: 'unknown' }
         }
       },
     }), 'unlag: unlag_refresh')

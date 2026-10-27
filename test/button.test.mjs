@@ -423,6 +423,37 @@ const nestedRoutes = (() => {
 const nestedRes = fakeRes()
 await nestedRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, nestedRes)
 check('a stale transaction refusal still reloads', verdict(nestedRes.body) === 'done' && nestedTries === 2, `tries=${nestedTries}`)
+
+// A failure is retried only when it is the app's own "two updates at once" answer. A path or a
+// config key that happens to contain the same word is an ordinary failure: retrying it would run a
+// stateful update ten times over one bad file.
+let wordTries = 0
+const wordRoutes = (() => {
+  const routes = new Map()
+  const ctx = {
+    get: (key) => {
+      if (key === 'webServer') return { register: (r) => (routes.set(r.path, r.handler), () => routes.delete(r.path)) }
+      if (key === 'hmr')
+        return {
+          baseDir: '/tmp/x',
+          operations: Promise.resolve(),
+          runExclusive: async (op) => op(),
+          reconcileProfile: async () => {
+            wordTries += 1
+            throw new Error('profile/nested/bundle.yml: cannot read the entry list')
+          },
+        }
+      if (key === 'agents') return { list: () => [] }
+      return undefined
+    },
+    on: () => {},
+  }
+  apply(ctx, {})
+  return routes
+})()
+const wordRes = fakeRes()
+await wordRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, wordRes)
+check('a failure that only mentions the word is not retried', verdict(wordRes.body) === 'failed' && wordTries === 1, `tries=${wordTries} status=${verdict(wordRes.body)}`)
 // --- an update the app did not finish applying ------------------------------------------------
 // The press must not rebuild the page over a plugin set the app has not finished starting: the
 // fresh document would boot plugins that are not ready, and the app ends the document over it.
@@ -915,7 +946,7 @@ await postJson(lazyMix.routes.get('/dsh-unlag/boot'), bootJson([frozenUrl], 'old
 await settledBoot(lazyMix.routes)
 lazyName = './client.new.js'
 const lazyRes = await postJson(lazyMix.routes.get('/dsh-unlag/verify'), JSON.stringify({ rows: [frozenUrl] }))
-check('a newer build that renamed a lazy chunk is held', verdict(lazyRes.body) === 'blocked' && String(lazyRes.body).includes('"generation"'), lazyRes.body)
+check('a newer build that renamed a lazy chunk is held', verdict(lazyRes.body) === 'blocked' && String(lazyRes.body).includes('"boot"'), lazyRes.body)
 check('and names the chunk it no longer serves', String(lazyRes.body).includes('client.old.js'), lazyRes.body)
 
 // A record the app could not read is not evidence against the press: the frozen addresses stop

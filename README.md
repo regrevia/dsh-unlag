@@ -30,20 +30,21 @@ dsh plugin install dsh-unlag
 
 ## 用
 
-点右上角那个按钮。右键菜单里四行决定它做什么：
+点右上角那个按钮。右键菜单有三行，另有一项在配置里：
 
 - **按下刷新时换掉插件代码**（默认开）
 - **按下刷新时重建界面**（默认开）
-- **改完文件自动刷新，不必按按钮**（默认关）
 - **Agent 可以自己刷新**（默认关）
 
 前两行都开＝先换代码再重建；只开一个＝另一项完全不动；都不开＝点击无反应。最后一行只决定谁能按，不改变按下去做什么。
+
+「改完文件自动刷新」不是菜单行，是配置项（默认关），开了也不用按按钮。
 
 ## 谁能让它刷新
 
 默认只有人：自动刷新关着，Agent 入口也关着，本插件不装任何文件监视，本插件自己永远不会去换代码。
 
-右键按钮里打开「Agent 可以自己刷新」后，会话里的 Agent 可以自己按这个按钮（工具名 `unlag_refresh`），走和按钮完全相同的检查与拦截：内容没保存、插件没恢复、下一页起不来时照样停住并说明原因。关着时 Agent 调它会被告知先打开开关，不会偷偷刷新。
+右键按钮里打开「Agent 可以自己刷新」后，会话里的 Agent 可以自己按这个按钮（工具名 `unlag_refresh`），复用按钮那套判定与拦截，但只换宿主侧的插件代码：页面不会重开，也不会替你按下按钮；内容没保存、插件没恢复时照样停住并说明原因。关着时 Agent 调它会被告知先打开开关，不会偷偷刷新。
 
 这不等于 App 自己也不会换：宿主自带的插件热更新有自己的开关和监视，装了开发插件、开着那边的自动应用时，改文件仍可能由宿主应用；本插件开关关掉只是本插件不发起。
 
@@ -84,7 +85,7 @@ dsh plugin install dsh-unlag
 ## 排错
 
 - 日志：`~/.dsh/unlag-reload.log`，换代码／跳过／被拦各一行，含原因。
-- 演练：`npm run live-smoke` 不按按钮，只按当前启动清单把下一个文档要加载的字节在沙箱里跑一遍，看每个插件是否都注册（`rehearsal.ok`），并当场核对三件事：写死的旧版本号仍然拿得到现在的字节（`shim.staleRev`），按下前会做的那个判断此刻是否放行（`pressPath`），以及那个判断本身会不会误拒（`verify.sound` 应为 `ok`、`verify.broken` 应为 `blocked`、`verify.refuses` 与 `verify.accepts` 为 `true`）——它证明的是「按下去之后新页面能起来、按钮现在真的可按、拦住的是坏清单」，不换任何代码。
+- 演练：`npm run smoke` 不按按钮，只按当前启动清单把下一个文档要加载的字节在沙箱里跑一遍，看每个插件是否都注册（`rehearsal.ok`），并当场核对三件事：写死的旧版本号仍然拿得到现在的字节（`shim.staleRev`），按下前会做的那个判断此刻是否放行（`pressPath`），以及那个判断本身会不会误拒（`verify.sound` 应为 `ok`、`verify.broken` 应为 `blocked`、`verify.refuses` 与 `verify.accepts` 为 `true`）——它证明的是「启动清单里的每个插件都注册了、每个分块都取得到、按钮此刻真的可按、拦住的是坏清单」，不换任何代码；演练里的 Loader 只收集注册的 ID，不执行插件的 factory、import 与 apply，所以它不等于整机刷新已经安全。
 - 同一支脚本还现场核对路由的守门规则（`contract`）：读路由只认读、写路由缺 `x-dsh-unlag` 头或来自别的源一律 403、未知路径 404。它用的是和页面一样的请求，所以这条规则在运行中的 App 上是否还在，一眼可见。
 - 状态：`GET /dsh-unlag/state` → `{"version":"<当前版本>","code":"<index.js 写入时间>","plugins":true,"page":true,"shim":{...}}`。`code` 用来分清「版本号没刷」和「旧代码真的还在跑」。
 - 重建后的日志带起页面代次：`interface rebuilt; the page runs the plugins as served now (page <rev>)`，据此判断新文档加载的是新脚本还是旧脚本。
@@ -111,7 +112,7 @@ dsh plugin install dsh-unlag
 1. 改版本号，并 `touch index.js client.js`。**只改版本号是不够的**：插件的装载按文件时间判断要不要重新读，时间没变就还是旧代码在跑，`/state` 里会看到版本号没变（或变了但 `code` 是旧的）。
 2. 在插件列表里把本插件关掉再打开。这两步之后 `~/.dsh/unlag-reload.log` 会出现一行新的 `dsh-unlag <版本>`。
 3. 等约 20 秒，读 `GET /dsh-unlag/state`：`version` 是新版本、`code` 是刚才 `index.js` 的写入时间，才算真的换上了。
-4. `npm run live-smoke` 对着运行中的 App 复核一遍（见下一节）。
+4. `npm run smoke` 对着运行中的 App 复核一遍（见下一节）。
 5. 发布用 `./scripts/release.sh`，它发完会回查 registry 是否真的列出版本。`npm view` 读的是 CDN 缓存，发布成功后的一两分钟里可能还显示上一版；`npm view` 与 registry 不一致时，以版本号文档（`https://registry.npmjs.org/dsh-unlag/<版本>`）是否 200 为准。
 
 页面那一半（按钮点击后的重建）不在这一步里：那是按钮本人的事，只有人能按。

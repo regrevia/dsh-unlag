@@ -40,5 +40,25 @@ const missing = hostReasons.filter((reason) => !enKeys.includes(reason))
 check('every reason the host sends has copy', missing.length === 0, missing.join(','))
 check('and the copy is not the generic fallback for the newest ones', !['busy', 'network', 'register', 'missing', 'dependencies'].some((reason) => !enKeys.includes(reason)))
 
+// A frozen startup list cannot be changed by pressing again, so the line for it must not send the
+// person back to the button. It says what actually changes: reopening the app.
+const bootZh = zh.find((item) => item.key === 'boot')?.copy ?? ''
+const bootEn = en.find((item) => item.key === 'boot')?.copy ?? ''
+check('the frozen-list line does not ask for another press', !/再按|再刷新|再试/u.test(bootZh) && !/press again|try again/iu.test(bootEn), `${bootZh} | ${bootEn}`)
+check('and it names what puts the new code in the page', /重开应用|重启应用/u.test(bootZh) && /reopen the app/iu.test(bootEn), `${bootZh} | ${bootEn}`)
+check('the transient swap line still allows another press', /再按一次/u.test(zh.find((item) => item.key === 'generation')?.copy ?? '') && /press again/iu.test(en.find((item) => item.key === 'generation')?.copy ?? ''))
+
+// The detail behind a notice is read inside the notice: the card grows downwards and the detail is
+// in flow. A second absolutely placed box beside it was outside the card and under the page.
+const style = (name) => {
+  const at = client.indexOf(`const ${name} = {`)
+  return at === -1 ? '' : client.slice(at, client.indexOf('};', at))
+}
+const pillStyle = style('PILL_STYLE')
+const rawStyle = style('RAW_STYLE')
+check('the notice card may wrap its line', pillStyle !== '' && pillStyle.includes("whiteSpace: 'normal'") && pillStyle.includes('width:'), pillStyle.slice(0, 120))
+check('the detail is laid out inside the card, not absolutely beside it', rawStyle !== '' && !rawStyle.includes("position: 'absolute'"), rawStyle.slice(0, 120))
+check('an opened detail keeps the notice on screen', /if \(showRaw\) return undefined/u.test(client))
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

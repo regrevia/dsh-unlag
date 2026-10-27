@@ -18,8 +18,8 @@ window.__ModuleLoader__.load({
      * repeating one generic sentence.
      */
     const REASONS = zh
-      ? { list: '读不到启动信息', slow: '启动信息读得太慢', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', size: '启动脚本太大', verify: '插件后端没有应答', screen: '页面状态读不到', busy: '另一次刷新还在进行', dependencies: '插件依赖还没有运行', missing: '启动清单里有插件已经不见了', network: '读取插件时出错', register: '插件没有登记自己', entries: '启动清单里的插件已卸载，重启应用后再刷新', generation: '插件刚被换过，再按一次刷新', boot: '页面用的还是应用启动时那一版脚本，重新打开应用后再刷新', url: '启动信息太长，读不全' }
-      : { list: 'startup info is unavailable', slow: 'the startup list answered too slowly', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete', size: 'a startup script is too large', verify: 'the plugin is not answering', screen: 'the page state cannot be read', busy: 'another rebuild is already running', dependencies: 'a plugin dependency is not running', missing: 'a plugin in the startup list is gone', network: 'the plugins could not be read', register: 'a plugin did not register itself', entries: 'a plugin in the startup list was uninstalled, so restart the app before rebuilding', generation: 'the plugins were replaced a moment ago, press again', boot: 'the page still runs the scripts the app started with, so reopen the app before rebuilding', url: 'the startup info is too long to keep' };
+      ? { list: '读不到启动信息', slow: '启动信息读得太慢', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', size: '启动脚本太大', verify: '插件后端没有应答', screen: '页面状态读不到', busy: '另一次刷新还在进行', dependencies: '插件依赖还没有运行', missing: '启动清单里有插件已经不见了', network: '读取插件时出错', register: '插件没有登记自己', entries: '启动清单里的插件已卸载，重启应用后再刷新', generation: '插件刚被换过，再按一次刷新', boot: '重启应用后用上新代码', url: '启动信息太长，读不全' }
+      : { list: 'startup info is unavailable', slow: 'the startup list answered too slowly', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete', size: 'a startup script is too large', verify: 'the plugin is not answering', screen: 'the page state cannot be read', busy: 'another rebuild is already running', dependencies: 'a plugin dependency is not running', missing: 'a plugin in the startup list is gone', network: 'the plugins could not be read', register: 'a plugin did not register itself', entries: 'a plugin in the startup list was uninstalled, so restart the app before rebuilding', generation: 'the plugins were replaced a moment ago, press again', boot: 'reopen the app to use the new code', url: 'the startup info is too long to keep' };
 
     /** The last reason a readiness check refused for, or null after a check that passed. */
     let holdReason = null;
@@ -1082,25 +1082,41 @@ window.__ModuleLoader__.load({
       opacity: 0.75, // ui-copy-ignore
     };
 
+    // The notice is a card, not a line: the sentence and the detail behind it live in one box that
+    // grows downwards. The detail used to be a second absolutely placed box, which put it outside
+    // the notice and under whatever came next — a press on "详情" appeared to do nothing.
     const PILL_STYLE = {
       position: 'absolute', // ui-copy-ignore
       top: 30, // ui-copy-ignore
       right: 0, // ui-copy-ignore
-      padding: '4px 8px', // ui-copy-ignore
+      zIndex: 30, // ui-copy-ignore
+      display: 'flex', // ui-copy-ignore
+      flexDirection: 'column', // ui-copy-ignore
+      alignItems: 'stretch', // ui-copy-ignore
+      gap: 6, // ui-copy-ignore
+      // An absolutely placed box shrinks to the button's own width, which turned the sentence into
+      // a column a few characters wide. It needs its own width to read as a line.
+      width: 'min(340px, 82vw)', // ui-copy-ignore
+      padding: '6px 8px', // ui-copy-ignore
       borderRadius: 6,
       border: '1px solid var(--dsh-color-border, rgba(127,127,127,0.28))',
       background: 'var(--dsh-color-surface, Canvas)',
       color: 'var(--dsh-color-text-secondary, inherit)',
       fontSize: 12, // ui-copy-ignore
-      whiteSpace: 'nowrap', // ui-copy-ignore
+      lineHeight: 1.5,
+      textAlign: 'left', // ui-copy-ignore
+      whiteSpace: 'normal', // ui-copy-ignore
+      wordBreak: 'break-word', // ui-copy-ignore
     };
 
     const PILL_TEXT_STYLE = {
-      whiteSpace: 'nowrap', // ui-copy-ignore
+      display: 'flex', // ui-copy-ignore
+      alignItems: 'baseline', // ui-copy-ignore
+      flexWrap: 'wrap', // ui-copy-ignore
+      gap: 6, // ui-copy-ignore
     };
 
     const RAW_LINK_STYLE = {
-      marginLeft: 8, // ui-copy-ignore
       padding: 0, // ui-copy-ignore
       border: 'none', // ui-copy-ignore
       background: 'transparent', // ui-copy-ignore
@@ -1111,16 +1127,10 @@ window.__ModuleLoader__.load({
     };
 
     const RAW_STYLE = {
-      position: 'absolute', // ui-copy-ignore
-      top: 58, // ui-copy-ignore
-      right: 0, // ui-copy-ignore
-      maxWidth: 320, // ui-copy-ignore
-      padding: '6px 8px', // ui-copy-ignore
-      borderRadius: 6,
-      border: '1px solid var(--dsh-color-border, rgba(127,127,127,0.28))',
-      background: 'var(--dsh-color-surface, Canvas)',
-      color: 'var(--dsh-color-text-secondary, inherit)',
-      fontSize: 12, // ui-copy-ignore
+      paddingTop: 6, // ui-copy-ignore
+      borderTop: '1px solid var(--dsh-color-border, rgba(127,127,127,0.28))',
+      color: 'inherit', // ui-copy-ignore
+      font: 'inherit', // ui-copy-ignore
       lineHeight: 1.5,
       textAlign: 'left', // ui-copy-ignore
       whiteSpace: 'pre-wrap', // ui-copy-ignore
@@ -1184,13 +1194,16 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         if (notice === null) return undefined;
+        // An opened detail belongs to the person reading it: the notice waits, and its timer starts
+        // again once the detail is closed. A card that disappears under a press looks broken.
+        if (showRaw) return undefined;
         // The raw words need longer on screen than a one-line notice.
         const timer = setTimeout(() => {
           setNotice(null);
           setRaw(null);
         }, raw === null ? 8000 : 16000); // ui-copy-ignore
         return () => clearTimeout(timer);
-      }, [notice, raw]);
+      }, [notice, raw, showRaw]);
 
       // A menu left open over a page that is about to be rebuilt would name switches that no
       // longer describe the press that follows it.
@@ -1487,19 +1500,20 @@ window.__ModuleLoader__.load({
         h('path', { d: 'M13 2.7v3.6H9.4' }))),
         menuPanel,
         notice === null ? null : h('span', { role: 'status', 'aria-live': 'polite', style: PILL_STYLE },
-          h('span', { style: PILL_TEXT_STYLE }, notice),
-          // The sentence says what to do; the words behind it are one press away for the person who
-          // wants to know why the press was refused at all.
-          raw === null ? null : h('button', {
-            type: 'button', // ui-copy-ignore
-            style: RAW_LINK_STYLE,
-            'aria-expanded': showRaw,
-            onClick: (event) => {
-              event.preventDefault();
-              setShowRaw((open) => !open);
-            },
-          }, showRaw ? COPY.rawHide : COPY.rawShow)),
-        raw === null || !showRaw ? null : h('span', { style: RAW_STYLE }, raw));
+          h('span', { style: PILL_TEXT_STYLE },
+            h('span', null, notice),
+            // The sentence says what to do; the words behind it are one press away for the person
+            // who wants to know why the press was refused at all.
+            raw === null ? null : h('button', {
+              type: 'button', // ui-copy-ignore
+              style: RAW_LINK_STYLE,
+              'aria-expanded': showRaw,
+              onClick: (event) => {
+                event.preventDefault();
+                setShowRaw((open) => !open);
+              },
+            }, showRaw ? COPY.rawHide : COPY.rawShow)),
+          raw === null || !showRaw ? null : h('span', { style: RAW_STYLE }, raw)));
     }
 
     /**

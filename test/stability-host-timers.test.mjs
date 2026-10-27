@@ -198,7 +198,7 @@ const press = (host, query = '') => {
     runExclusive: async (op) => op(),
     reconcileProfile: async () => {
       attempts += 1
-      if (attempts < 3) throw new Error('nested recomposition refused')
+      if (attempts < 3) throw new Error('HMR transactions cannot be nested')
       return { warnings: [], pending: [] }
     },
   }

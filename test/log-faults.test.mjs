@@ -1,5 +1,5 @@
-import { spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -10,14 +10,14 @@ const root = join(tmpdir(), 'unlag-log-faults')
 rmSync(root, { recursive: true, force: true })
 mkdirSync(root, { recursive: true })
 
-const run = (env, body) => {
+const run = (env, body, options = {}) => {
   const merged = { ...process.env, ...env }
   for (const key of Object.keys(merged)) if (merged[key] === '') delete merged[key]
   return spawnSync(process.execPath, ['--input-type=module', '-e', body], {
     cwd: new URL('..', import.meta.url).pathname,
     env: merged,
     encoding: 'utf8',
-    timeout: 30000,
+    timeout: options.timeout ?? 30000,
   })
 }
 
@@ -66,6 +66,42 @@ try {
 check('an unwritable log does not throw', applyBlocked.status === 0, applyBlocked.stderr.slice(0, 160))
 check('the plugin still mounts and answers state', blockedAnswer?.status === 200 && blockedAnswer?.routes === 7, JSON.stringify(blockedAnswer))
 check('and nothing is written through the unwritable path', statSync(blocked).isDirectory())
+
+// A log target that is a pipe (or a symlink to one) is a real file that never accepts a write until
+// a reader shows up. The plugin is started in its own process so a write that waits forever shows up
+// as a child that had to be killed, not as a suite that hangs with no name for the case.
+const fifoLog = join(root, 'pipe.log')
+let madeFifo = true
+try {
+  execFileSync('mkfifo', [fifoLog])
+} catch {
+  madeFifo = false
+}
+const pipeRun = (target, label) =>
+  run(
+    { HOME: join(root, `${label}-home`), DSH_UNLAG_LOG: target },
+    `const { apply } = await import('./index.js')
+     const routes = new Map()
+     const ctx = { get: (key) => key === 'webServer'
+       ? { collectIndexInjections: () => [], register: (route) => { routes.set(route.path, route.handler); return () => routes.delete(route.path) } }
+       : undefined, on: () => {} }
+     apply(ctx, {})
+     const res = { status: 0, body: '', writableEnded: false, writeHead(s) { this.status = s }, end(b) { this.body += b ?? ''; this.writableEnded = true } }
+     await Promise.resolve(routes.get('/dsh-unlag/state')({ method: 'GET' }, res))
+     console.log('answered ' + JSON.stringify({ status: res.status, routes: routes.size }))`,
+    { timeout: 5000 },
+  )
+if (madeFifo) {
+  const throughPipe = pipeRun(fifoLog, 'pipe')
+  check('a log that is a pipe does not hold the process', throughPipe.status === 0 && /answered/u.test(throughPipe.stdout), `status=${String(throughPipe.status)} signal=${String(throughPipe.signal)} ${throughPipe.stderr?.slice(0, 120)}`)
+  check('and the pipe case is really the pipe case, not a timeout', throughPipe.signal !== 'SIGTERM', String(throughPipe.signal))
+  const pipeLink = join(root, 'pipe-link.log')
+  symlinkSync(fifoLog, pipeLink)
+  const throughPipeLink = pipeRun(pipeLink, 'pipe-link')
+  check('a log behind a symlink to a pipe does not hold the process', throughPipeLink.status === 0 && /answered/u.test(throughPipeLink.stdout), `status=${String(throughPipeLink.status)} signal=${String(throughPipeLink.signal)}`)
+} else {
+  out.push('SKIP  no mkfifo on this machine; the pipe cases are not covered here')
+}
 
 // A log directory that exists but refuses writes: the press path answers from what it did, never
 // from whether the line could be written. A press that failed only because its own record could
