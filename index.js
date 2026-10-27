@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
-import { appendFileSync, closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, statSync, watch, writeFileSync } from 'node:fs'
+import { closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, statSync, watch, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { Script } from 'node:vm'
@@ -124,6 +124,8 @@ const MAX_STARTUP_ROW_CHARS = 8192
  * turn hold text no page boots from.
  */
 const MAX_SCRIPT_BYTES = 24 * 1024 * 1024
+/** Chunks one check reads after their main scripts: a list's later files, not its whole tree. */
+const MAX_CHUNK_READS = 24
 /**
  * The same bound for one whole startup list. This one bounds work, not memory: a body's text is let
  * go before the next one is read, so what the list costs is summed compile time, and this profile
@@ -290,41 +292,74 @@ function ensureLogDir(target) {
   } catch {}
 }
 
+/**
+ * How long a target that just failed is left alone. A misconfigured log is retried about once a
+ * second, not once a line: the failure is often a path a person is about to fix, and a line that
+ * arrives while it is broken is worth less than the press it would hold.
+ */
+let logBrokenUntil = 0
+const LOG_RETRY_MS = 1000 // ui-copy-ignore
+
+/**
+ * One log line, appended without ever letting the file decide whether the press answers.
+ *
+ * The file is opened first and its type is read from the open handle: checking the path and then
+ * opening it leaves a window in which the log can become a pipe, and a pipe that nobody reads
+ * blocks its writer for ever. The open asks not to wait, so a pipe with no reader fails at once
+ * instead of holding a thread, and only a handle that reports itself as a regular file is written
+ * to. Opening once and writing to that handle also means the write and the type come from one
+ * object: nothing can be swapped in between.
+ *
+ * A full file is moved aside rather than emptied: its lines are the evidence for what led up to the
+ * write that filled it. One previous generation is kept, so a page that floods the log can cost at
+ * most one past million bytes. A failure drops the line and the rest of the process's lines; a log
+ * is evidence, not a promise this half can keep by blocking.
+ */
 function log(line) {
-  try {
-    const target = logTarget()
-    // A line written by the test suite says so, so a reader never reads a test as the live app.
-    const source = process.env.DSH_UNLAG_SOURCE === 'test' ? 'test: ' : ''
-    const text = `${new Date().toISOString()} ${source}${oneLine(line)}\n`
-    /**
-     * A file that only grows eventually costs the app its own memory budget, and a burst of lines
-     * can land between two periodic checks: the size is read before every write and the whole
-     * line has to fit, so the file never passes the cap even for one event.
-     *
-     * A full file is moved aside rather than emptied: its lines are the evidence for what led up to
-     * the write that filled it, which is the event a reader wants. One previous generation is
-     * kept, so a page that floods the log can cost at most one past million bytes.
-     */
+  if (Date.now() < logBrokenUntil) return
+  const target = logTarget()
+  // A line written by the test suite says so, so a reader never reads a test as the live app.
+  const source = process.env.DSH_UNLAG_SOURCE === 'test' ? 'test: ' : ''
+  const text = `${new Date().toISOString()} ${source}${oneLine(line)}\n`
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let fd = -1
     try {
-      if (statSync(target).size + Buffer.byteLength(text) > LOG_MAX_BYTES) {
+      fd = openSync(target, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NONBLOCK, 0o600)
+      const info = fstatSync(fd)
+      if (!info.isFile()) {
+        logBrokenUntil = Date.now() + LOG_RETRY_MS
+        return
+      }
+      if (info.size + Buffer.byteLength(text) > LOG_MAX_BYTES) {
+        closeSync(fd)
+        fd = -1
         try {
           renameSync(target, `${target}.1`)
         } catch {
-          writeFileSync(target, '')
+          const emptied = openSync(target, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC, 0o600)
+          closeSync(emptied)
         }
+        continue
       }
-    } catch {
-      /* a missing or unreadable log is created by the append below */
+      writeSync(fd, text)
+      logBrokenUntil = 0
+      return
+    } catch (error) {
+      // A missing directory is the one failure worth one more attempt, and only once per process.
+      if (attempt === 0) {
+        ensureLogDir(target)
+        continue
+      }
+      logBrokenUntil = Date.now() + LOG_RETRY_MS
+      return
+    } finally {
+      if (fd !== -1) {
+        try {
+          closeSync(fd)
+        } catch {}
+      }
     }
-    try {
-      appendFileSync(target, text)
-    } catch {
-      ensureLogDir(target)
-      try {
-        appendFileSync(target, text)
-      } catch {}
-    }
-  } catch {}
+  }
 }
 
 function closeAll(closer) {
@@ -1004,8 +1039,34 @@ function pluginReloader(ctx, config) {
   /** The answer shape a press always gets, whether or not a reload was started. */
   const queuedAnswer = (answer) => plainAnswer(answer === 'unavailable' ? 'unavailable' : 'queued')
 
-  /** A press made while an update is still running joins that update instead of queueing another. */
-  const busyAnswer = () => (workState.current !== null ? plainAnswer('applying') : queuedAnswer(queueReload()))
+  /**
+   * A press the caller stopped waiting for. The caller's signal is read at every point where the
+   * press has not changed anything yet and could still stop, and it never cancels work that has
+   * already started: a half-applied plugin set cannot be undone by wishing, so a press that was
+   * already applying reports its real end.
+   */
+  const cancelledAnswer = () => plainAnswer('cancelled', { rebuild: 'unknown' }) // ui-copy-ignore
+  const stoppedBy = (signal) => signal !== null && signal !== undefined && signal.aborted === true
+
+  /**
+   * A press made while an update is still running joins that update instead of queueing another.
+   * Which update it joined is written down, because "applying" is true only while that update is
+   * running: once it ends, a retry of this press must read the end it joined, not a word that
+   * happened to be true at the moment the retry was first made.
+   */
+  const joined = globalThis[Symbol.for('dsh-unlag.presses-joined')] ?? (globalThis[Symbol.for('dsh-unlag.presses-joined')] = new Map())
+  /** The request id the press being answered right now was made under, if it had one. */
+  let currentPressId = null
+  const busyAnswer = () => {
+    if (workState.current !== null) {
+      // The update this press joins is the one the page is already told is applying.
+      if (currentPressId !== null && operation.state !== null && operation.state.status === 'applying') {
+        joined.set(currentPressId, { operationId: operation.state.id, at: Date.now() })
+      }
+      return plainAnswer('applying')
+    }
+    return queuedAnswer(queueReload())
+  }
 
   /**
    * The button path: run now and report what happened, so the page can tell the user why the
@@ -1038,6 +1099,28 @@ function pluginReloader(ctx, config) {
         healthReadable: remembered.healthReadable ?? null,
       }
     }
+    /**
+     * A press that joined a running update has no operation of its own, so its retry asks about
+     * that update: the update's own end is the end of the joined press too. Once a newer update
+     * has replaced it, the link is stale and the retry is a new press.
+     */
+    const join = joined.get(requestId)
+    if (join !== undefined) {
+      const update = operation.state
+      if (update === null || (join.operationId !== null && update.id !== join.operationId)) joined.delete(requestId)
+      else if (update.status === 'applying') return plainAnswer('applying')
+      else
+        return {
+          status: update.status, // ui-copy-ignore
+          operationId: update.id,
+          warnings: [],
+          pending: [],
+          restartReason: update.restart,
+          failedEntries: [],
+          rebuild: update.rebuild ?? 'unknown', // ui-copy-ignore
+          healthReadable: update.healthReadable ?? null,
+        }
+    }
     const state = operation.state
     if (state === null || state.requestId !== requestId) return null
     if (state.status === 'applying') return plainAnswer('applying')
@@ -1060,11 +1143,16 @@ function pluginReloader(ctx, config) {
    */
   const runningPresses = globalThis[Symbol.for('dsh-unlag.presses-live')] ?? (globalThis[Symbol.for('dsh-unlag.presses-live')] = new Map())
 
-  const runPress = async (force = false, requestId = null) => {
+  const runPress = async (force = false, requestId = null, signal = null) => {
+    currentPressId = requestId
     const hmr = hmrService()
     if (hmr === null) return plainAnswer('unavailable')
     const already = seenRequest(requestId)
     if (already !== null) return already
+    if (stoppedBy(signal)) {
+      log('a press was stopped before it started; nothing was replaced')
+      return cancelledAnswer()
+    }
     log('manual reload: the refresh button was pressed')
     if (turnsRunning()) log('reloading while turns are still running; they keep running')
     if (running || workState.current !== null || (force === false && busy())) return busyAnswer()
@@ -1089,6 +1177,12 @@ function pluginReloader(ctx, config) {
      * answered as unavailable instead, which is what a stopped plugin is.
      */
     if (stopped || hmrService() === null) return plainAnswer('unavailable')
+    if (stoppedBy(signal)) {
+      // The wait is over and nothing has been applied yet: this is the last moment a stopped press
+      // can leave the set exactly as it found it, so it is the one where the check matters.
+      log('a press was stopped while it waited; nothing was replaced')
+      return cancelledAnswer()
+    }
     if (running || workState.current !== null || (force === false && busy())) return busyAnswer()
     if (timer !== null) {
       clearTimeout(timer)
@@ -1163,8 +1257,8 @@ function pluginReloader(ctx, config) {
    * for the life of the record, so a retry after a lost response reads the same end instead of
    * starting a second update under the same id.
    */
-  const runNow = async (force = false, requestId = null) => {
-    if (typeof requestId !== 'string' || requestId === '') return runPress(force, null)
+  const runNow = async (force = false, requestId = null, signal = null) => {
+    if (typeof requestId !== 'string' || requestId === '') return runPress(force, null, signal)
     /**
      * A press already on the record is answered from that record whatever it says: a retry that
      * meets its own run in flight is told it is still applying now, and waiting here would hold the
@@ -1177,7 +1271,7 @@ function pluginReloader(ctx, config) {
       log('the same press arrived again; it joins the run already under way')
       return held.promise
     }
-    const work = runPress(force, requestId).then(
+    const work = runPress(force, requestId, signal).then(
       (answer) => answer,
       (error) => {
         log(`a press ended without an answer: ${error?.message ?? error}`)
@@ -1192,8 +1286,21 @@ function pluginReloader(ctx, config) {
       for (const [key, row] of runningPresses) {
         if (runningPresses.size > MAX_PRESSES * 4 || (typeof row?.at === 'number' && row.at < limit)) runningPresses.delete(key)
       }
+      for (const [key, row] of joined) {
+        if (joined.size > MAX_PRESSES * 4 || (typeof row?.at === 'number' && row.at < limit)) joined.delete(key)
+      }
     }
-    work.then(forget, forget)
+    /**
+     * `applying`, `queued` and `cancelled` are states, not ends. Caching one in the live map would
+     * make a later retry read a word that was true once as if it were the answer, so the entry is
+     * dropped as soon as such an answer settles; a terminal answer stays until its age runs out.
+     */
+    const keep = (answer) => {
+      const ended = answer !== null && typeof answer === 'object' && (answer.status === 'done' || answer.status === 'failed' || answer.status === 'restart')
+      if (!ended && runningPresses.get(requestId)?.promise === work) runningPresses.delete(requestId)
+      forget()
+    }
+    work.then(keep, keep)
     return work
   }
 
@@ -1201,7 +1308,7 @@ function pluginReloader(ctx, config) {
    * The press path never rejects: a rejection here would be unhandled and end the app, and the page
    * would wait for an answer that never comes.
    */
-  const reloadNow = async (force = false, requestId = null) => {
+  const reloadNow = async (force = false, requestId = null, signal = null) => {
     try {
       if (stopped) {
         // A press can arrive while the plugin is being torn down. Nothing would finish that update,
@@ -1209,7 +1316,7 @@ function pluginReloader(ctx, config) {
         log('a press arrived while this plugin was stopping; nothing was replaced')
         return plainAnswer('failed')
       }
-      return await runNow(force, requestId)
+      return await runNow(force, requestId, signal)
     } catch (error) {
       log(`a press could not be answered: ${error?.message ?? error}`)
       return plainAnswer('failed')
@@ -2381,6 +2488,23 @@ function lazyChunkFiles(body) {
   return files
 }
 
+/**
+ * The address one of those chunks is asked at by the document that boots.
+ *
+ * A chunk is served at its own entry's revision and nowhere else, and the address the page asks is
+ * the one the startup list named for that entry: the revision is read back out of the row rather
+ * than taken from the table, because the table's revision is what the next document will boot with
+ * and the chunk has to answer the same document.
+ * @param scriptUrl the startup row the chunk's main script came from.
+ * @param id the entry that owns the chunk.
+ * @param file the chunk's file name, as the body names it.
+ */
+function chunkAddress(scriptUrl, id, file) {
+  const base = `${BUNDLE_ROUTE}/${id}/${file}`
+  const rev = /[?&]rev=([^&#]*)/u.exec(String(scriptUrl ?? ''))
+  return rev === null ? base : `${base}?rev=${rev[1]}`
+}
+
 /** Ids a body reads from the loader's table through `require`, which must already be registered. */
 function requiredIds(body) {
   const ids = new Set()
@@ -2415,7 +2539,7 @@ function parseAsScript(body, name) {
  * @param fetchBody reads one script address and answers a response-like, or null when it cannot.
  * @param rows the startup script addresses, as the next document would request them.
  */
-export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_VERIFY_MS, limits = null) {
+export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_VERIFY_MS, limits = null, fetchChunk = fetchBody) {
   // The bounds are the shipped ones; the argument exists so a test can work them at a size a test
   // run can afford. Anything not a usable number falls back to the shipped bound.
   const maxScriptBytes = Number.isFinite(limits?.maxScriptBytes) ? limits.maxScriptBytes : MAX_SCRIPT_BYTES
@@ -2539,6 +2663,36 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
     const record = { url: item.url, ids: item.ids, registered, required: requiredIds(text), lazy: [...lazyChunkFiles(text)] }
     record.digest = createHash('sha256').update(bytes).digest('hex').slice(0, 16)
     bodies.push(record)
+    /**
+     * A main script that still reads does not prove the chunks it loads later still answer. The
+     * loader asks for each chunk at this entry's revision, and a generation that moved on serves the
+     * document but 404s the chunk: the rebuilt page comes up, its plugin fails to finish, and the
+     * press that allowed it already took the running turns. So each chunk is read here, at the same
+     * address the next document would ask, and a chunk that does not answer holds the press with its
+     * own address in the reason instead of leaving it to the boot.
+     */
+    let chunksRead = 0
+    const owner = item.ids.find((id) => served.has(id))
+    for (const file of record.lazy) {
+      if (owner === undefined || chunksRead >= MAX_CHUNK_READS) break
+      chunksRead += 1
+      const address = chunkAddress(item.url, owner, file)
+      const chunkRead = await withDeadline(() => fetchChunk(address), budgetMs - (Date.now() - began))
+      if (chunkRead.timedOut === true) {
+        return { status: 'blocked', reason: 'slow', detail: `${address} did not answer within the time this check waits` }
+      }
+      if ('error' in chunkRead) {
+        return { status: 'blocked', reason: 'network', detail: `${address}: ${String(chunkRead.error?.message ?? chunkRead.error)}` }
+      }
+      const chunkStatus = chunkRead.value?.status ?? null
+      if (chunkStatus !== 200) {
+        return {
+          status: 'blocked', // ui-copy-ignore
+          reason: 'generation', // ui-copy-ignore
+          detail: `${address} answers ${chunkStatus === null ? 'nothing readable' : String(chunkStatus)}, which this page's copy asks for`,
+        }
+      }
+    }
   }
   /**
    * A body can read a plugin its own document does not list: the set changed after that document was
@@ -2591,7 +2745,7 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
     status: 'ok', // ui-copy-ignore
     reason: 'ok', // ui-copy-ignore
     revision: typeof graph?.rev === 'string' ? graph.rev : null,
-    scripts: bodies.map((body) => ({ url: body.url, digest: body.digest, ids: body.ids })),
+    scripts: bodies.map((body) => ({ url: body.url, digest: body.digest, ids: body.ids, lazy: body.lazy })),
   }
 }
 
@@ -2630,7 +2784,8 @@ export async function verifyStartup(clientModules, rows) {
   } catch (error) {
     return { status: 'blocked', reason: 'list', detail: String(error?.message ?? error) }
   }
-  const answer = await verifyStartupRows(graph, (url) => readStartupScript(clientModules, url), rows)
+  const read = (url) => readStartupScript(clientModules, url)
+  const answer = await verifyStartupRows(graph, read, rows, MAX_VERIFY_MS, null, read)
   /**
    * The update installs a new graph object and never mutates the old one, so a replacement during
    * the read cannot be seen on the object the check started with; it is found by asking the table
@@ -2764,10 +2919,10 @@ const STILL_APPLYING = Object.freeze({ status: 'applying', warnings: [], pending
  * the route into an error.
  * @returns {{ outcome: object, timeRanOut: boolean, work: Promise<unknown> }}
  */
-export async function answerReload(controller, limitMs, requestId = null) {
+export async function answerReload(controller, limitMs, requestId = null, signal = null) {
   let work = null
   try {
-    work = Promise.resolve(controller.reloadNow(false, requestId))
+    work = Promise.resolve(controller.reloadNow(false, requestId, signal))
   } catch (error) {
     log(`a press could not be started: ${error?.message ?? error}`)
     return { outcome: { status: 'failed', warnings: [], pending: [], restartReason: null, failedEntries: [], rebuild: 'unsafe', healthReadable: null }, timeRanOut: false, work: Promise.resolve() }
@@ -2856,6 +3011,7 @@ function agentAnswer(outcome) {
   else if (status === 'applying' || status === 'queued') answer.reason = '还在刷新，稍后再按一次'
   else if (status === 'restart') answer.reason = '有新插件要重启后才能生效'
   else if (status === 'unavailable') answer.reason = '这里没有可以换插件的服务'
+  else if (status === 'cancelled') answer.reason = '已取消，没有开始刷新'
   return answer
 }
 
@@ -2918,7 +3074,7 @@ function registerAgentTool(ctx, controller, config) {
         schema: {
           type: 'object', // ui-copy-ignore
           properties: {
-            status: { type: 'string', enum: ['done', 'failed', 'blocked', 'applying', 'queued', 'restart', 'unavailable'] },
+            status: { type: 'string', enum: ['done', 'failed', 'blocked', 'applying', 'queued', 'restart', 'unavailable', 'cancelled'] },
             reason: { type: 'string' }, // ui-copy-ignore
             rebuild: { type: 'string', enum: ['safe', 'unsafe', 'unknown', 'pending'] },
             healthReadable: { type: 'boolean' },
@@ -2928,14 +3084,16 @@ function registerAgentTool(ctx, controller, config) {
         },
         render: (_args, value) => [{ type: 'text', text: `刷新 · ${value.reason ?? value.status}` }],
       },
-      execute: async (args) => { // ui-copy-ignore
+      execute: async (args, exec) => { // ui-copy-ignore
         try {
           const switches = switchesFor(config ?? {})
           if (switches.agent !== true) return { status: 'blocked', reason: AGENT_REFRESH_OFF, rebuild: 'unknown' }
           if (switches.plugins !== true) return { status: 'blocked', reason: '刷新按钮里的换插件是关的，先在那里打开', rebuild: 'unknown' }
           const raw = args?.requestId
           const requestId = typeof raw === 'string' && raw !== '' && raw.length <= 120 ? raw : null
-          const { outcome } = await answerReload(controller, RELOAD_ANSWER_MS, requestId)
+          // A turn that was stopped must not leave a plugin swap behind: the signal is passed into
+          // the press, which checks it every time it can still do nothing rather than half a swap.
+          const { outcome } = await answerReload(controller, RELOAD_ANSWER_MS, requestId, propOf(exec, 'signal') ?? null)
           return agentAnswer(outcome)
         } catch (error) {
           log(`the refresh tool could not press: ${error?.message ?? error}`)
