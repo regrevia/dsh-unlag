@@ -5,7 +5,7 @@ import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 // Keep the live log readable: this run writes its own.
 process.env.DSH_UNLAG_LOG = join(tmpdir(), 'dsh-unlag-test.log')
 
-const HOME = '/tmp/unlag-test-home'
+const HOME = join(tmpdir(), 'unlag-test-home')
 rmSync(HOME, { recursive: true, force: true })
 mkdirSync(join(HOME, '.dsh', 'plugins', 'demo'), { recursive: true })
 process.env.HOME = HOME
@@ -99,9 +99,11 @@ offCtx.disposeAll()
 
 // 4. A real watcher: .js fires a reload, .txt and node_modules do not.
 const ctx = makeCtx()
-mod.apply(ctx, { autoReload: true, debounce: 10 })
-await sleep(200)
+// Name the root instead of leaning on the default one: the default hangs off
+// homedir(), which reads USERPROFILE on Windows and so never points at the sandbox.
 const root = join(HOME, '.dsh', 'plugins', 'demo')
+mod.apply(ctx, { autoReload: true, debounce: 10, roots: [root] })
+await sleep(200)
 writeFileSync(join(root, 'ignore.txt'), 'x')
 await sleep(120)
 const afterTxt = reloads

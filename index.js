@@ -46,7 +46,20 @@ const MAX_PRESSES = 32
 const MAX_PRESS_AGE_MS = 10 * 60 * 1000
 
 
-const LOG_PATH = join(homedir(), '.dsh', 'unlag-reload.log')
+/**
+ * The home directory the plugin keeps its state under.
+ *
+ * `homedir()` honours HOME on POSIX but reads USERPROFILE on Windows, so a test
+ * that redirects HOME to a sandbox silently kept writing into the real profile
+ * there. Preferring an explicitly set HOME (then USERPROFILE) makes both
+ * platforms agree, and changes nothing when neither is set.
+ */
+function stateHome() {
+  const fromEnv = process.env.HOME || process.env.USERPROFILE
+  return typeof fromEnv === 'string' && fromEnv !== '' ? fromEnv : homedir()
+}
+
+const LOG_PATH = join(stateHome(), '.dsh', 'unlag-reload.log')
 /** Past this many bytes the log starts over: it records recent presses, not an archive. */
 const LOG_MAX_BYTES = 1_000_000 // ui-copy-ignore
 
@@ -102,7 +115,7 @@ const IGNORED_DIR = /^(node_modules|\.git|\.cache|dist|build|coverage|\.next|\.t
  * plugin set. A development session runs its tests far more often than it changes source.
  */
 const TEST_PATH = /(^|\/)(test|tests|__tests__|__mocks__)(\/|$)|[.-](test|spec)\.[cm]?js$/u
-const DEFAULT_ROOTS = [join(homedir(), '.dsh', 'plugins')]
+const DEFAULT_ROOTS = [join(stateHome(), '.dsh', 'plugins')]
 /** A turn that never goes idle must not turn this into an endless poll. */
 const MAX_DEFERRALS = 40
 const MAX_STARTUP_ROWS = 64
@@ -1033,7 +1046,7 @@ function pluginReloader(ctx, config) {
       if (stopped) return
       if (!worthReloading(filename)) return
       fromWatch = true
-      lastChange = String(filename).split('/').pop() ?? ''
+      lastChange = String(filename).split(/[\\/]/u).pop() ?? ''
       if (timer !== null) clearTimeout(timer)
       timer = unrefTimer(setTimeout(() => void flush(), settle))
     } catch (error) {
@@ -3162,7 +3175,7 @@ export async function answerReload(controller, limitMs, requestId = null, signal
  * it was made against: editing that row changes the file it was read from, and the saved choice is
  * then stale rather than silently overriding a person's newer decision.
  */
-const SWITCH_PATH = join(homedir(), '.dsh', 'unlag-switches.json') // ui-copy-ignore
+const SWITCH_PATH = join(stateHome(), '.dsh', 'unlag-switches.json') // ui-copy-ignore
 
 /** The settings row this plugin was started with, written down so a saved choice can tell. */
 function switchFingerprint(settings) {
@@ -3194,7 +3207,7 @@ function switchesFor(config) {
 /** Write the menu choice down. A press that cannot save it still uses it until the app restarts. */
 function saveSwitches(switches) {
   try {
-    mkdirSync(join(homedir(), '.dsh'), { recursive: true })
+    mkdirSync(join(stateHome(), '.dsh'), { recursive: true })
     const body = JSON.stringify({ plugins: switches.plugins, page: switches.page, agent: switches.agent === true, fingerprint: switches.fingerprint })
     const temporary = `${SWITCH_PATH}.${process.pid}.tmp`
     writeFileSync(temporary, body)
