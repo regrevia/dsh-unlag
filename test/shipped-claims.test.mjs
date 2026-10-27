@@ -63,6 +63,11 @@ check(
 check('a startup record that could not be taken does not hold the press', !/could not all be read when it booted/u.test(host) && /the press is checked against the list it reported/u.test(host), 'the boot record refuses an unreadable capture')
 check('it reads the composer before the markup and keeps a file picker as the fallback', /input\[type="file"\]/.test(client) && !/img\[src\^="blob:"\]/.test(client))
 
+check(
+  'a press waits the interval the config gives it, not a number of its own',
+  (host.match(/lastRun \+ minInterval - Date\.now\(\)/g) ?? []).length === 2,
+  'the press path ignores minIntervalMs and always parks the fixed 1.5 s',
+)
 console.log(out.join('\n'))
 console.log(out.every((line) => line.startsWith('PASS')) ? 'ok' : 'failed')
 

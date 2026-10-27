@@ -1,6 +1,6 @@
 # Chaos / soak findings
 
-Scope: `dsh-unlag` v1.11.0 refresh button, read-only probing of `index.js` / `client.js`.
+Scope: `dsh-unlag` refresh button (written against v1.11.0; re-checked on 1.12.0, where F1 is still at `index.js:1044`), read-only probing of `index.js` / `client.js`.
 Everything below was produced by the lab files added with this report; nothing in the plugin was changed.
 
 | file | what it is |

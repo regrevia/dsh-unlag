@@ -1,3 +1,8 @@
+## 1.12.1
+
+- 配置里的按压间隔（`minIntervalMs`）原来只在文件监听那条路上生效，按压仍按写死的 1.5 秒排队：间隔被调小时，页面会先拿到 `applying` / `pending`，而实际一次更新都还没开始。现在两边读同一个间隔。
+- 已知未修（记录在 `reports/chaos-findings.md`）：打包转发没有自己的超时，模块表卡住时 `/plugins/<id>` 会一直挂着。
+
 ## 1.12.0
 
 - Agent 入口之前其实没挂上：读 `ctx.tools` 这种未声明的服务会被 Cordis 直接抛错，异常冒到 `apply()` 外层只留一行日志，于是 `dispose` 没注册、实例没记下、启动时的 bundle 同步也没跑。现在服务探测一律走 `propOf()`（读值在 try 里，连 `typeof` 都不直接作用在 ctx 上），Agent 工具改用 `ctx.inject(['tools'], scope => …)` 动态作用域挂载并接住它的 thenable 拒绝；没有 tools 服务时只写一行说明，按钮照常工作。工具注册放在 `apply()` 收尾最后一步，它失败也不再影响其余收尾。

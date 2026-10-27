@@ -1041,7 +1041,7 @@ function pluginReloader(ctx, config) {
     log('manual reload: the refresh button was pressed')
     if (turnsRunning()) log('reloading while turns are still running; they keep running')
     if (running || workState.current !== null || (force === false && busy())) return busyAnswer()
-    const wait = lastRun + MIN_INTERVAL_MS - Date.now()
+    const wait = lastRun + minInterval - Date.now()
     if (wait > 0)
       /**
        * The gap is a wait, not work: a dispose ends it at once instead of leaving the press to sit
