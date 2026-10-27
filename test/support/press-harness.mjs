@@ -25,13 +25,41 @@ export const rows = [
 export const graph = { rev: 'live', entries: [{ id: '@local/a', rev: 'live' }], batches: [{ url: 'plugins/??@local/a/client.js&rev=live', entries: ['@local/a'], rev: 'live' }] }
 const body = 'window.__ModuleLoader__.load({ id: "@local/a", factory() {} })'
 
+/** Every word a rendered node carries, the way a person reads the line on screen. */
+function words(node) {
+  if (node === null || node === undefined || node === false || node === true) return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(words).join('')
+  if (typeof node === 'object' && 'children' in node) return words(node.children)
+  return ''
+}
+
+/** The raw words a notice can hand over, once the person asked for them. */
+function showDetail(tree) {
+  const panel = (function walk(node) {
+    if (node === null || typeof node !== 'object') return null
+    const style = node.props?.style
+    if (style !== undefined && style?.whiteSpace === 'pre-wrap') return node
+    for (const child of Array.isArray(node.children) ? node.children : []) {
+      const found = walk(child)
+      if (found !== null) return found
+    }
+    return null
+  })(tree)
+  if (panel === null) return null
+  const said = words(panel.children)
+  return said === '' ? null : said
+}
+
 /** Encode a notice the handler showed; the component is re-rendered for every state change. */
 function show(tree) {
   const pill = tree.children?.find((child) => child !== null && typeof child === 'object' && child.props?.role === 'status')
-  return pill === undefined ? null : String(Array.isArray(pill.children) ? pill.children.join('') : pill.children)
+  if (pill === undefined) return null
+  const said = words(pill.children)
+  return said === '' ? null : said
 }
 
-function harnessWith(sourceText, { settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], lateOperation = null, revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, draftImages = 0, draftFiles = 0, conversation = null, sessions = null, language = 'en-US', href, switchAnswer = 'done', stampInStore = false } = {}) {
+function harnessWith(sourceText, { settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], lateOperation = null, revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, draftImages = 0, draftFiles = 0, conversation = null, sessions = null, language = 'en-US', href, switchAnswer = 'done', stampInStore = false, verifyAnswer = { status: 'ok' } } = {}) {
   const requests = []
   const navigations = []
   const current = { rev: graph.rev, code: 'c1' }
@@ -85,7 +113,7 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
       const saved = switchAnswer !== 'unsaved'
       return new Response(JSON.stringify({ status: 'done', plugins: settings.plugins, page: settings.page, agentRefresh: settings.agentRefresh === true, saved }), { status: 200, headers: { 'content-type': 'application/json' } })
     }
-    if (path.startsWith('/dsh-unlag/verify')) return new Response(JSON.stringify({ status: 'ok' }), { status: 200, headers: { 'content-type': 'application/json' } })
+    if (path.startsWith('/dsh-unlag/verify')) return new Response(JSON.stringify(verifyAnswer), { status: 200, headers: { 'content-type': 'application/json' } })
     if (path.startsWith('/dsh-unlag/report')) {
       const next = reportAnswers.shift()
       if (next === undefined) return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
@@ -256,6 +284,23 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
     holdReload: () => { reloadAnswer = new Promise((resolve) => { setImmediate(resolve) }) },
     setReload: (value) => { reloadBody = value },
     notice: () => show(render().tree),
+    /** The words behind the notice, after the person asks for them. */
+    detail: () => showDetail(render().tree),
+    /** Ask for the refusal's own words, the way a press on the notice does. */
+    openDetail: () => {
+      const ask = (function walk(node) {
+        if (node === null || typeof node !== 'object') return null
+        if (typeof node.props?.onClick === 'function' && node.props?.['aria-expanded'] !== undefined) return node.props.onClick
+        for (const child of Array.isArray(node.children) ? node.children : []) {
+          const found = walk(child)
+          if (found !== null) return found
+        }
+        return null
+      })(render().tree)
+      if (ask === null) return null
+      ask({ preventDefault() {} })
+      return showDetail(render().tree)
+    },
     /** Right-click the button the way a person does, and render what the menu then shows. */
     openMenu: async () => {
       const menu = (function walk(node) {

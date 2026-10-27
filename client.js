@@ -4,10 +4,13 @@ window.__ModuleLoader__.load({
     const React = require('react');
     const h = React.createElement;
 
-    const zh = /^zh/i.test(navigator.language || '');
+    // The app's own document language wins: it is what the surrounding interface speaks. A page
+    // that cannot say falls back to the browser locale.
+    const lang = (typeof document !== 'undefined' && document?.documentElement?.lang) || navigator.language || '';
+    const zh = /^zh/i.test(lang);
     const COPY = zh
-      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', off: '两个开关都关着，先在设置里打开一个', replaced: '插件代码已更新，页面保持不动', stayedReplaced: '插件代码已更新，页面没有重建；稍后再按一次', stayed: '页面没有重建；稍后再按一次', done: '插件代码已是最新', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次', unconfirmed: '没读到插件状态，先不重建；稍后再按一次', attachments: '还有没发出去的附件，先发出去再按', unsent: '有一条发送失败的消息还没回到输入框，先把这条重发再按', sending: '消息正在发送，请稍候' , menu: '按下按钮时', switchPlugins: '换掉插件代码', switchPage: '重建页面', switchAgent: 'Agent 可以自己刷新', switchesFailed: '设置没改成，稍后再试', switchesUnsaved: '设置只在这次运行里有效'} // ui-copy-ignore
-      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', off: 'Both switches are off; turn one on in settings', replaced: 'Plugin code updated; the page stayed as it is', stayedReplaced: 'Plugin code updated; the page did not rebuild; press again shortly', stayed: 'The page did not rebuild; press again shortly', done: 'Plugin code is already up to date', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later', unconfirmed: 'Plugin state could not be read, so the page stays; press again shortly', attachments: 'Files are attached but not sent; send them first', unsent: 'A failed message is not back in the input yet; resend it first', sending: 'A message is being sent; wait for it to finish' , menu: 'On press', switchPlugins: 'Replace plugin code', switchPage: 'Rebuild page', switchAgent: 'Agents may refresh on their own', switchesFailed: 'Settings not changed; try again later', switchesUnsaved: 'Settings apply to this run only'};
+      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', off: '两个开关都关着，先在设置里打开一个', replaced: '插件代码已更新，页面保持不动', stayedReplaced: '插件代码已更新，页面没有重建；稍后再按一次', stayed: '页面没有重建；稍后再按一次', done: '插件代码已是最新', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次', unconfirmed: '没读到插件状态，先不重建；稍后再按一次', attachments: '还有没发出去的附件，先发出去再按', unsent: '有一条发送失败的消息还没回到输入框，先把这条重发再按', sending: '消息正在发送，请稍候' , menu: '按下按钮时', switchPlugins: '换掉插件代码', switchPage: '重建页面', switchAgent: 'Agent 可以自己刷新', switchesFailed: '设置没改成，稍后再试', switchesUnsaved: '设置只在这次运行里有效', rawShow: '详情', rawHide: '收起'} // ui-copy-ignore
+      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', off: 'Both switches are off; turn one on in settings', replaced: 'Plugin code updated; the page stayed as it is', stayedReplaced: 'Plugin code updated; the page did not rebuild; press again shortly', stayed: 'The page did not rebuild; press again shortly', done: 'Plugin code is already up to date', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later', unconfirmed: 'Plugin state could not be read, so the page stays; press again shortly', attachments: 'Files are attached but not sent; send them first', unsent: 'A failed message is not back in the input yet; resend it first', sending: 'A message is being sent; wait for it to finish' , menu: 'On press', switchPlugins: 'Replace plugin code', switchPage: 'Rebuild page', switchAgent: 'Agents may refresh on their own', switchesFailed: 'Settings not changed; try again later', switchesUnsaved: 'Settings apply to this run only', rawShow: 'Details', rawHide: 'Hide'};
 
     /**
      * Why the interface was left as it is, in words a person can act on. The checks below record
@@ -24,9 +27,13 @@ window.__ModuleLoader__.load({
     /** The exact state that held the last check, when the reason alone would not tell. */
     let holdDetail = null;
 
+    /** What the refusing check itself said, kept for the press that wants to read it. */
+    let holdRaw = null;
+
     /** Record why a rebuild is held and answer false for the check that asked. */
     function held(reason) {
       holdReason = reason;
+      holdRaw = null;
       return false;
     }
 
@@ -365,6 +372,9 @@ window.__ModuleLoader__.load({
       // whatever that name happens to resolve to.
       const reason = data !== null && typeof data === 'object' && typeof data.reason === 'string' ? data.reason : 'list';
       held(Object.hasOwn(VERIFY_GATES, reason) ? VERIFY_GATES[reason] : 'list');
+      // The app's sentence is kept only when it says more than the key already did.
+      const said = data !== null && typeof data === 'object' && typeof data.detail === 'string' ? data.detail : '';
+      holdRaw = said === '' ? `${reason}` : `${reason}: ${said}`;
       return 'blocked';
     }
 
@@ -1085,6 +1095,38 @@ window.__ModuleLoader__.load({
       whiteSpace: 'nowrap', // ui-copy-ignore
     };
 
+    const PILL_TEXT_STYLE = {
+      whiteSpace: 'nowrap', // ui-copy-ignore
+    };
+
+    const RAW_LINK_STYLE = {
+      marginLeft: 8, // ui-copy-ignore
+      padding: 0, // ui-copy-ignore
+      border: 'none', // ui-copy-ignore
+      background: 'transparent', // ui-copy-ignore
+      color: 'inherit', // ui-copy-ignore
+      font: 'inherit', // ui-copy-ignore
+      textDecoration: 'underline', // ui-copy-ignore
+      cursor: 'pointer', // ui-copy-ignore
+    };
+
+    const RAW_STYLE = {
+      position: 'absolute', // ui-copy-ignore
+      top: 58, // ui-copy-ignore
+      right: 0, // ui-copy-ignore
+      maxWidth: 320, // ui-copy-ignore
+      padding: '6px 8px', // ui-copy-ignore
+      borderRadius: 6,
+      border: '1px solid var(--dsh-color-border, rgba(127,127,127,0.28))',
+      background: 'var(--dsh-color-surface, Canvas)',
+      color: 'var(--dsh-color-text-secondary, inherit)',
+      fontSize: 12, // ui-copy-ignore
+      lineHeight: 1.5,
+      textAlign: 'left', // ui-copy-ignore
+      whiteSpace: 'pre-wrap', // ui-copy-ignore
+      wordBreak: 'break-word', // ui-copy-ignore
+    };
+
     const MENU_STYLE = {
       position: 'absolute', // ui-copy-ignore
       top: 30, // ui-copy-ignore
@@ -1113,6 +1155,9 @@ window.__ModuleLoader__.load({
       const [hover, setHover] = React.useState(false);
       const [pending, setPending] = React.useState(false);
       const [notice, setNotice] = React.useState(null);
+      // The refusing check's own words, shown only when the press is asked for them.
+      const [raw, setRaw] = React.useState(null);
+      const [showRaw, setShowRaw] = React.useState(false);
       const [menu, setMenu] = React.useState(false);
       const [switches, setSwitches] = React.useState({ plugins: true, page: true, agentRefresh: false });
       const wrap = React.useRef(null);
@@ -1130,11 +1175,22 @@ window.__ModuleLoader__.load({
         navTimer.current = null;
       }, []);
 
+      /** One line about the press: the words, and the refusal that produced them if any. */
+      const say = (text, words = null) => {
+        setRaw(words);
+        setShowRaw(false);
+        setNotice(text);
+      };
+
       React.useEffect(() => {
         if (notice === null) return undefined;
-        const timer = setTimeout(() => setNotice(null), 8000);
+        // The raw words need longer on screen than a one-line notice.
+        const timer = setTimeout(() => {
+          setNotice(null);
+          setRaw(null);
+        }, raw === null ? 8000 : 16000); // ui-copy-ignore
         return () => clearTimeout(timer);
-      }, [notice]);
+      }, [notice, raw]);
 
       // A menu left open over a page that is about to be rebuilt would name switches that no
       // longer describe the press that follows it.
@@ -1166,12 +1222,12 @@ window.__ModuleLoader__.load({
       const openMenu = async (event) => {
         event.preventDefault();
         if (pressInFlight || pending) {
-          setNotice(COPY.applying);
+          say(COPY.applying);
           return;
         }
         const settings = await readSettings();
         if (settings === null) {
-          setNotice(noticeFor('blocked'));
+          say(noticeFor('blocked'));
           return;
         }
         setSwitches({ plugins: settings.plugins, page: settings.page, agentRefresh: settings.agentRefresh });
@@ -1196,10 +1252,10 @@ window.__ModuleLoader__.load({
           const data = await response.json();
           if (!response.ok || data?.status !== 'done') throw new Error('not saved');
           setSwitches({ plugins: data.plugins === true, page: data.page === true, agentRefresh: data.agentRefresh === true });
-          if (data.saved !== true) setNotice(COPY.switchesUnsaved);
+          if (data.saved !== true) say(COPY.switchesUnsaved);
         } catch {
           setSwitches(before);
-          setNotice(COPY.switchesFailed);
+          say(COPY.switchesFailed);
         } finally {
           savingRef.current = false;
         }
@@ -1215,28 +1271,28 @@ window.__ModuleLoader__.load({
       const onClick = async () => {
         // A press already running is joined, and the press that joined says so instead of nothing.
         if (pressInFlight) {
-          setNotice(COPY.applying);
+          say(COPY.applying);
           return;
         }
         if (pending) {
-          setNotice(COPY.applying);
+          say(COPY.applying);
           return;
         }
         // A press the page already answered is not answered twice. Saying so beats a dead button.
         if (Date.now() - stampRead() < 3000) { // ui-copy-ignore
-          setNotice(COPY.applying);
+          say(COPY.applying);
           return;
         }
         pressInFlight = true;
         setMenu(false);
         setPending(true);
-        setNotice(null);
+        say(null);
         let navigated = false;
         // Read by the fallback below, which runs after the try block's own scope is gone.
         let replaced = false;
         const stop = (key, applied = false) => {
           setPending(false);
-          setNotice(noticeFor(key, applied));
+          say(noticeFor(key, applied), key === 'blocked' ? holdRaw : null);
         };
         try {
           const settings = await readSettings();
@@ -1387,7 +1443,7 @@ window.__ModuleLoader__.load({
               setPending(false);
               // Only a press that really replaced the plugins may say so: a page-only press that
               // held the navigation changed no code.
-              setNotice(replaced ? COPY.stayedReplaced : COPY.stayed);
+              say(replaced ? COPY.stayedReplaced : COPY.stayed);
             }, 6000); // ui-copy-ignore
           }
         }
@@ -1430,7 +1486,20 @@ window.__ModuleLoader__.load({
         h('path', { d: 'M13 8a5 5 0 1 1-1.9-3.94' }),
         h('path', { d: 'M13 2.7v3.6H9.4' }))),
         menuPanel,
-        notice === null ? null : h('span', { role: 'status', 'aria-live': 'polite', style: PILL_STYLE }, notice));
+        notice === null ? null : h('span', { role: 'status', 'aria-live': 'polite', style: PILL_STYLE },
+          h('span', { style: PILL_TEXT_STYLE }, notice),
+          // The sentence says what to do; the words behind it are one press away for the person who
+          // wants to know why the press was refused at all.
+          raw === null ? null : h('button', {
+            type: 'button', // ui-copy-ignore
+            style: RAW_LINK_STYLE,
+            'aria-expanded': showRaw,
+            onClick: (event) => {
+              event.preventDefault();
+              setShowRaw((open) => !open);
+            },
+          }, showRaw ? COPY.rawHide : COPY.rawShow)),
+        raw === null || !showRaw ? null : h('span', { style: RAW_STYLE }, raw));
     }
 
     /**

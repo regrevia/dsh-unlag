@@ -430,6 +430,15 @@ export async function stablePage(options = {}) {
     }
   }
 
+  /** Every word a rendered node carries, the way a person reads the line on screen. */
+  const words = (node) => {
+    if (node === null || node === undefined || node === false || node === true) return ''
+    if (typeof node === 'string' || typeof node === 'number') return String(node)
+    if (Array.isArray(node)) return node.map(words).join('')
+    if (typeof node === 'object' && 'children' in node) return words(node.children)
+    return ''
+  }
+
   const find = (element, predicate) => {
     if (element === null || typeof element !== 'object') return null
     if (predicate(element)) return element
@@ -499,7 +508,8 @@ export async function stablePage(options = {}) {
     notice: () => {
       const pill = find(currentTree(), (element) => element.props?.role === 'status')
       if (pill === null) return null
-      return String(Array.isArray(pill.children) ? pill.children.join('') : pill.children)
+      const said = words(pill.children)
+      return said === '' ? null : said
     },
     menu: () => find(currentTree(), (element) => element.props?.role === 'group'),
     rendered: () => currentTree() !== null,
