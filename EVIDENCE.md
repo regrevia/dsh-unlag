@@ -54,6 +54,7 @@ npm run live-smoke           # 对着运行中的 App 复核；输出里 verdict
 | 计时器不残留 | `test/stability-host-timers.test.mjs`：每次按压后无残留 timeout，dispose 清空；soak 里 `timers 0→23→0` | `node test/stability-host-timers.test.mjs` |
 | 一次按压只落一个结果 | `test/stability-host-concurrency.test.mjs`、`test/chaos-core.test.mjs` | 两个文件都可单跑 |
 | 页面不会有第二个按钮、不会在不该关的时候留着菜单 | `test/stability-client-mount.test.mjs`（19）、`test/stability-client-menu.test.mjs`（21）、`test/stability-client-button.test.mjs`（22）、`test/stability-client-guard.test.mjs`（23） | 四个文件都可单跑 |
+| npm 渠道 | `dsh-unlag@1.12.3` 已发布，registry `dist-tags.latest = 1.12.3`（158 个版本，最新三个 1.10.1 / 1.11.0 / 1.12.3）；发布前 `--dry-run` 文件清单 11 个、85.3 kB | `curl -s https://registry.npmjs.org/dsh-unlag \| python3 -c "import json,sys; print(json.load(sys.stdin)['dist-tags'])"` |
 | 每一种回答下按钮都能再按 | `test/stability-client-health.test.mjs`：10 种替换回答（含没有回答、health 读不到、要重启）×「不抛、导航次数与回答一致、只剩一个可按按钮、提示一行」；再加 3 个种子 × 60 次交互（按、连按、改回答、开菜单、推进时钟）后仍是一颗可按按钮，卸载后监听器与定时器归零 | `node test/stability-client-health.test.mjs` |
 | 设置文件读不完也不卡 App | `test/switches-route.test.mjs` 末尾：把 `unlag-switches.json` 换成管道，`/state` 在 1.5 秒内照常作答（`saved:false`，用设置行的值） | `node test/switches-route.test.mjs` |
 | 打包路由不会吊住页面 | `test/bundle-shim.test.mjs` 新增两条：路由拿着请求不回话时页面在 60 ms 内拿到 503，日志写出「the route that owns bundles did not answer in time」 | `node test/bundle-shim.test.mjs` |
