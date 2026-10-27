@@ -71,8 +71,10 @@ function fakeRes() {
 }
 
 /** Mount the plugin over a stand-in module table and hand back the wrapped route. */
-function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.get(path), keep = null, late = false, shape = 'handler', streams404 = false, callback404 = false, breaksMidWrite = false, hang = false, delay = 0, hmr = null } = {}) {
+function mount({ graph = CURRENT, graphThrows = false, serve = (path) => bodies.get(path), keep = null, late = false, shape = 'handler', streams404 = false, callback404 = false, breaksMidWrite = false, hang = false, hangOriginal = false, delay = 0, hmr = null } = {}) {
   const original = async (req, res) => {
+    // A route that takes the question and never answers is the last unbounded wait in this path.
+    if (hangOriginal) return new Promise(() => {})
     // A HEAD answer carries the status and headers of a GET and no bytes, the way the real server
     // answers one.
     const head = String(req?.method ?? 'GET').toUpperCase() === 'HEAD'
@@ -547,6 +549,24 @@ check('and the table answer stands', frozenRes.status === 404 && frozenRes.body 
 check(
   'and the log says why the 404 was not held',
   readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('cannot hold a 404 for a moment'),
+  'the log does not name it',
+)
+
+// --- a route that takes the question and never answers -----------------------------------------
+// Bounding the module table is not enough: the route that owns bundles can itself stop answering,
+// and the document waits on that script. The page gets a status instead of a held connection.
+process.env.DSH_UNLAG_ROUTE_TIMEOUT_MS = '60'
+const silentRoute = mount({ hangOriginal: true })
+const unanswered = await call(silentRoute.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js&rev=ar2' })
+delete process.env.DSH_UNLAG_ROUTE_TIMEOUT_MS
+check(
+  'a route that never answers is answered instead of held',
+  unanswered.status === 503 && unanswered.body === 'the plugin set is not answering',
+  `${unanswered.status} ${JSON.stringify(unanswered.body)}`,
+)
+check(
+  'and the log says the route was silent',
+  readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('the route that owns bundles did not answer in time'),
   'the log does not name it',
 )
 

@@ -54,6 +54,7 @@ npm run live-smoke           # 对着运行中的 App 复核；输出里 verdict
 | 计时器不残留 | `test/stability-host-timers.test.mjs`：每次按压后无残留 timeout，dispose 清空；soak 里 `timers 0→23→0` | `node test/stability-host-timers.test.mjs` |
 | 一次按压只落一个结果 | `test/stability-host-concurrency.test.mjs`、`test/chaos-core.test.mjs` | 两个文件都可单跑 |
 | 页面不会有第二个按钮、不会在不该关的时候留着菜单 | `test/stability-client-mount.test.mjs`（19）、`test/stability-client-menu.test.mjs`（21）、`test/stability-client-button.test.mjs`（22）、`test/stability-client-guard.test.mjs`（23） | 四个文件都可单跑 |
+| 打包路由不会吊住页面 | `test/bundle-shim.test.mjs` 新增两条：路由拿着请求不回话时页面在 60 ms 内拿到 503，日志写出「the route that owns bundles did not answer in time」 | `node test/bundle-shim.test.mjs` |
 | 1.12.1 全量 | 46 个测试文件全过，0 FAIL；`npm run audit` 0 错；三条 lint 0 error | `npm test` |
 
 已知未修：打包转发（`/plugins/<id>`）没有自己的超时，模块表卡住时会一直挂着；`applying` 一个词同时表示「槽位被占」和「自己的更新超时未回」。见 `reports/chaos-findings.md`。

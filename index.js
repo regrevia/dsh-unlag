@@ -2143,12 +2143,35 @@ function serveBundlesAtCurrentRevision(ctx) {
           log(`cannot hold a 404 for a moment: ${oneLine(error?.message ?? error)}`)
         }
       }
+      /**
+       * The route that owns bundles can also take the question and never answer: a table that
+       * stopped resolving mid-swap, a handler waiting on something that will not come. The document
+       * waits on this script, so the wait is bounded and the page is told the set is not answering
+       * instead of holding a connection open until the app goes away.
+       */
+      let waitedOut = false
+      let routeTimer = null
       try {
-        await Promise.resolve(original(req, res))
+        const answered = Promise.resolve(original(req, res))
+        // Whichever side loses the race must still be observed, or its rejection ends the process.
+        answered.catch(() => {})
+        const routeLimit = Number(process.env.DSH_UNLAG_ROUTE_TIMEOUT_MS ?? '') > 0 ? Number(process.env.DSH_UNLAG_ROUTE_TIMEOUT_MS) : 8000
+        await Promise.race([
+          answered,
+          new Promise((resolve) => {
+            routeTimer = setTimeout(() => {
+              waitedOut = true
+              resolve()
+            }, routeLimit)
+            if (typeof routeTimer?.unref === 'function') routeTimer.unref()
+          }),
+        ])
+        if (waitedOut === true) log('the route that owns bundles did not answer in time; the page is told so')
       } catch (error) {
         failed = true
         log(`cannot answer a bundle request: ${error?.message ?? error}`)
       } finally {
+        if (routeTimer !== null) clearTimeout(routeTimer)
         try {
           if (canHold) {
             res.writeHead = realWriteHead
@@ -2159,10 +2182,22 @@ function serveBundlesAtCurrentRevision(ctx) {
           /* the response object owns its own shape */
         }
       }
-      return { held, body, failed }
+      if (waitedOut === true) {
+        try {
+          if (res.headersSent !== true) {
+            realWriteHead.call(res, 503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+            realEnd.call(res, 'the plugin set is not answering')
+          } else if (res.writableEnded !== true && res.destroyed !== true) realEnd.call(res)
+        } catch {
+          /* the response is gone; nothing left to answer */
+        }
+      }
+      return { held, body, failed: failed || waitedOut, waitedOut }
     }
     // The table's own answer first: it still holds the generation this page booted from.
     let outcome = await ask(originalUrl)
+    // A bounded-out first answer already answered the page; retrying would write over it.
+    if (outcome.waitedOut === true) return undefined
     if (outcome.held !== null && retargeted !== null) outcome = await ask(retargeted)
     if (outcome.held === null) {
       /**

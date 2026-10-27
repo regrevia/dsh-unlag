@@ -49,7 +49,7 @@ const wait = lastRun + MIN_INTERVAL_MS - Date.now()   // MIN_INTERVAL_MS = 1500 
 
 Minimal repro (`seed 1`, lab): `apply(ctx, { minIntervalMs: 0 })`, two presses 30 ms apart with `DSH_UNLAG_ANSWER_MS=20`; the second is answered `applying` and its update starts ~1.47 s later, i.e. the spacing, not the work, decided the answer. Fix (not applied): read the configured value on the press path too, or pass the answer deadline into the wait so the answer stops claiming pending work that has not begun.
 
-### F2 — a hung module table parks the wrapped bundle route with no deadline (P2)
+### F2（1.12.2 已修） — a hung module table parks the wrapped bundle route with no deadline (P2)
 
 `index.js:2207-2240` (`ensureBundleShim`): the wrapper `await`s the previously registered handler. If the module table stops answering, `/plugins/<id>` never resolves — the browser's script request hangs forever, the page never gets a `404`, a `503`, or a retry. The lab bounds such requests at 400 ms and observes `{hung: true}`; the plugin has no own bound.
 
