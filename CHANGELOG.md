@@ -1,3 +1,12 @@
+## 1.12.0
+
+- Agent 入口之前其实没挂上：读 `ctx.tools` 这种未声明的服务会被 Cordis 直接抛错，异常冒到 `apply()` 外层只留一行日志，于是 `dispose` 没注册、实例没记下、启动时的 bundle 同步也没跑。现在服务探测一律走 `propOf()`（读值在 try 里，连 `typeof` 都不直接作用在 ctx 上），Agent 工具改用 `ctx.inject(['tools'], scope => …)` 动态作用域挂载并接住它的 thenable 拒绝；没有 tools 服务时只写一行说明，按钮照常工作。工具注册放在 `apply()` 收尾最后一步，它失败也不再影响其余收尾。
+- 20 秒的重载截止计时器原来每次按压都会留下一个没清的定时器；按压最小间隔的等待句柄也没有人持有，卸载时那次按压永远不落定。现在截止计时器在 `finally` 里清、等待句柄由 `stop()` 统一结算，重试的等待 `unref()` 掉，不再把进程吊着。
+- 同一 tick 里连按、以及并发进来的同一次按压，现在只跑一次并共用一个结果；服务晚到、注入作用域重放时工具不会注册第二份。
+- 页面侧：读失败消息的记录表抛错时，原来当成「没有失败消息」放行，会重建掉一条还没回到输入框的消息。现在读不到与「有记录且未还原」同样按住不放。
+- README 对齐界面：右键菜单是四行，第四行的名字就是界面上的「Agent 可以自己刷新」。
+- 新增 `test/stability-host-timers.test.mjs`（计时器/句柄卫生）、`test/stability-host-concurrency.test.mjs`（并发按压与请求去重）、`test/stability-host-agent-tool.test.mjs`（工具注入的六种上下文：无服务、服务在、服务晚到、属性读抛错、routes 抛错、inject 拒绝）、`test/stability-client-guard.test.mjs`（失败消息保护矩阵）、`test/stability-client-button.test.mjs`（按钮状态机：连点、合流、校验重试、永不 disabled、卸载清定时器）。
+
 ## 1.11.0
 
 - 失败消息的判据改成「这条失败消息有没有回到输入框并保存」，不再看输入框空不空。清空旁边那条草稿不再能绕过保护；已经恢复并保存好的，也不会再被误拦说没保存。

@@ -471,6 +471,8 @@ function pluginReloader(ctx, config) {
 
   let timer = null
   let running = false
+  /** The press waiting out the minimum interval, so a dispose can end that wait instead of leaving it. */
+  let pressWait = null
   /**
    * The queue request this plugin is still waiting on, so a timeout is not reported as a cancel.
    * It lives outside this closure: replacing this plugin builds a new closure, and
@@ -686,11 +688,12 @@ function pluginReloader(ctx, config) {
         ? service.runExclusive(inside)
         : context.exit(() => service.runExclusive(inside))
     }
+    let deadline = null
     const abandoned = () =>
       new Promise((_resolve, reject) => {
         const limit = Number(process.env.DSH_UNLAG_TIMEOUT_MS ?? '') || RELOAD_TIMEOUT_MS
-        const timer = setTimeout(() => reject(new Error('the plugin update did not finish in time')), limit)
-        timer.unref?.()
+        deadline = setTimeout(() => reject(new Error('the plugin update did not finish in time')), limit)
+        deadline.unref?.()
       })
     /**
      * The queue request itself keeps running after this plugin stops waiting for it. It is tracked
@@ -724,7 +727,14 @@ function pluginReloader(ctx, config) {
         if (message.includes('nested')) {
           if (attempt >= 9) throw error
           const step = Number(process.env.DSH_UNLAG_RETRY_MS ?? '') || 250
-          await new Promise((resolve) => setTimeout(resolve, step * (attempt + 1)))
+          /**
+           * This wait is another reload holding the queue, not work of this plugin's own: it may not
+           * keep the app awake by itself. The queue request around it is what the page waits on.
+           */
+          await new Promise((resolve) => {
+            const handle = setTimeout(resolve, step * (attempt + 1))
+            handle.unref?.()
+          })
           continue
         }
         throw error
@@ -808,6 +818,16 @@ function pluginReloader(ctx, config) {
     } catch (error) {
       error.stillRunning = workState.current !== null
       throw error
+    } finally {
+      /**
+       * The deadline guards this wait and nothing else: once the work has settled there is nothing
+       * left for it to time out, and a press that finished must not leave a timer armed for the rest
+       * of the limit — one per press, all of them watching an update that is already over.
+       */
+      if (deadline !== null) {
+        clearTimeout(deadline)
+        deadline = null
+      }
     }
   }
 
@@ -1022,7 +1042,20 @@ function pluginReloader(ctx, config) {
     if (turnsRunning()) log('reloading while turns are still running; they keep running')
     if (running || workState.current !== null || (force === false && busy())) return busyAnswer()
     const wait = lastRun + MIN_INTERVAL_MS - Date.now()
-    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(wait, 2000)))
+    if (wait > 0)
+      /**
+       * The gap is a wait, not work: a dispose ends it at once instead of leaving the press to sit
+       * out the whole interval and then answer that the plugin is gone. Nothing has been applied
+       * when this is cleared, so resolving here is the honest end of a press that will not run.
+       */
+      await new Promise((resolve) => {
+        const settle = () => {
+          if (pressWait !== null && pressWait.settle === settle) pressWait = null
+          resolve()
+        }
+        const handle = setTimeout(settle, Math.min(wait, 2000))
+        pressWait = { settle, timer: handle }
+      })
     /**
      * The wait can outlive the plugin: if the app stopped it during that time, this closure's
      * context is gone and starting an update through it would leave half a set behind. The press is
@@ -1191,6 +1224,12 @@ function pluginReloader(ctx, config) {
     queued = null
     if (timer !== null) clearTimeout(timer)
     timer = null
+    if (pressWait !== null) {
+      const waiting = pressWait
+      pressWait = null
+      clearTimeout(waiting.timer)
+      waiting.settle()
+    }
   }
 
   return { reloadNow, startWatching, available, stop, operation: () => operation.state }
@@ -2760,12 +2799,46 @@ function agentAnswer(outcome) {
  * only when the settings row says so, and it goes through the same press, the same switches and the
  * same safety gate as the button: the process is never restarted and no service is ever started.
  */
-function registerAgentTool(ctx, controller, config) {
-  const tools = ctx?.tools ?? (typeof ctx?.get === 'function' ? ctx.get('tools') : undefined)
-  if (tools === undefined || tools === null || typeof tools.register !== 'function') return false
-  if (typeof ctx.effect !== 'function') return false
+/**
+ * One property read that a context which throws on undeclared reads cannot turn into a failure.
+ * Even `typeof ctx.inject` reads the property, and the read itself is what throws in Cordis.
+ */
+function propOf(target, name) {
   try {
-    ctx.effect(() => tools.register({
+    return target?.[name]
+  } catch {
+    return undefined
+  }
+}
+
+function toolsOf(ctx) {
+  /**
+   * A Cordis context refuses a plain property read of a service this plugin did not declare, by
+   * throwing. That refusal is not an error worth ending a start-up for: the tool is an extra, and
+   * the same context answers the same question through reflect() and get().
+   */
+  const direct = propOf(ctx, 'tools')
+  if (direct !== undefined && direct !== null) return direct
+  const reflect = propOf(ctx, 'reflect')
+  try {
+    const reflected = typeof reflect?.get === 'function' ? reflect.get('tools', false) : undefined
+    if (reflected !== undefined && reflected !== null) return reflected
+  } catch {}
+  const get = propOf(ctx, 'get')
+  try {
+    const gotten = typeof get === 'function' ? get.call(ctx, 'tools') : undefined
+    if (gotten !== undefined && gotten !== null) return gotten
+  } catch {}
+  return null
+}
+
+function registerAgentTool(ctx, controller, config) {
+  const tools = toolsOf(ctx)
+  if (tools === null || typeof tools.register !== 'function') return false
+  const effect = propOf(ctx, 'effect')
+  if (typeof effect !== 'function') return false
+  try {
+    effect.call(ctx, () => tools.register({
       name: 'unlag_refresh', // ui-copy-ignore
       description: '按一下刷新按钮；关闭时说明原因',
       parameters: {
@@ -3253,8 +3326,19 @@ export function apply(ctx, config) {
     } else {
       log('auto reload is off: no plugin source is watched')
     }
-    if (typeof ctx.on === 'function') {
-      ctx.on('internal/service', (service) => {
+    /** A context that throws on every undeclared read must not be able to refuse a listener. */
+    const listen = (event, handler) => {
+      const on = propOf(ctx, 'on')
+      if (typeof on !== 'function') return false
+      try {
+        on.call(ctx, event, handler)
+        return true
+      } catch (error) {
+        log(`cannot listen for ${event}: ${error?.message ?? error}`)
+        return false
+      }
+    }
+    if (listen('internal/service', (service) => {
         // A service event is dispatched by the app itself; an exception here would travel back into
         // whatever asked, so each answer is kept to its own line.
         try {
@@ -3263,18 +3347,32 @@ export function apply(ctx, config) {
         } catch (error) {
           log(`cannot follow the ${oneLine(service, 40)} service: ${error?.message ?? error}`)
         }
-      })
+      })) {
+      // The listener above is optional; its failure is already in the log.
     }
-    globalThis[ROUTES_KEY] = serveButton(ctx, controller, config ?? {})
-    registerAgentTool(ctx, controller, config ?? {})
+    /**
+     * One start-up step whose failure is said in a line and does not keep the rest of the start-up
+     * from finishing. A half-applied start-up is worse than a missing extra: routes that were
+     * never recorded are never closed, and an instance that was never set makes the next copy
+     * believe it owns nothing.
+     */
+    const step = (what, work) => {
+      try {
+        return work()
+      } catch (error) {
+        log(`cannot ${what}: ${error?.message ?? error}`)
+        return undefined
+      }
+    }
+    globalThis[ROUTES_KEY] = step('serve the button routes', () => serveButton(ctx, controller, config ?? {})) ?? null
     own.routes = globalThis[ROUTES_KEY]
-    syncBundles()
+    step('prepare the served bundles', syncBundles)
     globalThis[INSTANCE_KEY] = instance
     // The wrap made during startup was stamped with the copy that was current a line ago; it is
     // this instance's now, and the next reload must be able to reuse it instead of wrapping again.
     if (own.shim !== null && own.shim !== undefined) own.shim.owner = instance
 
-    ctx.on('dispose', () => {
+    listen('dispose', () => {
       /**
        * A dispose that lands after the next apply belongs to an instance that no longer owns
        * anything; tearing the routes or the shim down here would break the newer one, and a page
@@ -3299,6 +3397,57 @@ export function apply(ctx, config) {
       if (globalThis[SHIM_KEY] === own.shim) globalThis[SHIM_KEY] = null
       globalThis[INSTANCE_KEY] = null
     })
+
+    /**
+     * The refresh tool is offered last, because it is the one start-up step that needs a service
+     * the host may not have or may not have declared. It is also offered through a dynamic inject ui-copy-ignore
+     * scope rather than a static dependency: a static one would keep the whole plugin, button
+     * included, from loading on a host without a tools service. A missing service is said once and ui-copy-ignore
+     * changes nothing else this copy started.
+     */
+    let toolService = null
+    let toolMissingSaid = false
+    const offerTool = (scope) => {
+      try {
+        const tools = toolsOf(scope)
+        if (tools === null) {
+          if (toolMissingSaid === false) {
+            toolMissingSaid = true
+            log('no tools service: the refresh tool is not offered to the agent; the button still applies changes')
+          }
+          return
+        }
+        // The inject scope replays whenever the service is registered again; the tool is registered once.
+        if (toolService === tools) return
+        toolService = tools
+        registerAgentTool(scope, controller, config ?? {})
+      } catch (error) {
+        log(`cannot offer the refresh tool: ${error?.message ?? error}`)
+      }
+    }
+    if (toolsOf(ctx) === null) {
+      // Said here as well as in the scope: on a host whose service exists only later the inject ui-copy-ignore
+      // scope does not run yet, and a reader of the log must still see why no tool was offered.
+      toolMissingSaid = true
+      log('no tools service: the refresh tool is not offered to the agent; the button still applies changes')
+    }
+    const inject = propOf(ctx, 'inject')
+    if (typeof inject === 'function') {
+      try {
+        const fiber = inject.call(ctx, ['tools'], offerTool)
+        // The inject scope is a thenable that replays with the service and can reject when the
+        // service goes away. A rejection that lands after apply() returned would otherwise be an
+        // unhandled rejection for the whole host, so it is said in a line and dropped. ui-copy-ignore
+        Promise.resolve(fiber).catch((error) => {
+          log(`cannot offer the refresh tool: ${error?.message ?? error}`)
+        })
+      } catch (error) {
+        log(`cannot offer the refresh tool: ${error?.message ?? error}`)
+        offerTool(ctx)
+      }
+    } else {
+      offerTool(ctx)
+    }
   } catch (error) {
     log(`plugin reload did not start: ${error?.message ?? error}`)
   }

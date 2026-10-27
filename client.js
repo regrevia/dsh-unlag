@@ -903,11 +903,17 @@ window.__ModuleLoader__.load({
      * composer nor the draft store — clearing newer words later does not bring it back — so it holds
      * the rebuild whatever the composer currently shows.
      * @param shell - the session composer.
-     * @returns the failed records, whether a restore accounts for them, and whether one holds a file.
+     * @returns the failed records, whether a restore accounts for them, whether one holds a file,
+     *   and whether the record map could be read at all.
      */
     function failedSendDraft(shell) {
       const records = [];
       let attachments = false;
+      /**
+       * A record map that throws is not a map with no failures. Answering it as empty let the press
+       * rebuild over a message the app still holds, so the read is reported instead of swallowed.
+       */
+      let unreadable = false;
       try {
         for (const record of shell?.failedDetached?.values?.() ?? []) {
           records.push(record);
@@ -916,7 +922,7 @@ window.__ModuleLoader__.load({
           if ((record?.attachmentIds?.length ?? 0) > 0) attachments = true;
         }
       } catch {
-        // A record map that cannot be read is answered as unrestored by the caller.
+        unreadable = true;
       }
       const draftRev = shell?.snapshot?.draftRev;
       const restoreRev = shell?.failedRestoreRev;
@@ -926,7 +932,7 @@ window.__ModuleLoader__.load({
         && typeof restoreRev === 'number'
         && typeof draftRev === 'number'
         && restoreRev === draftRev;
-      return { records, attachments, restored };
+      return { records, attachments, restored, unreadable };
     }
 
     /**
@@ -989,7 +995,9 @@ window.__ModuleLoader__.load({
               // composer happens to show, is what keeps both a message the person cannot see and a
               // message the app already saved from reading alike.
               const failed = failedSendDraft(shell);
-              if (failed.records.length > 0 && !failed.restored) {
+              // An unreadable book is answered as a waiting message: the press may not assume the
+              // failure went away because the answer never arrived.
+              if ((failed.unreadable || failed.records.length > 0) && !failed.restored) {
                 if (failed.attachments) return 'draft';
                 return 'unsent';
               }
@@ -1015,14 +1023,6 @@ window.__ModuleLoader__.load({
       } catch {
         return null;
       }
-    }
-
-    /**
-     * Whether a draft still holds something unsent, for the caller that only needs the decision.
-     * @returns true when the composer still holds something that was never sent.
-     */
-    function draftHasAttachments() {
-      return draftAttachmentReason() !== null;
     }
 
     /**
@@ -1115,8 +1115,20 @@ window.__ModuleLoader__.load({
       const [notice, setNotice] = React.useState(null);
       const [menu, setMenu] = React.useState(false);
       const [switches, setSwitches] = React.useState({ plugins: true, page: true, agentRefresh: false });
-      const [saving, setSaving] = React.useState(false);
       const wrap = React.useRef(null);
+
+      /**
+       * The guard that keeps two flips of one switch to one save, and the timer that would speak to
+       * a page that already went away. Both outlive the render that started them, so both are refs:
+       * the state below is a render behind when a second click arrives in the same tick.
+       */
+      const savingRef = React.useRef(false);
+      const navTimer = React.useRef(null);
+
+      React.useEffect(() => () => {
+        if (navTimer.current !== null) clearTimeout(navTimer.current);
+        navTimer.current = null;
+      }, []);
 
       React.useEffect(() => {
         if (notice === null) return undefined;
@@ -1129,7 +1141,7 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         if (!menu) return undefined;
         const close = (event) => {
-          if (wrap.current !== null && wrap.current.contains?.(event.target)) return;
+          if (wrap.current !== null && wrap.current.contains?.(event?.target)) return;
           setMenu(false);
         };
         const escape = (event) => {
@@ -1137,9 +1149,13 @@ window.__ModuleLoader__.load({
         };
         document.addEventListener('mousedown', close);
         document.addEventListener('keydown', escape);
+        // Leaving the window is the same intent as clicking elsewhere: the menu is not something
+        // to come back to open, and a blur handler that stays would keep the row alive for nothing.
+        window.addEventListener('blur', close);
         return () => {
           document.removeEventListener('mousedown', close);
           document.removeEventListener('keydown', escape);
+          window.removeEventListener('blur', close);
         };
       }, [menu]);
 
@@ -1164,11 +1180,11 @@ window.__ModuleLoader__.load({
 
       /** Save one switch, and put it back if the app did not take it. */
       const toggleSwitch = async (key) => {
-        if (saving) return;
+        if (savingRef.current) return;
+        savingRef.current = true;
         const before = switches;
         const next = { ...before, [key]: !before[key] };
         setSwitches(next);
-        setSaving(true);
         try {
           const response = await fetch(`${HOST_BASE}/switches`, {
             method: 'POST', // ui-copy-ignore
@@ -1185,7 +1201,7 @@ window.__ModuleLoader__.load({
           setSwitches(before);
           setNotice(COPY.switchesFailed);
         } finally {
-          setSaving(false);
+          savingRef.current = false;
         }
       };
 
@@ -1360,7 +1376,8 @@ window.__ModuleLoader__.load({
           // The document goes away on a rebuild, so the button only needs re-enabling when it does not.
           if (!navigated) setPending(false);
           else {
-            setTimeout(() => {
+            navTimer.current = setTimeout(() => {
+              navTimer.current = null;
               // Still here after asking for a rebuild: the page held the navigation. Say what
               // happened and take the press back, so the button is never left unresponsive.
               report('held', 'navigation');
@@ -1423,6 +1440,10 @@ window.__ModuleLoader__.load({
      */
     /** The page's own plugin context, kept so the composer's state can be read at press time. */
     let appContext = null;
+    // The context this plugin already put its row into. The host can replay an injection (a remount ui-copy-ignore
+    // of the same plugin, a reload that keeps the context), and registering the row twice puts a ui-copy-ignore
+    // second button in it with its own listeners and its own boot report.
+    let appliedCtx = null;
 
     const PROBE = {
       prepareInterface,
@@ -1442,6 +1463,8 @@ window.__ModuleLoader__.load({
       ...(window.__DSH_UNLAG_PROBE__ === true ? { probe: PROBE } : {}), // ui-copy-ignore
       apply(ctx) {
         appContext = ctx;
+        if (ctx === appliedCtx) return;
+        appliedCtx = ctx;
         if (!desktop) return;
         /**
          * The pacing stamp only paces presses inside one document. A document that is mounting now
