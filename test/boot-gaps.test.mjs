@@ -27,8 +27,8 @@ const line = (text) => client.split('\n').find((row) => row.includes(text)) ?? '
 check('the boot capture keeps the status a script answered with', /unreadable: true, code: Number\(response\?\.status/u.test(host))
 check('a missing script is written into the log', /one startup script this page asked for is not served now/u.test(host))
 
-const zhLine = line('这一页有插件没加载')
-const enLine = line('plugin code is missing from this page')
+const zhLine = line('缺插件，重启应用')
+const enLine = line('a plugin is missing, so reopen the app')
 check('the notice exists in both languages', zhLine !== '' && enLine !== '')
 check('the notice names the remedy', /重启应用/u.test(zhLine) && /reopen the app/u.test(enLine))
 check('the notice is one short sentence', zhLine.length < 200 && enLine.length < 200, `${zhLine.length}/${enLine.length}`)

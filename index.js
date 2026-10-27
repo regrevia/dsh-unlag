@@ -1998,12 +1998,19 @@ async function serveCurrentBundle(clientModules, req, res) {
   try {
     const method = String(req?.method ?? 'GET').toUpperCase()
     if (method !== 'GET' && method !== 'HEAD') return false
-    const answer = await currentBundleAnswer(clientModules, method, req?.url)
+    let answer = await currentBundleAnswer(clientModules, method, req?.url)
+    let chunk = false
+    if (answer === null) {
+      answer = await currentChunkAnswer(clientModules, req?.url)
+      chunk = answer !== null
+    }
     if (answer === null) return false
     if (res.writableEnded === true || res.destroyed === true) return true
     res.writeHead(200, replacedHeaders(answer))
     res.end(method === 'HEAD' ? undefined : answer.body)
-    if (Array.isArray(answer.gone) && answer.gone.length > 0) {
+    if (chunk) {
+      log(`served ${revisionInUrl(req?.url)} at ${answer.servedRev}: a page asked for a chunk of an older set`)
+    } else if (Array.isArray(answer.gone) && answer.gone.length > 0) {
       const kept = answer.ids.filter((id) => !answer.gone.includes(id))
       log(
         kept.length === 0
@@ -2042,6 +2049,77 @@ function entryRevisionFor(graph, rawUrl) {
 }
 
 /**
+ * The chunk one stale request names, at the revision of the plugin it belongs to.
+ *
+ * A document's later import asks for a file next to its main script at the revision the document
+ * booted from. That revision stops resolving when the plugin is swapped, and the file itself is
+ * usually still there under the same name: answering the old address with the bytes the plugin
+ * serves now keeps a rebuilt page whole instead of ending the app on a 404. Only a file the plugin
+ * no longer has stays unanswered.
+ * @returns {{address: string, rev: string}|null} the address to ask instead, or null.
+ */
+function chunkTargetOf(graph, rawUrl) {
+  let path = ''
+  try {
+    path = new URL(String(rawUrl ?? ''), 'http://unlag.invalid').pathname
+  } catch {
+    return null
+  }
+  if (!path.startsWith(`${BUNDLE_ROUTE}/`)) return null
+  const rest = path.slice(BUNDLE_ROUTE.length + 1)
+  if (rest === '') return null
+  const asked = revisionInUrl(rawUrl)
+  let found = null
+  for (const row of Array.isArray(graph?.entries) ? graph.entries : []) {
+    if (typeof row?.id !== 'string' || row.id === '' || typeof row?.rev !== 'string' || row.rev === '') continue
+    const prefix = `${row.id}/`
+    if (!rest.startsWith(prefix)) continue
+    const file = rest.slice(prefix.length)
+    // A whole document is its own row, and a deeper path belongs to a longer, more exact id.
+    if (file === '' || file.includes('/') || file === 'client.js' || file === 'client.js.map') continue
+    if (asked === row.rev) continue
+    found = { address: `${path}?rev=${encodeURIComponent(row.rev)}`, rev: row.rev }
+  }
+  return found
+}
+
+/**
+ * Ask the module table for one chunk of an older generation at the revision its plugin answers at
+ * now. The bytes are the plugin's own file, not a stand-in: a body that is missing is left to fail
+ * as the table left it.
+ */
+async function currentChunkAnswer(clientModules, url) {
+  try {
+    let target = null
+    let graphRev = ''
+    try {
+      const graph = clientModules.graph()
+      graphRev = servedRevisionOf(graph)
+      target = chunkTargetOf(graph, url)
+    } catch (error) {
+      log(`cannot read the plugin table for a chunk request: ${error?.message ?? error}`)
+      return null
+    }
+    if (target === null) return null
+    const response = await fetchBundleAt(clientModules, target.address, 'GET')
+    if (response?.status !== 200) return null
+    const body = Buffer.from(await response.arrayBuffer())
+    if (body.length === 0) return null
+    return {
+      body,
+      contentType: String(response.headers?.get?.('content-type') ?? 'text/javascript; charset=utf-8'),
+      askedRev: revisionInUrl(url),
+      servedRev: target.rev,
+      graphRev,
+      digest: bodyDigest(body),
+    }
+  } catch (error) {
+    log(`cannot answer a chunk from an older revision: ${error?.message ?? error}`)
+    return null
+  }
+}
+
+/**
  * Point a request for one plugin's file at the revision the table serves that plugin at.
  *
  * A document and every chunk it later loads ask with the revision they booted from. The table keeps
@@ -2063,8 +2141,20 @@ async function serveCurrentBundleResource(clientModules, request) {
   try {
     const method = String(request?.method ?? 'GET').toUpperCase()
     if (method !== 'GET' && method !== 'HEAD') return null
-    const answer = await currentBundleAnswer(clientModules, method, request?.url)
+    let answer = await currentBundleAnswer(clientModules, method, request?.url)
+    let chunk = false
+    if (answer === null) {
+      answer = await currentChunkAnswer(clientModules, request?.url)
+      chunk = answer !== null
+    }
     if (answer === null) return null
+    if (chunk) {
+      log(`served ${revisionInUrl(request?.url)} at ${answer.servedRev}: a page asked for a chunk of an older set`)
+      return new Response(method === 'HEAD' ? null : answer.body, {
+        status: 200,
+        headers: replacedHeaders(answer),
+      })
+    }
     if (Array.isArray(answer.gone) && answer.gone.length > 0) {
       const kept = answer.ids.filter((id) => !answer.gone.includes(id))
       log(
@@ -2707,13 +2797,29 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
       }
       const chunkStatus = chunkRead.value?.status ?? null
       if (chunkStatus !== 200) {
-        return {
-          status: 'blocked', // ui-copy-ignore
+        /**
+         * The route answers a chunk the plugin still has at the revision it serves now, so an
+         * address that failed at the page's own revision is asked again the way the next document
+         * will reach it. Only a file the plugin no longer has stays missing.
+         */
+        let spareStatus = null
+        const spare = chunkTargetOf(graph, address)
+        if (spare !== null && spare.address !== address) {
+          const spareRead = await withDeadline(() => fetchChunk(spare.address), budgetMs - (Date.now() - began))
+          if (spareRead.timedOut === true) {
+            return { status: 'blocked', reason: 'slow', detail: `${spare.address} did not answer within the time this check waits` }
+          }
+          if (!('error' in spareRead)) spareStatus = spareRead.value?.status ?? null
+        }
+        if (spareStatus !== 200) {
+          return {
+            status: 'blocked', // ui-copy-ignore
           // The address was built from this page's own list, and the chunk is gone from the
           // generation that list still names. A frozen list cannot be changed by pressing again:
           // the same address is asked next time and the next document would die on the same file.
-          reason: 'boot', // ui-copy-ignore
-          detail: `${address} answers ${chunkStatus === null ? 'nothing readable' : String(chunkStatus)}, which this page's copy asks for`,
+            reason: 'boot', // ui-copy-ignore
+            detail: `${address} answers ${chunkStatus === null ? 'nothing readable' : String(chunkStatus)}, which this page's copy asks for`,
+          }
         }
       }
     }

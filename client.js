@@ -22,7 +22,7 @@ window.__ModuleLoader__.load({
      * app can no longer serve runs without that plugin, and nothing on screen says so. The remedy
      * is the same as the frozen list's own refusal, so it is said in the same few words.
      */
-    const BOOT_GAP_NOTICE = zh ? '这一页有插件没加载，重启应用后补上' : 'plugin code is missing from this page, so reopen the app';
+    const BOOT_GAP_NOTICE = zh ? '缺插件，重启应用后恢复' : 'a plugin is missing, so reopen the app';
 
     const REASONS = zh
       ? { list: '读不到启动信息', slow: '启动信息读得太慢', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', size: '启动脚本太大', verify: '插件后端没有应答', screen: '页面状态读不到', busy: '另一次刷新还在进行', dependencies: '插件依赖还没有运行', missing: '启动清单里有插件已经不见了', network: '读取插件时出错', register: '插件没有登记自己', entries: '启动清单里的插件已卸载，重启应用后再刷新', generation: '插件刚被换过，再按一次刷新', boot: '重启应用后用上新代码', url: '启动信息太长，读不全' }

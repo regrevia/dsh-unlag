@@ -221,4 +221,56 @@ const sameRes = await postJson(sameMain.routes.get('/dsh-unlag/verify'), JSON.st
 check('an unchanged main script whose chunk moved revisions is held', verdict(sameRes.body) === 'blocked', sameRes.body)
 check('and the refusal names the file that answers at the wrong revision', reason(sameRes.body) === 'boot' && sameRes.body.includes('client.lazy.js'), sameRes.body)
 
+// --- a chunk that moved with its plugin is answered where the next page asks it ----------------
+// The app is one release ahead: the table serves revision `new`, and the file the page's old copy
+// asks for is still there under the same name at that revision. The route answers that address, so a
+// rebuilt document gets its later file instead of ending the app on a 404. Only a file the release
+// no longer has stays a refusal.
+function movedApp(chunkAnswers) {
+  const graphNew = {
+    rev: 'new',
+    entries: [
+      { id: '@local/a', rev: 'new', url: urlA },
+      { id: '@local/b', rev: 'new', url: urlB },
+    ],
+    batches: [
+      { url: urlA, entries: ['@local/a'], rev: 'new' },
+      { url: urlB, entries: ['@local/b'], rev: 'new' },
+    ],
+  }
+  return mount(
+    {},
+    {
+      clientModules: {
+        graph: () => graphNew,
+        fetchBundle: async (request) => {
+          const url = String(request?.url ?? request)
+          if (url.includes('client.lazy.js')) {
+            return chunkAnswers === true && url.includes('/plugins/@local/a/client.lazy.js?rev=new') ? served('/* chunk */') : new Response('', { status: 404 })
+          }
+          if (url.includes('&rev=new')) return served(url.includes('@local/a') ? bodyOf('a', 'client.lazy.js') : bodyOf('b', null))
+          return new Response('', { status: 404 })
+        },
+      },
+    },
+  )
+}
+const moved = movedApp(true)
+await postJson(moved.routes.get('/dsh-unlag/boot'), bootJson([urlA, urlB], 'old'))
+await settledBoot(moved.routes)
+const movedRes = await postJson(moved.routes.get('/dsh-unlag/verify'), JSON.stringify({ rows: [urlA, urlB] }))
+check('a chunk the release still has is approved at the revision it answers', verdict(movedRes.body) === 'ok', movedRes.body)
+{
+  const answer = JSON.parse(movedRes.body)
+  const rowA = (answer.scripts ?? []).find((script) => String(script.url).includes('@local/a'))
+  check('and the approved row still names the later file', Array.isArray(rowA?.lazy) && rowA.lazy.includes('client.lazy.js'), JSON.stringify(rowA))
+}
+
+const lost = movedApp(false)
+await postJson(lost.routes.get('/dsh-unlag/boot'), bootJson([urlA, urlB], 'old'))
+await settledBoot(lost.routes)
+const lostRes = await postJson(lost.routes.get('/dsh-unlag/verify'), JSON.stringify({ rows: [urlA, urlB] }))
+check('a chunk the release no longer has still holds the press', verdict(lostRes.body) === 'blocked', lostRes.body)
+check('and that refusal keeps naming the file', reason(lostRes.body) === 'boot' && lostRes.body.includes('client.lazy.js'), lostRes.body)
+
 console.log(out.join('\n'))

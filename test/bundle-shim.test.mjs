@@ -392,44 +392,41 @@ check('an old-generation answer is used as it is', keptAnswer.status === 200 && 
 check('an old-generation answer is not replaced', kept.seen.length === 0, String(kept.seen.length))
 
 
-// --- one plugin's chunk is never answered by another generation -------------------------------
-// A document and every chunk it loads later ask with the revision they booted from. The table
-// serves a chunk at exactly the revision of its own entry, so a chunk whose entry moved on is a
-// chunk this page can no longer have: answering it with the newer bytes would put another
-// generation's code beside the document that asked for it, and that document is already running.
-// The table's own answer is kept instead, which is a 404 the page can see.
-const chunkAsks = []
-const chunkRoute = mount({
-  keep: (path) => {
-    chunkAsks.push(path)
-    return path.includes('client.lazy.js') && path.includes('rev=ar2') ? '/* lazy @local/a */' : undefined
-  },
-})
-const chunkOld = await call(chunkRoute.route.handler, { method: 'GET', url: '/plugins/@local/a/client.lazy.js?rev=a-old' })
-check('a chunk asked at a stale revision is not rewritten', chunkOld.status === 404, `${chunkOld.status} ${chunkOld.body}`)
-check('and is not asked again at another revision', !chunkAsks.some((path) => path.includes('rev=ar2')), chunkAsks.join(' '))
-const chunkCurrent = await call(chunkRoute.route.handler, { method: 'GET', url: '/plugins/@local/a/client.lazy.js?rev=ar2' })
-check('a chunk asked at its own revision is the table\'s own answer', chunkCurrent.status === 200 && chunkCurrent.body === '/* lazy @local/a */', `${chunkCurrent.status} ${chunkCurrent.body}`)
+// --- a later file is answered where its own plugin answers ------------------------------------
+// A document's later import names the file and the revision the document booted from. A release
+// that still has that file under the same name answers it at the revision its own entry serves
+// now, the same way a whole document from an older generation is answered at the current one: a
+// 404 here is a file the rebuilt page cannot load, and the app ends on it. Only a file the entry
+// no longer has stays the table's 404.
+const chunked = mount({ serve: (path) => (path === '/plugins/@local/a/client.lazy.js?rev=ar2' ? '/* lazy @local/a */' : undefined) })
+const chunkOld = await call(chunked.route.handler, { method: 'GET', url: '/plugins/@local/a/client.lazy.js?rev=a-old' })
+check('an old chunk the entry still has is answered at its own revision', chunkOld.status === 200 && chunkOld.body === '/* lazy @local/a */', `${chunkOld.status} ${chunkOld.body}`)
+check('and it is marked as replaced, not cached', chunkOld.headers?.['cache-control'] === 'no-store', JSON.stringify(chunkOld.headers))
+check('and asked at its entry\'s revision once', chunked.seen.filter((asked) => String(asked.url).includes('rev=ar2')).length === 1, chunked.seen.map((asked) => String(asked.url)).join(' '))
 
-const chunkNoQuery = mount({ keep: (path) => (path === '/plugins/@local/b/client.lazy.js?rev=br2' ? '/* lazy @local/b */' : undefined) })
+const chunkOwn = mount({ keep: (path) => (path === '/plugins/@local/a/client.lazy.js?rev=ar2' ? '/* own bytes */' : undefined) })
+const chunkCurrent = await call(chunkOwn.route.handler, { method: 'GET', url: '/plugins/@local/a/client.lazy.js?rev=ar2' })
+check('a chunk asked at its own revision is the table\'s own answer', chunkCurrent.status === 200 && chunkCurrent.body === '/* own bytes */', `${chunkCurrent.status} ${chunkCurrent.body}`)
+check('and is not asked again', chunkOwn.seen.length === 0, chunkOwn.seen.map((asked) => String(asked.url)).join(' '))
+
+const chunkNoQuery = mount({ serve: (path) => (path === '/plugins/@local/b/client.lazy.js?rev=br2' ? '/* lazy @local/b */' : undefined) })
 const chunkMissing = await call(chunkNoQuery.route.handler, { method: 'GET', url: '/plugins/@local/b/client.lazy.js' })
-check('a chunk with no revision is left to the table', chunkMissing.status === 404, `${chunkMissing.status}`)
+check('a chunk with no revision is answered at its entry\'s revision', chunkMissing.status === 200 && chunkMissing.body === '/* lazy @local/b */', `${chunkMissing.status}`)
 
-const chunkOther = mount({ keep: (path) => (path === '/plugins/@local/b/client.lazy.js?rev=br2' ? '/* lazy @local/b */' : undefined) })
+const chunkOther = mount({ serve: (path) => (path === '/plugins/@local/b/client.lazy.js?rev=br2' ? '/* lazy @local/b */' : undefined) })
 const chunkWrong = await call(chunkOther.route.handler, { method: 'GET', url: '/plugins/@local/b/client.lazy.js?rev=abrev' })
-check('a chunk naming another plugin set is left to the table', chunkWrong.status === 404, `${chunkWrong.status}`)
+check('a chunk naming another revision is answered at its entry\'s', chunkWrong.status === 200 && chunkWrong.body === '/* lazy @local/b */', `${chunkWrong.status} ${chunkWrong.body}`)
 
-const resourceAsks = []
-const resourceChunk = mount({
-  shape: 'resource',
-  keep: (path) => {
-    resourceAsks.push(path)
-    return path === '/plugins/@local/a/client.lazy.js?rev=ar2' ? '/* lazy resource */' : undefined
-  },
-})
+const chunkGone = mount({ serve: () => undefined })
+const chunkGoneAnswer = await call(chunkGone.route.handler, { method: 'GET', url: '/plugins/@local/a/client.lazy.js?rev=a-old' })
+check('a file the entry no longer has stays a 404', chunkGoneAnswer.status === 404, String(chunkGoneAnswer.status))
+const mapGone = await call(chunkGone.route.handler, { method: 'GET', url: '/plugins/@local/a/client.lazy.js.map?rev=a-old' })
+check('a source map is never answered as a later file', mapGone.status === 404, String(mapGone.status))
+
+const resourceChunk = mount({ shape: 'resource', serve: (path) => (path === '/plugins/@local/a/client.lazy.js?rev=ar2' ? '/* lazy resource */' : undefined) })
 const resourceAnswer = await resourceChunk.route.resource(new Request('http://x/plugins/@local/a/client.lazy.js?rev=a-old'))
-check('a stale chunk over the resource route is the table\'s answer', resourceAnswer.status === 404, String(resourceAnswer.status))
-check('and the resource route does not retry it at another revision', !resourceAsks.some((path) => path.includes('rev=ar2')), resourceAsks.join(' '))
+check('a stale chunk over the resource route is answered too', resourceAnswer.status === 200 && (await resourceAnswer.text()) === '/* lazy resource */', String(resourceAnswer.status))
+check('and marks it as replaced', resourceAnswer.headers.get('cache-control') === 'no-store', String(resourceAnswer.headers.get('cache-control')))
 
 const brokenResource = mount({ shape: 'resource', graphThrows: true })
 const brokenResourceAnswer = await brokenResource.route.resource(new Request('http://127.0.0.1:58672/plugins/??@local/a/client.js&rev=old'))
