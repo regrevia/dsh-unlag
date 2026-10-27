@@ -1,6 +1,7 @@
 // The switches route is what the button's menu writes and what a press reads. It lives in the
 // app's own home directory, so this run gives it a home of its own and never writes the real one.
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -171,6 +172,23 @@ const state = async (routes) => {
   const wrong = fakeRes()
   await routes.get('/dsh-unlag/switches')(request('/dsh-unlag/switches', { payload: JSON.stringify({ plugins: true, page: true, agentRefresh: 'yes' }) }), wrong)
   check('a value that is not a boolean is refused', wrong.status === 400, `${wrong.status} ${wrong.body}`)
+}
+
+// --- a settings file that would never finish being read ------------------------------------------
+// The file lives in the app's home, so a pipe (or a device) can be there. Reading it happens on the
+// way to an answer and on the way to a page's first paint: a read with no end is the app not
+// starting, so a path that is not a small regular file is answered as "nothing saved".
+{
+  rmSync(SWITCH_FILE, { recursive: true, force: true })
+  execFileSync('mkfifo', [SWITCH_FILE])
+  const routes = mount({})
+  const answered = await Promise.race([
+    state(routes),
+    new Promise((resolve) => setTimeout(() => resolve('timeout'), 1500)),
+  ])
+  check('a settings path that never reads does not hold the answer', answered !== 'timeout', String(answered))
+  check('and it answers the settings row instead', answered?.saved === false && typeof answered?.plugins === 'boolean', JSON.stringify(answered))
+  rmSync(SWITCH_FILE, { force: true })
 }
 
 console.log(out.join('\n'))

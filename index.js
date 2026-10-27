@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, watch, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, statSync, watch, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { Script } from 'node:vm'
@@ -372,11 +372,38 @@ function fingerprintOf(roots) {
   return createHash('sha1').update(rows.join('\u0001')).digest('hex')
 }
 
+/**
+ * Read a small text file without letting the file decide how long the read takes. A path that is a
+ * pipe, a device, or simply enormous answers as "nothing there": this runs on the way to a button
+ * answer and to the page's first paint, so a read that blocks stops the app, not one answer.
+ */
+function readSmallText(path, limit = 64 * 1024) {
+  let fd = null
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK)
+    const info = fstatSync(fd)
+    if (info.isFile() !== true || info.size > limit) return null
+    return readFileSync(fd, 'utf8')
+  } catch {
+    return null
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd)
+      } catch {
+        /* the descriptor is already gone */
+      }
+    }
+  }
+}
+
 /** Development roots the profile links by path; a packaged dependency is not watched. */
 function linkedRoots(baseDir) {
   const roots = []
   try {
-    const manifest = JSON.parse(readFileSync(join(baseDir, 'package.json'), 'utf8'))
+    const text = readSmallText(join(baseDir, 'package.json'), 1024 * 1024)
+    if (text === null) throw new Error('the profile manifest is not a readable file')
+    const manifest = JSON.parse(text)
     const deps = { ...manifest.dependencies, ...manifest.devDependencies }
     for (const [name, spec] of Object.entries(deps)) {
       if (typeof spec !== 'string' || !/^(link|file):/u.test(spec)) continue
@@ -2786,7 +2813,10 @@ function switchesFor(config) {
   const fallback = { plugins: settings.reloadPlugins, page: settings.reloadInterface, agent: settings.agentRefresh, fingerprint, saved: false }
   try {
     if (!existsSync(SWITCH_PATH)) return fallback
-    const raw = JSON.parse(readFileSync(SWITCH_PATH, 'utf8'))
+    // The file is in the app's home: anything can be there, including something that never ends.
+    const text = readSmallText(SWITCH_PATH)
+    if (text === null) return fallback
+    const raw = JSON.parse(text)
     if (raw === null || typeof raw !== 'object') return fallback
     if (raw.fingerprint !== fingerprint) return fallback
     if (typeof raw.plugins !== 'boolean' || typeof raw.page !== 'boolean') return fallback
