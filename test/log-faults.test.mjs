@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -14,7 +15,7 @@ const run = (env, body, options = {}) => {
   const merged = { ...process.env, ...env }
   for (const key of Object.keys(merged)) if (merged[key] === '') delete merged[key]
   return spawnSync(process.execPath, ['--input-type=module', '-e', body], {
-    cwd: new URL('..', import.meta.url).pathname,
+    cwd: fileURLToPath(new URL('..', import.meta.url)),
     env: merged,
     encoding: 'utf8',
     timeout: options.timeout ?? 30000,

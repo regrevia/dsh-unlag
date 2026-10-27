@@ -1,6 +1,6 @@
 // The switches route is what the button's menu writes and what a press reads. It lives in the
 // app's own home directory, so this run gives it a home of its own and never writes the real one.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -180,7 +180,11 @@ const state = async (routes) => {
 // starting, so a path that is not a small regular file is answered as "nothing saved".
 {
   rmSync(SWITCH_FILE, { recursive: true, force: true })
-  execFileSync('mkfifo', [SWITCH_FILE])
+  // POSIX can put a FIFO here and prove the read never blocks. Windows has no FIFO,
+  // so the nearest thing that is not a small regular file is a directory; both must
+  // be answered as "nothing saved" instead of holding the answer.
+  if (process.platform === 'win32') mkdirSync(SWITCH_FILE, { recursive: true })
+  else execFileSync('mkfifo', [SWITCH_FILE])
   const routes = mount({})
   const answered = await Promise.race([
     state(routes),
@@ -188,7 +192,7 @@ const state = async (routes) => {
   ])
   check('a settings path that never reads does not hold the answer', answered !== 'timeout', String(answered))
   check('and it answers the settings row instead', answered?.saved === false && typeof answered?.plugins === 'boolean', JSON.stringify(answered))
-  rmSync(SWITCH_FILE, { force: true })
+  rmSync(SWITCH_FILE, { recursive: true, force: true })
 }
 
 console.log(out.join('\n'))

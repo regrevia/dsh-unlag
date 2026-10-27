@@ -333,7 +333,9 @@ let logDirTried = false
 function ensureLogDir(target) {
   if (logDirTried) return
   logDirTried = true
-  const cut = target.lastIndexOf('/')
+  // Both separators: a Windows path's last `/` is -1, and returning here left the
+  // log without a directory for good — no line, and no evidence of a failed update.
+  const cut = Math.max(target.lastIndexOf('/'), target.lastIndexOf('\\'))
   if (cut <= 0) return
   try {
     mkdirSync(target.slice(0, cut), { recursive: true })
@@ -502,7 +504,10 @@ function linkedRoots(baseDir) {
 
 /** Whether a watched path is worth a reload: source only, and never this log. */
 function worthReloading(filename) {
-  const name = typeof filename === 'string' ? filename : ''
+  // The ignore rules below are written with `/`, and Windows reports `node_modules\dep.js`.
+  // Without this a dependency save would reload every plugin on Windows, which is exactly
+  // what the rules exist to prevent.
+  const name = typeof filename === 'string' ? filename.replace(/\\/gu, '/') : ''
   if (name === '') return false
   if (!CODE_EXTENSIONS.has(name.slice(name.lastIndexOf('.')))) return false
   if (IGNORED_PATH.test(name) || TEST_PATH.test(name)) return false
