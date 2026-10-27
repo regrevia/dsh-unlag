@@ -17,6 +17,13 @@ window.__ModuleLoader__.load({
      * the first reason they refuse for, so a press that stops can say what it saw instead of
      * repeating one generic sentence.
      */
+    /**
+     * The one thing worth saying without a press: a window whose startup list names a script the
+     * app can no longer serve runs without that plugin, and nothing on screen says so. The remedy
+     * is the same as the frozen list's own refusal, so it is said in the same few words.
+     */
+    const BOOT_GAP_NOTICE = zh ? '这一页有插件没加载，重启应用后补上' : 'plugin code is missing from this page, so reopen the app';
+
     const REASONS = zh
       ? { list: '读不到启动信息', slow: '启动信息读得太慢', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', size: '启动脚本太大', verify: '插件后端没有应答', screen: '页面状态读不到', busy: '另一次刷新还在进行', dependencies: '插件依赖还没有运行', missing: '启动清单里有插件已经不见了', network: '读取插件时出错', register: '插件没有登记自己', entries: '启动清单里的插件已卸载，重启应用后再刷新', generation: '插件刚被换过，再按一次刷新', boot: '重启应用后用上新代码', url: '启动信息太长，读不全' }
       : { list: 'startup info is unavailable', slow: 'the startup list answered too slowly', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete', size: 'a startup script is too large', verify: 'the plugin is not answering', screen: 'the page state cannot be read', busy: 'another rebuild is already running', dependencies: 'a plugin dependency is not running', missing: 'a plugin in the startup list is gone', network: 'the plugins could not be read', register: 'a plugin did not register itself', entries: 'a plugin in the startup list was uninstalled, so restart the app before rebuilding', generation: 'the plugins were replaced a moment ago, press again', boot: 'reopen the app to use the new code', url: 'the startup info is too long to keep' };
@@ -136,6 +143,30 @@ window.__ModuleLoader__.load({
       } catch {
         return again();
       }
+    }
+
+    /**
+     * Whether this page booted without a script it asked for. The app captures the startup list's
+     * addresses while the document is booting, so the record says which of them answered at all;
+     * only an address that answered with an error count as missing code. A record that is still
+     * being written, or one that could not be read whole, says nothing and keeps quiet.
+     */
+    async function startupLostPlugins(attempt = 0) {
+      try {
+        const response = await withTimeout(fetch(`${HOST_BASE}/state`, { cache: 'no-store', credentials: 'same-origin' }));
+        if (response.ok) {
+          const data = await withTimeout(response.json());
+          const snapshot = data?.bootSnapshot ?? null;
+          if (snapshot !== null && typeof snapshot === 'object' && Array.isArray(snapshot.rows) && snapshot.rows.length > 0) {
+            return snapshot.rows.some((row) => row?.unreadable === true && typeof row?.code === 'number' && row.code !== 0);
+          }
+        }
+      } catch {
+        /* a page that cannot read the record says nothing rather than guessing */
+      }
+      if (attempt >= 2) return false;
+      await new Promise((resolve) => setTimeout(resolve, 700)); // ui-copy-ignore
+      return startupLostPlugins(attempt + 1);
     }
 
     /**
@@ -1165,6 +1196,8 @@ window.__ModuleLoader__.load({
       const [hover, setHover] = React.useState(false);
       const [pending, setPending] = React.useState(false);
       const [notice, setNotice] = React.useState(null);
+      // A notice about the page itself stays until the page changes: it is not one press outcome.
+      const [sticky, setSticky] = React.useState(false);
       // The refusing check's own words, shown only when the press is asked for them.
       const [raw, setRaw] = React.useState(null);
       const [showRaw, setShowRaw] = React.useState(false);
@@ -1187,6 +1220,7 @@ window.__ModuleLoader__.load({
 
       /** One line about the press: the words, and the refusal that produced them if any. */
       const say = (text, words = null) => {
+        setSticky(false);
         setRaw(words);
         setShowRaw(false);
         setNotice(text);
@@ -1194,6 +1228,8 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         if (notice === null) return undefined;
+        // A page that is short a plugin stays short until it is reopened, so its notice stays too.
+        if (sticky) return undefined;
         // An opened detail belongs to the person reading it: the notice waits, and its timer starts
         // again once the detail is closed. A card that disappears under a press looks broken.
         if (showRaw) return undefined;
@@ -1203,7 +1239,27 @@ window.__ModuleLoader__.load({
           setRaw(null);
         }, raw === null ? 8000 : 16000); // ui-copy-ignore
         return () => clearTimeout(timer);
-      }, [notice, raw, showRaw]);
+      }, [notice, raw, showRaw, sticky]);
+
+      /**
+       * One page, one check. A document whose startup list names a script the app can no longer
+       * serve renders without that plugin and mentions nothing; this is the only moment the person
+       * can be told, and it must not wait for a press they have no reason to make.
+       */
+      React.useEffect(() => {
+        let live = true;
+        const timer = setTimeout(() => {
+          void startupLostPlugins().then((missing) => {
+            if (!live || !missing) return;
+            setSticky(true);
+            setNotice((previous) => previous ?? BOOT_GAP_NOTICE);
+          });
+        }, 1200); // ui-copy-ignore
+        return () => {
+          live = false;
+          clearTimeout(timer);
+        };
+      }, []);
 
       // A menu left open over a page that is about to be rebuilt would name switches that no
       // longer describe the press that follows it.
@@ -1533,6 +1589,7 @@ window.__ModuleLoader__.load({
       readSettings,
       startupLooksServable,
       startupHoldReason: () => holdReason,
+      startupLostPlugins,
       noticeFor,
       frozenStartupLooksServable,
       desktopStartupPayload,

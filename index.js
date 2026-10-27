@@ -1559,7 +1559,11 @@ async function captureBootSnapshot(clientModules, boot) {
     try {
       const response = await readStartupScript(clientModules, url)
       if (response?.status !== 200) {
-        rows.push({ url, unreadable: true })
+        // The status is what tells a page that one of its scripts is gone from a list that could
+        // not be read whole: a page told "missing" because a read failed would be sent to restart
+        // the app for nothing.
+        rows.push({ url, unreadable: true, code: Number(response?.status ?? 0) || 0 })
+        log(`one startup script this page asked for is not served now (${String(response?.status ?? 'no answer')}): ${oneLine(url)}`)
         continue
       }
       const buffer = Buffer.from(await response.arrayBuffer())
