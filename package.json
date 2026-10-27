@@ -2,7 +2,7 @@
   "name": "dsh-unlag",
   "version": "1.12.4",
   "type": "module",
-  "description": "A press applies plugin edits right away and brings a laggy interface back; automatic reloading stays off unless you turn it on, so the press is the only trigger, and nothing restarts.",
+  "description": "DSH 桌面端自己的刷新按钮：改插件不用重启、开久了卡了也点一下，正在进行的会话不受影响。",
   "license": "MIT",
   "exports": {
     ".": "./index.js",
