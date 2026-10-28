@@ -3,12 +3,13 @@
 // does, installs that tarball into a throwaway profile, and asks the two questions the host asks:
 // can the manifest be resolved by name, and are the entry points the manifest maps to really there.
 import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const root = new URL('..', import.meta.url).pathname
+const root = fileURLToPath(new URL('..', import.meta.url))
 const work = mkdtempSync(join(tmpdir(), 'unlag-packed-'))
 const out = []
 const check = (label, ok, extra = '') => {
@@ -16,9 +17,19 @@ const check = (label, ok, extra = '') => {
   if (!ok) process.exitCode = 1
 }
 
+/**
+ * npm is reached through the JS entry point npm itself sets in `npm_execpath`, run by this node.
+ * On Windows that avoids going through a shell at all: `shell: true` needs a usable cmd.exe, and a
+ * sandboxed test run is exactly where that is not guaranteed (spawnSync cmd.exe ENOENT).
+ */
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-const run = (args, cwd) =>
-  execFileSync(npm, args, { cwd, encoding: 'utf8', env: { ...process.env, npm_config_update_notifier: 'false', npm_config_fund: 'false', npm_config_audit: 'false' }, shell: process.platform === 'win32', stdio: ['ignore', 'pipe', 'pipe'] })
+const npmCli = process.env.npm_execpath
+const run = (args, cwd) => {
+  const env = { ...process.env, npm_config_update_notifier: 'false', npm_config_fund: 'false', npm_config_audit: 'false' }
+  const options = { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+  if (typeof npmCli === 'string' && npmCli.endsWith('.js') === true) return execFileSync(process.execPath, [npmCli, ...args], { ...options, env })
+  return execFileSync(npm, args, { ...options, env, shell: process.platform === 'win32' })
+}
 
 // npm pack writes the tarball under the name npm would publish; that name is what a profile installs.
 const packed = run(['pack', '--json', '--pack-destination', work], root)
