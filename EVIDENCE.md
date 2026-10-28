@@ -81,6 +81,7 @@ npm run live-smoke           # 对着运行中的 App 复核；输出里 verdict
 | 「没有按钮」这件事有可核对的读数，不只在日志里 | `/state.served`：`{status:'served'|'missing'|'unknown', entries, id}`；`test/served-report.test.mjs` 11 项覆盖在、不在、空集、读不了四种情况，并要求这条日志每进程只写一次 | `node test/served-report.test.mjs`；真机 `curl -s http://127.0.0.1:62741/dsh-unlag/state` 现在是 `{"status":"served","entries":90,"id":"dsh-unlag"}` |
 | 真机上的按钮契约与启动校验 | `DSH_UNLAG_HOST=http://127.0.0.1:62741 npm run smoke` EXIT 0：`verdict: true`、`shimWrapped: true`、`ready: true`、九条写路由的 403/405 契约全对，它读的正是这台机器上 90 个插件的真插件图 | 上面这条命令 |
 | 宿主看到的是「安装出来的包」，不是仓库 | `test/packed-install.test.mjs` 12 项：`npm pack` 出 tarball → 装进一次性 profile 的 `node_modules` → 用真 `createRequire` 按包名解析到 manifest、逐个核对 export 指向的文件都在、client 脚本 103,088 字节；把 `./package.json` 从 export 里拿掉后，**子进程**按包名解析立刻回到 `ERR_PACKAGE_PATH_NOT_EXPORTED`（同进程会被 Node 的包映射缓存挡住，所以必须在子进程里问） | `node test/packed-install.test.mjs` |
+| Windows 上真的把 tarball 装了一遍 | 派发跑 `windows-latest` 三档（node 20/22/24）全绿：`npm pack` → 一次性 profile 里 `npm install` → 真 `createRequire` 按包名解析 manifest → 逐个 export 核对；整份 1397 项检查点也在 Windows 上跑完。第一次跑红是 `spawnSync cmd.exe ENOENT`（沙箱里 `shell:true` 起不了 cmd），改成用 `npm_execpath` 直接让本 node 跑 npm 的 JS 入口，不再经过 shell | `gh workflow run ci --field windows_hosted=true`，run 40732826808 |
 | 四条 lint 仍然干净 | `style-lint` 0 error；`ui-copy-lint` 0 error（7 warning）；`zh-lint` 0 error（7 warning，都是 `reports/` 里的旧文档） | `node ~/.dsh/tools/style-lint.mjs .; node ~/.dsh/skills/ui-restraint/scripts/ui-copy-lint.mjs .; node ~/.agents/skills/zh-ui-type-lint/scripts/zh-lint.mjs .` |
 
 还没证的：
