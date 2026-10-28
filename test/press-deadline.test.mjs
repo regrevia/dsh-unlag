@@ -61,7 +61,9 @@ const lines = () => readFileSync(LOG, 'utf8').split('\n').filter((line) => line 
 
 // --- the page: an address that serves no page is not walked into -------------------------------
 {
-  const page = harness({ documentAnswers: false })
+  // The address this press would enter is not the one the page is on: the press asks for a page
+  // that answers no page, while the page on screen still answers for its own address.
+  const page = harness({ documentAnswers: false, href: 'http://127.0.0.1:62542/' })
   await page.press()
   check('a rebuild into a page that is not there leaves the page on screen', page.navigations.length === 0, JSON.stringify(page.navigations))
   check('and says the new page did not come up', /new page did not come up/u.test(String(page.notice())), String(page.notice()))

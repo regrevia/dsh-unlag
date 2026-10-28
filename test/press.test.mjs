@@ -442,6 +442,16 @@ for (const [label, options] of [
   check('a press with a picked file does not rebuild', page.navigations.length === 0 && page.reloads.length === 0, JSON.stringify({ navigations: page.navigations, reloads: page.reloads }))
   check('and it names the file too', /attach|send/iu.test(String(page.notice())), String(page.notice()))
 }
+// The sentence does not lock the press: it names what a second press gives up, and the second
+// press inside the minute goes ahead and discards the files.
+{
+  const page = harness({ draftFiles: 1 })
+  await page.press()
+  const held = page.navigations.length + page.reloads.length
+  await page.press()
+  check('a second press with a picked file rebuilds', held === 0 && page.navigations.length + page.reloads.length >= 1, JSON.stringify({ navigations: page.navigations, reloads: page.reloads }))
+  check('and the log says the files were what the press gave up', page.requests.some((request) => request.path.includes('event=rebuild') && request.path.includes('attachments')), JSON.stringify(page.requests.filter((request) => request.path.includes('event=rebuild')).map((request) => request.path.slice(0, 70))))
+}
 {
   const page = harness()
   await page.press()

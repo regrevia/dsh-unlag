@@ -9,8 +9,8 @@ window.__ModuleLoader__.load({
     const lang = (typeof document !== 'undefined' && document?.documentElement?.lang) || navigator.language || '';
     const zh = /^zh/i.test(lang);
     const COPY = zh
-      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', off: '两个开关都关着，先在设置里打开一个', replaced: '插件代码已更新，页面保持不动', stalled: '这次刷新没有回应，页面没有变，稍后再按一次', working: '正在刷新', cannotLoad: '新页面没有准备好，页面保持不动，稍后再按一次', stayedReplaced: '插件代码已更新，页面没有重建；稍后再按一次', stayed: '页面没有重建；稍后再按一次', done: '插件代码已是最新', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次', unconfirmed: '没读到插件状态，先不重建；稍后再按一次', attachments: '还有没发出去的附件，先发出去再按', unsent: '有一条发送失败的消息还没回到输入框，先把这条重发再按', sending: '消息正在发送，请稍候' , menu: '按下按钮时', switchPlugins: '换掉插件代码', switchPage: '重建页面', switchAgent: 'Agent 可以自己刷新', switchesFailed: '设置没改成，稍后再试', switchesUnsaved: '设置只在这次运行里有效', rawShow: '详情', rawHide: '收起'} // ui-copy-ignore
-      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', off: 'Both switches are off; turn one on in settings', replaced: 'Plugin code updated; the page stayed as it is', stalled: 'No answer in time; the page stayed as it is; press again later', working: 'Refreshing', cannotLoad: 'The new page did not come up; this page stayed; press again later', stayedReplaced: 'Plugin code updated; the page did not rebuild; press again shortly', stayed: 'The page did not rebuild; press again shortly', done: 'Plugin code is already up to date', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later', unconfirmed: 'Plugin state could not be read, so the page stays; press again shortly', attachments: 'Files are attached but not sent; send them first', unsent: 'A failed message is not back in the input yet; resend it first', sending: 'A message is being sent; wait for it to finish' , menu: 'On press', switchPlugins: 'Replace plugin code', switchPage: 'Rebuild page', switchAgent: 'Agents may refresh on their own', switchesFailed: 'Settings not changed; try again later', switchesUnsaved: 'Settings apply to this run only', rawShow: 'Details', rawHide: 'Hide'};
+      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', off: '两个开关都关着，先在设置里打开一个', replaced: '插件代码已更新，页面保持不动', stalled: '这次刷新没有回应，页面没有变，稍后再按一次', working: '正在刷新', cannotLoad: '新页面没有准备好，页面保持不动，稍后再按一次', stayedReplaced: '插件代码已更新，页面没有重建；稍后再按一次', stayed: '页面没有重建；稍后再按一次', done: '插件代码已是最新', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次', unconfirmed: '没读到插件状态，先不重建；稍后再按一次', attachments: '还有没发出去的附件，先发出去再按；再按一次会丢掉这些附件', unchecked: '这次没能确认新页面可用，再按一次仍会重建', quiet: '刚重建过，页面已经是新的，稍等再按', unsent: '有一条发送失败的消息还没回到输入框，先把这条重发再按', sending: '消息正在发送，请稍候' , menu: '按下按钮时', switchPlugins: '换掉插件代码', switchPage: '重建页面', switchAgent: 'Agent 可以自己刷新', switchesFailed: '设置没改成，稍后再试', switchesUnsaved: '设置只在这次运行里有效', rawShow: '详情', rawHide: '收起'} // ui-copy-ignore
+      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', off: 'Both switches are off; turn one on in settings', replaced: 'Plugin code updated; the page stayed as it is', stalled: 'No answer in time; the page stayed as it is; press again later', working: 'Refreshing', cannotLoad: 'The new page did not come up; this page stayed; press again later', stayedReplaced: 'Plugin code updated; the page did not rebuild; press again shortly', stayed: 'The page did not rebuild; press again shortly', done: 'Plugin code is already up to date', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later', unconfirmed: 'Plugin state could not be read, so the page stays; press again shortly', attachments: 'Files are attached but not sent; send them first, or press again to discard them', unchecked: 'The new page could not be confirmed this time; press again to rebuild anyway', quiet: 'Just rebuilt; the page is already the new one, give it a moment', unsent: 'A failed message is not back in the input yet; resend it first', sending: 'A message is being sent; wait for it to finish' , menu: 'On press', switchPlugins: 'Replace plugin code', switchPage: 'Rebuild page', switchAgent: 'Agents may refresh on their own', switchesFailed: 'Settings not changed; try again later', switchesUnsaved: 'Settings apply to this run only', rawShow: 'Details', rawHide: 'Hide'};
 
     /**
      * Why the interface was left as it is, in words a person can act on. The checks below record
@@ -76,6 +76,12 @@ window.__ModuleLoader__.load({
     const STAMP_KEY = 'dsh-unlag:at'; // ui-copy-ignore
     let pressInFlight = false;
 
+    /** The address a press could not check, so the next press inside the minute can go ahead. */
+    let addressHold = null;
+    let attachmentsHold = null;
+    /** Until this moment the page itself was just rebuilt, so another press has nothing to do. */
+    let quietUntil = 0;
+
     /** The last line this page put up, so a press tells its own progress from a joined press's. */
     let lastSaid = null;
 
@@ -98,6 +104,47 @@ window.__ModuleLoader__.load({
       } catch {
         // Pacing is the only thing this stamp feeds: a store that refuses the clear costs nothing.
       }
+    }
+
+    /**
+     * Written down by the document that is about to be replaced, so the one that comes up knows it
+     * is the rebuild the person asked for and does not reload itself again on top of it.
+     */
+    const REBUILT_KEY = 'dsh-unlag:rebuilt'; // ui-copy-ignore
+    function currentRev() {
+      try {
+        const rev = window.__DSH_BOOT__?.rev;
+        return typeof rev === 'string' ? rev : '';
+      } catch {
+        return '';
+      }
+    }
+    function rebuiltRead() {
+      try {
+        const raw = window.sessionStorage.getItem(REBUILT_KEY);
+        if (typeof raw !== 'string' || raw === '') return null;
+        const mark = JSON.parse(raw);
+        return mark !== null && typeof mark === 'object' && Number.isFinite(mark.at) ? mark : null;
+      } catch {
+        return null;
+      }
+    }
+    function rebuiltWrite() {
+      try {
+        window.sessionStorage.setItem(REBUILT_KEY, JSON.stringify({ rev: currentRev(), at: Date.now() }));
+      } catch {
+        // Pacing is the only thing this mark feeds.
+      }
+    }
+    try {
+      const mark = rebuiltRead();
+      if (mark !== null && mark.rev === currentRev() && Date.now() - mark.at < 60000) { // ui-copy-ignore
+        // This page is the new document: a press inside the next seconds has nothing to replace.
+        quietUntil = mark.at + 15000; // ui-copy-ignore
+        window.sessionStorage.removeItem(REBUILT_KEY);
+      }
+    } catch {
+      // A store that refuses the read leaves no window, which only means no pacing.
     }
 
     function stampWrite() {
@@ -887,16 +934,38 @@ window.__ModuleLoader__.load({
      * replaced is gone from the history with it. Asking first is what makes a refused rebuild keep
      * the page the person is reading instead of trading a slow page for no page at all.
      */
-    async function documentIsServable(target) {
-      if (target === null) return true;
-      try {
-        const res = await withTimeout(fetch(target, { cache: 'no-store', headers: { 'x-dsh-unlag': '1' } }));
-        if (res === null || res.ok !== true) return false;
-        const body = await withTimeout(res.text());
-        return typeof body === 'string' && body.includes('__DSH_BOOT__');
-      } catch {
-        return false;
-      }
+    async function askAddress(target) {
+      const read = async (url) => {
+        try {
+          const res = await withTimeout(fetch(url, { cache: 'no-store', credentials: 'same-origin', headers: { 'x-dsh-unlag': '1' } })); // ui-copy-ignore
+          if (res === null) return { ok: false, why: 'noanswer' };
+          if (res.ok !== true) return { ok: false, why: `http:${res.status}` };
+          const body = await withTimeout(res.text());
+          if (typeof body !== 'string') return { ok: false, why: 'noanswer' };
+          return body.includes('__DSH_BOOT__') ? { ok: true, why: 'ok' } : { ok: false, why: 'noboot' };
+        } catch (error) {
+          return { ok: false, why: error?.message === 'timeout' ? 'timeout' : 'noanswer' };
+        }
+      };
+      if (target === null) return { safe: true, definite: false, why: 'ok' };
+      const first = await read(target);
+      if (first.ok) return { safe: true, definite: false, why: 'ok' };
+      // A document asked for while the plugin set is being recomposed can answer late; one more
+      // look is the difference between "not up yet" and "not there".
+      const again = await read(target);
+      if (again.ok) return { safe: true, definite: false, why: 'ok' };
+      /**
+       * An answer that the address does not serve a page is a refusal the press cannot argue with:
+       * entering it would leave nothing to read. A check that never answered is not that answer —
+       * it says nothing about the page — so it is called unchecked, said on screen, and the next
+       * press inside the minute goes ahead with it.
+       */
+      // An auth answer means the request carried no session — not that the page is gone. The
+      // browser enters the address with the session this page is already using, so the press goes
+      // ahead instead of being told to try again for a page that is there.
+      if (again.why === 'http:401' || again.why === 'http:403') return { safe: true, refused: true, why: again.why };
+      const definite = again.why.startsWith('http:') || again.why === 'noboot';
+      return { safe: false, definite, why: again.why };
     }
 
     /** Re-enter the interface on a fresh document, keeping the current view in the address. */
@@ -1393,6 +1462,9 @@ window.__ModuleLoader__.load({
           return;
         }
         pressInFlight = true;
+        // Set when this press was told it gives up the files in the draft: the later look at the
+        // composer must not turn the same files into a refusal again.
+        let filesGivenUp = false;
         setMenu(false);
         setPending(true);
         // A press starts from nothing: a refusal from an earlier press must not answer this one,
@@ -1444,6 +1516,12 @@ window.__ModuleLoader__.load({
           if (!replace && !rebuild) {
             report('off');
             return stop('off');
+          }
+          // The page was rebuilt a moment ago by this same code: pressing again would replace a
+          // document that is already the new one, which is the loop a stuck person would create.
+          if (Date.now() < quietUntil && rebuild) {
+            report('held', 'quiet');
+            return stop('quiet');
           }
           // Replace first: a plugin that only changed the interface is then covered by the rebuild.
           // A replacement that did not finish stops the press here: rebuilding the page anyway would
@@ -1531,7 +1609,16 @@ window.__ModuleLoader__.load({
           }
           const reason = await prepareInterface();
           if (answered) return undefined;
-          if (reason !== null) {
+          const discardAttachments = reason === 'attachments' && attachmentsHold !== null
+            && attachmentsHold.detail === holdDetail && Date.now() - attachmentsHold.at < 60000; // ui-copy-ignore
+          if (reason !== null && discardAttachments) {
+            filesGivenUp = true;
+            // The person pressed a second time inside the minute with the sentence on screen: the
+            // files in the draft are what the press gives up, and it was said before the press.
+            report('rebuild', `attachments:${holdDetail}`);
+            attachmentsHold = null;
+          } else if (reason !== null) {
+            if (reason === 'attachments') attachmentsHold = { detail: holdDetail, at: Date.now() };
             // The log keeps the exact check that refused, so a held press can be explained later.
             const gate = reason === 'blocked' && holdReason !== null
               ? `blocked:${holdReason}`
@@ -1548,15 +1635,34 @@ window.__ModuleLoader__.load({
           holdDetail = draftAttachmentReason();
           if (holdDetail !== null) {
             const late = holdDetail === 'sending' ? 'sending' : holdDetail === 'unsent' ? 'unsent' : 'attachments';
-            report('held', replaced ? `applied:${late}:${holdDetail}` : `${late}:${holdDetail}`);
-            return stop(late, replaced);
+            const again = late === 'attachments' && attachmentsHold !== null
+              && attachmentsHold.detail === holdDetail && Date.now() - attachmentsHold.at < 60000; // ui-copy-ignore
+            if (again) filesGivenUp = true;
+            if (again || filesGivenUp) {
+              filesGivenUp = true;
+              attachmentsHold = null;
+            } else {
+              if (late === 'attachments') attachmentsHold = { detail: holdDetail, at: Date.now() };
+              report('held', replaced ? `applied:${late}:${holdDetail}` : `${late}:${holdDetail}`);
+              return stop(late, replaced);
+            }
           }
           // Before the document is replaced, the address it is replaced with has to answer. A page
           // that cannot come up is not a rebuild; it is a page the person can no longer read.
           const target = freshAddress();
-          if (!(await documentIsServable(target))) {
-            report('held', replaced ? 'applied:document' : 'document');
-            return stop('cannotLoad', replaced);
+          const address = await askAddress(target);
+          if (address.refused === true) report('rebuild', `refused:${address.why}`);
+          if (!address.safe) {
+            const repeat = addressHold !== null && addressHold.target === target && Date.now() - addressHold.at < 60000; // ui-copy-ignore
+            if (address.definite || !repeat) {
+              if (!address.definite) addressHold = { target, at: Date.now() };
+              report('held', replaced ? `applied:document:${address.why}` : `document:${address.why}`);
+              return stop(address.definite ? 'cannotLoad' : 'unchecked', replaced);
+            }
+            addressHold = null;
+            report('rebuild', `unchecked:${address.why}`);
+          } else {
+            addressHold = null;
           }
           if (answered) return undefined;
           // Written only now, when the document really is about to go: a press that was held changed
@@ -1574,6 +1680,7 @@ window.__ModuleLoader__.load({
             setShowRaw(false);
           }
           stampWrite();
+          rebuiltWrite();
           report('rebuild');
           // One line for the navigation itself: the number of documents that come up after it is
           // the number of loads the person sees, and only the log can count them afterwards.

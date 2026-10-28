@@ -61,7 +61,7 @@ function show(tree) {
 
 // `documentAnswers` stands for the page the press is about to enter: a rebuild walks into that
 // address, so a fake app has to say whether a page really comes up there.
-function harnessWith(sourceText, { settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], lateOperation = null, revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, draftImages = 0, draftFiles = 0, conversation = null, sessions = null, language = 'en-US', href, switchAnswer = 'done', stampInStore = false, verifyAnswer = { status: 'ok' }, documentAnswers = true } = {}) {
+function harnessWith(sourceText, { settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], lateOperation = null, revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, draftImages = 0, draftFiles = 0, conversation = null, sessions = null, language = 'en-US', href, switchAnswer = 'done', stampInStore = false, verifyAnswer = { status: 'ok' }, documentAnswers = true, rebuiltMark = null } = {}) {
   const requests = []
   const navigations = []
   const current = { rev: graph.rev, code: 'c1' }
@@ -125,6 +125,15 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
     // The page itself, asked before the press walks into it: an address that answers no page is
     // the one case where a rebuild would trade a slow page for no page at all.
     if (path === '/' || path.startsWith('/?') || path.includes('interface=')) {
+      // The address this document is already on always answers with the page: a check that fails
+      // there is the check being refused, which says nothing about the next page.
+      const here = String(String(location.href).replace(/^https?:\/\/[^/]+/u, ''))
+      if (path === here) return new Response('<!doctype html><script>window.__DSH_BOOT__ = {};</script>', { status: 200, headers: { 'content-type': 'text/html' } })
+      // `silent` is a check that never gets an answer at all: not a page that refuses, a page the
+      // check could not read.
+      if (documentAnswers === 'silent') throw new Error('no answer from the page')
+      // `refused` is an auth answer the check gets for every address: it says nothing about the page.
+      if (documentAnswers === 'refused') return new Response('authentication required', { status: 401 })
       if (!documentAnswers) return new Response('No page here', { status: 404 })
       return new Response('<!doctype html><script>window.__DSH_BOOT__ = {};</script>', { status: 200, headers: { 'content-type': 'text/html' } })
     }
@@ -155,6 +164,8 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
   // `stamp` alone models a stamp that is always there (a press this document already made). A page
   // that boots with a stamp of its own needs it in the store, so clearing it really clears it.
   if (stampInStore) store.set('dsh-unlag:at', stamp)
+  // A page that boots right after a rebuild carries the mark the replaced document left.
+  if (rebuiltMark !== null) store.set('dsh-unlag:rebuilt', JSON.stringify(rebuiltMark))
   const listeners = []
   const window = {
     __ModuleLoader__: { load: () => {} },
