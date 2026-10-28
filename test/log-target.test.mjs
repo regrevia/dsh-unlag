@@ -87,20 +87,24 @@ const routes = mount({
 })
 
 // --- a pipe nobody reads: the press still answers, now and on the next call --------------------
-const fifo = join(dir, 'fifo.log')
-execFileSync('mkfifo', [fifo])
-process.env.DSH_UNLAG_LOG = fifo
-const first = await answers(routes)
-check('a log that is a pipe does not hold the answer', first !== 'timeout' && first.status === 200, first === 'timeout' ? 'timeout' : `${first.status} ${first.body}`)
-const second = await answers(routes)
-check('and the next line does not wait either', second !== 'timeout' && second.status === 200, second === 'timeout' ? 'timeout' : `${second.status}`)
+// Windows has no FIFO, so the blocking-target cases run only where one can be made; the directory
+// case below covers the same rule there.
+if (process.platform !== 'win32') {
+  const fifo = join(dir, 'fifo.log')
+  execFileSync('mkfifo', [fifo])
+  process.env.DSH_UNLAG_LOG = fifo
+  const first = await answers(routes)
+  check('a log that is a pipe does not hold the answer', first !== 'timeout' && first.status === 200, first === 'timeout' ? 'timeout' : `${first.status} ${first.body}`)
+  const second = await answers(routes)
+  check('and the next line does not wait either', second !== 'timeout' && second.status === 200, second === 'timeout' ? 'timeout' : `${second.status}`)
 
-// --- a symlink to that pipe: the type must be read from the open file, not the path -------------
-const link = join(dir, 'link.log')
-symlinkSync(fifo, link)
-process.env.DSH_UNLAG_LOG = link
-const throughLink = await answers(routes)
-check('a log behind a symlink to a pipe does not hold the answer', throughLink !== 'timeout' && throughLink.status === 200, throughLink === 'timeout' ? 'timeout' : `${throughLink.status}`)
+  // --- a symlink to that pipe: the type must be read from the open file, not the path -----------
+  const link = join(dir, 'link.log')
+  symlinkSync(fifo, link)
+  process.env.DSH_UNLAG_LOG = link
+  const throughLink = await answers(routes)
+  check('a log behind a symlink to a pipe does not hold the answer', throughLink !== 'timeout' && throughLink.status === 200, throughLink === 'timeout' ? 'timeout' : `${throughLink.status}`)
+}
 
 // --- a directory where the log file belongs: a write that cannot happen is not a wait ----------
 process.env.DSH_UNLAG_LOG = join(dir, 'a-directory')
