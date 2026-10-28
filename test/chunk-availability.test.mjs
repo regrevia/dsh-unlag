@@ -226,7 +226,7 @@ check('and the refusal names the file that answers at the wrong revision', reaso
 // asks for is still there under the same name at that revision. The route answers that address, so a
 // rebuilt document gets its later file instead of ending the app on a 404. Only a file the release
 // no longer has stays a refusal.
-function movedApp(chunkAnswers) {
+function movedApp(chunkAnswers, newerChunk = 'client.lazy.js') {
   const graphNew = {
     rev: 'new',
     entries: [
@@ -248,7 +248,7 @@ function movedApp(chunkAnswers) {
           if (url.includes('client.lazy.js')) {
             return chunkAnswers === true && url.includes('/plugins/@local/a/client.lazy.js?rev=new') ? served('/* chunk */') : new Response('', { status: 404 })
           }
-          if (url.includes('&rev=new')) return served(url.includes('@local/a') ? bodyOf('a', 'client.lazy.js') : bodyOf('b', null))
+          if (url.includes('&rev=new')) return served(url.includes('@local/a') ? bodyOf('a', newerChunk) : bodyOf('b', null))
           return new Response('', { status: 404 })
         },
       },
@@ -272,5 +272,15 @@ await settledBoot(lost.routes)
 const lostRes = await postJson(lost.routes.get('/dsh-unlag/verify'), JSON.stringify({ rows: [urlA, urlB] }))
 check('a chunk the release no longer has still holds the press', verdict(lostRes.body) === 'blocked', lostRes.body)
 check('and that refusal keeps naming the file', reason(lostRes.body) === 'boot' && lostRes.body.includes('client.lazy.js'), lostRes.body)
+
+// --- a file the newer body stopped loading is not a reason to hold the press -------------------
+// The newer generation loads its pieces differently, so the document a rebuild boots never asks the
+// file the old copy remembers. Refusing there would freeze the page on a file nothing loads any
+// more; the press goes ahead and the log keeps the file that was dropped.
+const dropped = movedApp(false, null)
+await postJson(dropped.routes.get('/dsh-unlag/boot'), bootJson([urlA, urlB], 'old'))
+await settledBoot(dropped.routes)
+const droppedRes = await postJson(dropped.routes.get('/dsh-unlag/verify'), JSON.stringify({ rows: [urlA, urlB] }))
+check('a chunk the newer body no longer loads does not hold the press', verdict(droppedRes.body) === 'ok', droppedRes.body)
 
 console.log(out.join('\n'))

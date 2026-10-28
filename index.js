@@ -2078,9 +2078,33 @@ function chunkTargetOf(graph, rawUrl) {
     // A whole document is its own row, and a deeper path belongs to a longer, more exact id.
     if (file === '' || file.includes('/') || file === 'client.js' || file === 'client.js.map') continue
     if (asked === row.rev) continue
-    found = { address: `${path}?rev=${encodeURIComponent(row.rev)}`, rev: row.rev }
+    found = { address: `${path}?rev=${encodeURIComponent(row.rev)}`, rev: row.rev, row }
   }
   return found
+}
+
+/**
+ * Whether the body a rebuilt page would run for one plugin still loads one chunk file.
+ *
+ * An old document can name a chunk the newer generation no longer has. Holding the press there is
+ * right only while the next document would ask for it too: the route answers an old address with the
+ * bytes the plugin serves now, and a body that loads its pieces differently never asks that file.
+ * @returns {'loads'|'no'|'unknown'} 'unknown' whenever the newer body cannot be read.
+ */
+async function newerLoadsFile(fetchChunk, row, file, budgetMs) {
+  if (typeof row?.url !== 'string' || row.url === '') return 'unknown'
+  const read = await withDeadline(() => fetchChunk(row.url), budgetMs)
+  if (read.timedOut === true || 'error' in read) return 'unknown'
+  const response = read.value
+  if ((response?.status ?? null) !== 200) return 'unknown'
+  let bytes = null
+  try {
+    bytes = Buffer.from(await response.arrayBuffer())
+  } catch {
+    return 'unknown'
+  }
+  if (bytes.length === 0) return 'unknown'
+  return lazyChunkFiles(bytes.toString('utf8')).has(file) ? 'loads' : 'no'
 }
 
 /**
@@ -2812,6 +2836,23 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
           if (!('error' in spareRead)) spareStatus = spareRead.value?.status ?? null
         }
         if (spareStatus !== 200) {
+          /**
+           * The file is gone from the generation the app serves now, and the newer body is what the
+           * rebuilt page runs: if that body does not load this file either, the next document never
+           * asks for it and the press can go ahead. Anything unreadable keeps the hold.
+           */
+          const newer = spare === null ? 'unknown' : await newerLoadsFile(fetchChunk, spare.row, file, budgetMs - (Date.now() - began))
+          if (newer === 'no') {
+            log(`a chunk this page's copy loads is gone, and the newer plugin does not load it either: ${oneLine(file)}; the rebuilt page runs the newer body, so the press goes ahead`)
+            continue
+          }
+          if (newer === 'loads') {
+            return {
+              status: 'blocked', // ui-copy-ignore
+              reason: 'boot', // ui-copy-ignore
+              detail: `${address} answers ${chunkStatus === null ? 'nothing readable' : String(chunkStatus)}, and the newer plugin still loads this file`,
+            }
+          }
           return {
             status: 'blocked', // ui-copy-ignore
           // The address was built from this page's own list, and the chunk is gone from the
