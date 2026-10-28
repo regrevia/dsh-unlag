@@ -67,6 +67,15 @@ npm run live-smoke           # 对着运行中的 App 复核；输出里 verdict
 - **人手按下的那一下**：只有人按才会真的换插件代码，这台机器上最后一次真按是 1.9.30。`pressPath.ready` 证明的是「此刻按下去会被接受」，不是「按过了」。
 - **日志轮转在真实 App 里发生**：真实日志还不到上限的一半，轮转只有离线测试（`log-cap.test.mjs`）证过，没在现场触发过。
 
+## 1.14.9：老宿主按名找清单不再失败
+
+| 说法 | 证据 | 怎么重跑 |
+| --- | --- | --- |
+| `exports` 里有 `"./package.json"`，rc.2 的 fallback 能按名解析到 manifest | `test/package-discovery.test.mjs`（5 项）用真 `createRequire` 解析到 `<tmp>/node_modules/dsh-unlag/package.json`；删掉这条 export 该文件立刻红 | `node test/package-discovery.test.mjs` |
+| 装出来的包也是这个样子，不是只有仓库里对 | `test/packed-install.test.mjs`（12 项）：`npm pack` → 一次性 profile 里 `npm install` → 按包名解析 manifest、逐个 export 核对文件在位；去掉 `"./package.json"` 后**子进程**按名解析回到 `ERR_PACKAGE_PATH_NOT_EXPORTED` | `node test/packed-install.test.mjs` |
+| 「没有按钮」能分清是没这一行还是图没就绪 | `/state.served`；`test/served-report.test.mjs` 11 项四种读数 + 日志每进程一次；本机真机 `{"status":"served","entries":90,"id":"dsh-unlag"}` | `curl -s http://127.0.0.1:65045/dsh-unlag/state` |
+| Windows 上真装过一遍 | 托管 Windows 三档全绿（含 tarball 安装用例与整份 1397 项） | `gh workflow run ci --field windows_hosted=true`，run 40732826808 |
+
 ## 1.14.8 补丁：按钮在「已经坏了一个插件」的机器上还能用
 
 五件事一起改的，每件都有可重跑的判据。全部用例 61 个文件、1397 项检查点全绿（`npm test`，2026-10-29 本机实测，EXIT 0）。
