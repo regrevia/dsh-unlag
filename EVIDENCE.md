@@ -69,7 +69,7 @@ npm run live-smoke           # 对着运行中的 App 复核；输出里 verdict
 
 ## 1.14.8 补丁：按钮在「已经坏了一个插件」的机器上还能用
 
-四件事一起改的，每件都有可重跑的判据。全部用例 59 个文件、1374 项检查点全绿（`npm test`，2026-10-29 本机实测，EXIT 0）。
+五件事一起改的，每件都有可重跑的判据。全部用例 60 个文件、1385 项检查点全绿（`npm test`，2026-10-29 本机实测，EXIT 0）。
 
 | 说法 | 证据 | 怎么重跑 |
 | --- | --- | --- |
@@ -78,6 +78,8 @@ npm run live-smoke           # 对着运行中的 App 复核；输出里 verdict
 | 老宿主按 `dsh-unlag/package.json` 找清单时不再 `ERR_PACKAGE_PATH_NOT_EXPORTED` | `test/package-discovery.test.mjs`：把 `package.json` 声明的文件按 `files` 复制成真包目录，用真的 `createRequire(...).resolve('dsh-unlag/package.json')` 走两条路径；删掉 `exports['./package.json']` 这条会复现 `ERR_PACKAGE_PATH_NOT_EXPORTED` | `node test/package-discovery.test.mjs` |
 | 一句话的提示框不再是一条长框 | `client.js` 的 `PILL_STYLE`：`maxWidth: 'min(340px, 82vw)'` + `alignSelf: 'flex-end'`，没有固定 `width`；`test/reason-copy.test.mjs` 钉住这三条 | `node test/reason-copy.test.mjs` |
 | 真机上按下去确实是 done | 本机 `/state` 三次记录的 `operation`：`{id:154,status:done,rebuild:safe}`、`{id:155,…done…}`、`{id:156,…done…}`；同一个 profile 里 `adb (dsh-mobile-use)`、`crash-lore (dsh-crash-lore)` 从上一轮起就没起来，日志如实写「still stopped from an earlier press: crash-lore, adb」，但不再出现「a plugin stopped running with this update」 | `curl -s http://127.0.0.1:62741/dsh-unlag/state`；`tail -30 ~/.dsh/unlag-reload.log` |
+| 「没有按钮」这件事有可核对的读数，不只在日志里 | `/state.served`：`{status:'served'|'missing'|'unknown', entries, id}`；`test/served-report.test.mjs` 11 项覆盖在、不在、空集、读不了四种情况，并要求这条日志每进程只写一次 | `node test/served-report.test.mjs`；真机 `curl -s http://127.0.0.1:62741/dsh-unlag/state` 现在是 `{"status":"served","entries":90,"id":"dsh-unlag"}` |
+| 真机上的按钮契约与启动校验 | `DSH_UNLAG_HOST=http://127.0.0.1:62741 npm run smoke` EXIT 0：`verdict: true`、`shimWrapped: true`、`ready: true`、九条写路由的 403/405 契约全对，它读的正是这台机器上 90 个插件的真插件图 | 上面这条命令 |
 | 四条 lint 仍然干净 | `style-lint` 0 error；`ui-copy-lint` 0 error（7 warning）；`zh-lint` 0 error（7 warning，都是 `reports/` 里的旧文档） | `node ~/.dsh/tools/style-lint.mjs .; node ~/.dsh/skills/ui-restraint/scripts/ui-copy-lint.mjs .; node ~/.agents/skills/zh-ui-type-lint/scripts/zh-lint.mjs .` |
 
 还没证的：

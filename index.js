@@ -3535,22 +3535,41 @@ function registerAgentTool(ctx, controller, config) {
  * at all while this half keeps answering. Say it once per process, so a report of "no button" has a
  * cause on record instead of an empty log.
  */
+/**
+ * The reading itself, so a report of "no button" can be checked instead of only read in the log:
+ * `served` says whether this entry is in the set the app hands the page right now, and `entries` is
+ * how many rows the set has (a zero-row set is not the same as a set this entry is missing from).
+ */
+function selfServedReport(ctx) {
+  try {
+    const entries = ctx?.get?.('clientModules')?.graph?.()?.entries
+    if (!Array.isArray(entries) || entries.length === 0) return { status: 'unknown', entries: Array.isArray(entries) ? 0 : null, id: SELF_ENTRY_ID }
+    const served = entries.some((row) => row?.id === SELF_ENTRY_ID)
+    return { status: served ? 'served' : 'missing', entries: entries.length, id: SELF_ENTRY_ID }
+  } catch (error) {
+    return { status: 'unknown', entries: null, id: SELF_ENTRY_ID, error: String(error?.message ?? error).slice(0, 200) }
+  }
+}
+
 /** One line per process is enough: the set is fixed at boot and a page asks often. */
 let selfAuditSaid = null
 function auditSelfServed(ctx) {
-  try {
-    const entries = ctx?.get?.('clientModules')?.graph?.()?.entries
-    if (!Array.isArray(entries) || entries.length === 0) return
-    if (entries.some((row) => row?.id === SELF_ENTRY_ID)) {
-      selfAuditSaid = 'served'
-      return
-    }
-    if (selfAuditSaid === 'missing') return
-    selfAuditSaid = 'missing'
-    log(`the app left ${SELF_ENTRY_ID} out of the plugin set it serves now: its host half runs, its client half is not served, so the header button cannot mount until the app resolves this package`) // ui-copy-ignore
-  } catch (error) {
-    log(`cannot tell whether this copy of the plugin is in the served set: ${error?.message ?? error}`)
+  const report = selfServedReport(ctx)
+  if (report.status === 'served') {
+    selfAuditSaid = 'served'
+    return report
   }
+  if (report.status === 'unknown' && report.error !== undefined) {
+    log(`cannot tell whether this copy of the plugin is in the served set: ${report.error}`)
+    return report
+  }
+  // No set to judge at all (this context has no client-module graph yet): saying "left out" here
+  // would be a guess, and the line would be read as the cause of a missing button.
+  if (report.status === 'unknown' && report.entries === null) return report
+  if (selfAuditSaid === 'missing') return report
+  selfAuditSaid = 'missing'
+  log(`the app left ${SELF_ENTRY_ID} out of the plugin set it serves now: its host half runs, its client half is not served, so the header button cannot mount until the app resolves this package`) // ui-copy-ignore
+  return report
 }
 
 /**
@@ -3578,8 +3597,8 @@ function serveButton(ctx, controller, config) {
           // answers a method it does not serve.
           const method = String(req?.method ?? 'GET').toUpperCase()
           if (method !== 'GET' && method !== 'HEAD') return sendJson(res, 405, { status: 'method' })
-          auditSelfServed(ctx)
-          sendJson(res, 200, { version: VERSION, code: CODE_STAMP, plugins: switches.plugins, page: switches.page, agentRefresh: switches.agent === true, saved: switches.saved, shim: bundleShimStatus(ctx), operation: controller.operation?.() ?? null, boot: liveBoot.current, bootSnapshot: liveBoot.snapshot })
+          const served = auditSelfServed(ctx)
+          sendJson(res, 200, { version: VERSION, code: CODE_STAMP, served, plugins: switches.plugins, page: switches.page, agentRefresh: switches.agent === true, saved: switches.saved, shim: bundleShimStatus(ctx), operation: controller.operation?.() ?? null, boot: liveBoot.current, bootSnapshot: liveBoot.snapshot })
         } catch (error) {
           log(`cannot describe this copy of the plugin: ${error?.message ?? error}`)
           sendJson(res, 500, { status: 'error' })
@@ -4003,7 +4022,7 @@ export function apply(ctx, config) {
     }
     log(`dsh-unlag ${VERSION} loaded (code ${CODE_STAMP}, composer: ${composerMounted ? 'mounted' : 'no-composer'})`)
     log('plugin reload is manual: ask the user to press the refresh button; do not restart the app')
-    auditSelfServed()
+    auditSelfServed(ctx)
     if (settingsOf(config ?? {}).autoReload === true) {
       syncWatching()
       if (globalThis[WATCHER_KEY] === null) log('auto reload is on but the hmr entry is not running; a press still works')
