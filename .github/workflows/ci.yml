@@ -11,11 +11,13 @@ on:
     branches: [main, 'win/**']
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  # Linux legs run on GitHub-hosted runners for every event.
   test:
     name: test (${{ matrix.os }}, node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
@@ -23,7 +25,64 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest]
+        node: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+
+  # Windows on the self-hosted machine. Trusted events only: a public
+  # repository's fork PR would execute arbitrary code on that machine, so
+  # pull_request keeps using GitHub-hosted windows-latest (free for public
+  # repositories, no minute quota).
+  windows:
+    name: test (regrevia-win, node ${{ matrix.node }})
+    if: github.event_name != 'pull_request'
+    runs-on: [self-hosted, windows, x64, regrevia-win]
+    timeout-minutes: 30
+    # The machine is shared with other projects on the same Windows user: one
+    # job at a time, and never cancel a running one from a newer push.
+    concurrency:
+      group: ci-regrevia-win-${{ github.ref }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: runner identity
+        shell: powershell
+        run: |
+          Write-Host "::add-mask::$env:USERNAME"
+          Write-Host "::add-mask::$env:COMPUTERNAME"
+          Write-Host "runner=$env:RUNNER_NAME os=$env:RUNNER_OS"
+          Write-Host "ps=$($PSVersionTable.PSVersion)"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+
+  # Pull-request Windows coverage stays on GitHub-hosted runners; the machine
+  # must never run fork code. Public repository: these minutes are not metered.
+  windows-pr:
+    name: test (windows-latest, node ${{ matrix.node }})
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
         node: [20, 22, 24]
     steps:
       - uses: actions/checkout@v4
