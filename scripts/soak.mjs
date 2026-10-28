@@ -569,7 +569,9 @@ export async function createChaosModel(options = {}) {
       const live = runningPresses()
       if (live instanceof Map && live.size > 128) found.push(`${where}/presses-live: ${live.size} rows`)
       const entries = globalEntries()
-      if (entries.length > 10) found.push(`${where}/globals: ${entries.length} dsh-unlag entries on globalThis`)
+      // Eleven: the page's frozen startup list is kept beside the ten records of this plugin's own
+      // work, because a press replaces the plugin and that list has to outlive the copy that took it.
+      if (entries.length > 11) found.push(`${where}/globals: ${entries.length} dsh-unlag entries on globalThis`)
       return found
     },
 

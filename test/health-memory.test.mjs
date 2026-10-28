@@ -73,8 +73,12 @@ const stoppedOne = id(N)
   const routes = mount(recovered, recovered)
   const res = await press(routes)
   const body = JSON.parse(res.body)
-  check('a still stopped entry from an earlier press is not forgotten past 64', body.status === 'failed', res.body)
-  check('and the answer says the rebuild is not safe', body.rebuild === 'unsafe', res.body)
+  // One broken plugin does not hold the page back forever: it is reported as stopped before this
+  // press, while the rebuild is judged by what this press changed.
+  check('a still stopped entry from an earlier press is not forgotten past 64', (body.carriedEntries ?? []).includes(stoppedOne), res.body)
+  check('and that press still ends done', body.status === 'done', res.body)
+  check('and the rebuild is safe because nothing new broke', body.rebuild === 'safe', res.body)
+  check('and it is not counted among the entries this press stopped', Array.isArray(body.failedEntries) && body.failedEntries.length === 0, res.body)
 }
 
 // --- when that last entry runs again the memory clears and the press ends done ------------------

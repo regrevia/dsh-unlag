@@ -104,7 +104,13 @@ const BUTTON_HEADER = 'x-dsh-unlag'
  * shell pins the list when a window starts, so the only place the truth about a live document
  * exists is inside that document; this is where it is kept for a check to read.
  */
-const liveBoot = { current: null, snapshot: null, capture: 0 }
+/**
+ * It lives on globalThis because a press replaces this plugin: the copy that answers the reload is
+ * thrown away and a fresh copy is applied, so a report kept in this module would be gone exactly
+ * when the next press needs it. The record is one page's frozen list, written once per window.
+ */
+const LIVE_BOOT_KEY = Symbol.for('dsh-unlag.boot')
+const liveBoot = globalThis[LIVE_BOOT_KEY] ?? (globalThis[LIVE_BOOT_KEY] = { current: null, snapshot: null, capture: 0 })
 const CODE_EXTENSIONS = new Set(['.js', '.mjs', '.cjs'])
 /** Build output and dependency trees change without the source a developer edits changing. */
 const IGNORED_PATH = /(^|\/)(node_modules|\.git|\.cache|dist|build|coverage)([./]|$)/u
@@ -911,14 +917,22 @@ function pluginReloader(ctx, config) {
      * again or leaves the profile.
      */
     const health = settleEntryHealth(requiredBefore)
-    const failedEntries = health.unhealthy
+    /**
+     * A plugin that an earlier press already left stopped is still down, but this press did not do
+     * it: the app rejects a reload that newly breaks an entry, so a carried one is a fact about the
+     * profile, not about this update. Holding the page back for it would freeze the button forever
+     * on one unrelated broken plugin, so the rebuild is judged by what this press changed.
+     */
+    const carried = new Set(health.carried)
+    const stoppedEntries = health.unhealthy
+    const brokenNow = stoppedEntries.filter((id) => !carried.has(id))
     const inactiveEntries = listed
     if (!health.readable) log('the plugin list could not be read after the update; the update ends without a verdict on the set')
     log(
-      `plugins reloaded (already not running=${inactiveEntries.length} newly not running=${failedEntries.length} still stopped=${health.carried.length} pending=${pending.length}${restartReason === null ? '' : ` restart=${restartReason}`})`,
+      `plugins reloaded (already not running=${inactiveEntries.length} newly not running=${brokenNow.length} still stopped=${health.carried.length} pending=${pending.length}${restartReason === null ? '' : ` restart=${restartReason}`})`,
     )
     for (const entry of inactiveEntries.slice(0, 5)) log(`a plugin was already not running and still is not: ${entry.slice(0, 200)}`)
-    for (const entry of failedEntries.slice(0, 5)) log(`a plugin stopped running with this update: ${entry.slice(0, 200)}`)
+    for (const entry of brokenNow.slice(0, 5)) log(`a plugin stopped running with this update: ${entry.slice(0, 200)}`)
     /**
      * A list that could not be read after the update leaves the entries unjudged, and unjudged is
      * not the same as broken: reporting `failed` here would tell the person the update broke
@@ -926,14 +940,14 @@ function pluginReloader(ctx, config) {
      * press that ends `done` while the list was unreadable can be explained afterwards, and the
      * page is told the rebuild is not proven either way.
      */
-    const rebuild = !health.readable ? 'unknown' : failedEntries.length > 0 || pending.length > 0 || restartReason !== null ? 'unsafe' : 'safe'
+    const rebuild = !health.readable ? 'unknown' : brokenNow.length > 0 || pending.length > 0 || restartReason !== null ? 'unsafe' : 'safe'
     return {
-      status: failedEntries.length > 0 ? 'failed' : 'done', // ui-copy-ignore
+      status: brokenNow.length > 0 ? 'failed' : 'done', // ui-copy-ignore
       warnings,
       pending,
       restartReason,
       inactiveEntries,
-      failedEntries,
+      failedEntries: brokenNow,
       carriedEntries: health.carried,
       healthReadable: health.readable,
       rebuild, // ui-copy-ignore
@@ -3516,6 +3530,30 @@ function registerAgentTool(ctx, controller, config) {
 }
 
 /**
+ * The button lives in a script the app has to hand the page. A host that resolves this package to no
+ * manifest drops the row from the plugin set without a line of its own, and the page then has no
+ * button at all while this half keeps answering. Say it once per process, so a report of "no button"
+ * has a cause on record instead of an empty log.
+ */
+/** One line per process is enough: the set is fixed at boot and a page asks often. */
+let selfAuditSaid = null
+function auditSelfServed(ctx) {
+  try {
+    const entries = ctx?.get?.('clientModules')?.graph?.()?.entries
+    if (!Array.isArray(entries) || entries.length === 0) return
+    if (entries.some((row) => row?.id === SELF_ENTRY_ID)) {
+      selfAuditSaid = 'served'
+      return
+    }
+    if (selfAuditSaid === 'missing') return
+    selfAuditSaid = 'missing'
+    log(`the app left ${SELF_ENTRY_ID} out of the plugin set it serves now: its host half runs, its client half is not served, so the header button cannot mount until the app resolves this package`)
+  } catch (error) {
+    log(`cannot tell whether this copy of the plugin is in the served set: ${error?.message ?? error}`)
+  }
+}
+
+/**
  * The entry points the header button calls. Each answers with the current switches so the page
  * never guesses: with both off it does nothing, and a turn still running is reported rather than
  * cut. The press outcome is written to the log, because a press that stopped before rebuilding
@@ -3540,6 +3578,7 @@ function serveButton(ctx, controller, config) {
           // answers a method it does not serve.
           const method = String(req?.method ?? 'GET').toUpperCase()
           if (method !== 'GET' && method !== 'HEAD') return sendJson(res, 405, { status: 'method' })
+          auditSelfServed(ctx)
           sendJson(res, 200, { version: VERSION, code: CODE_STAMP, plugins: switches.plugins, page: switches.page, agentRefresh: switches.agent === true, saved: switches.saved, shim: bundleShimStatus(ctx), operation: controller.operation?.() ?? null, boot: liveBoot.current, bootSnapshot: liveBoot.snapshot })
         } catch (error) {
           log(`cannot describe this copy of the plugin: ${error?.message ?? error}`)
@@ -3964,6 +4003,7 @@ export function apply(ctx, config) {
     }
     log(`dsh-unlag ${VERSION} loaded (code ${CODE_STAMP}, composer: ${composerMounted ? 'mounted' : 'no-composer'})`)
     log('plugin reload is manual: ask the user to press the refresh button; do not restart the app')
+    auditSelfServed()
     if (settingsOf(config ?? {}).autoReload === true) {
       syncWatching()
       if (globalThis[WATCHER_KEY] === null) log('auto reload is on but the hmr entry is not running; a press still works')

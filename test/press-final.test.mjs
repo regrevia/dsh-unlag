@@ -134,9 +134,9 @@ check('an empty address stays empty', startupPath('') === '')
   // the record of that failure is kept until the plugin runs again or leaves the profile, so a
   // second press cannot turn a stopped plugin into a done one.
   const next = await pressSlow(routes)
-  check('the next press still ends failed while that plugin is stopped', next.body.status === 'failed', JSON.stringify(next.body))
+  check('the next press ends done because it changed nothing', next.body.status === 'done', JSON.stringify(next.body))
   check('and it names the plugin as stopped before this press', Array.isArray(next.body.carriedEntries) && next.body.carriedEntries.includes('@local/envoy'), JSON.stringify(next.body))
-  check('and the page is told the rebuild is not safe', next.body.rebuild === 'unsafe', JSON.stringify(next.body))
+  check('and the page may rebuild on the set that is running', next.body.rebuild === 'safe', JSON.stringify(next.body))
   check('and the log says that plugin is still stopped from an earlier press', lines().some((line) => /still stopped from an earlier press: @local\/envoy/u.test(line)), lines().slice(-6).join(' | '))
 }
 
@@ -179,8 +179,8 @@ check('an empty address stays empty', startupPath('') === '')
   // kept until the plugin runs again or leaves the profile, so pressing again cannot make it go
   // away: the retry is judged against the same stopped plugin and fails too.
   const retry = await pressSlow(routes)
-  check('and the next press does not turn that failure into done', retry.body.status === 'failed', JSON.stringify(retry.body))
-  check('and it names the plugin that was already stopped', (retry.body.carriedEntries ?? []).includes('@local/a'), JSON.stringify(retry.body))
+  check('and the next press does not forget that the plugin is still down', (retry.body.carriedEntries ?? []).includes('@local/a'), JSON.stringify(retry.body))
+  check('and that press ends done so the page can come up on what runs', retry.body.status === 'done', JSON.stringify(retry.body))
 }
 
 // --- the record of a stopped plugin clears when that plugin runs again ------------------------

@@ -63,7 +63,7 @@ for (const run of result.runs) {
   check(`seed ${run.seed}: no timer pile-up`, run.timersMax <= 512, `${run.timersMax} timers`)
   check(`seed ${run.seed}: press memory stayed bounded`, run.pressesHeld <= 32, `${run.pressesHeld} rows`)
   check(`seed ${run.seed}: live press rows stayed bounded`, run.liveHeld <= 128, `${run.liveHeld} rows`)
-  check(`seed ${run.seed}: globalThis stayed bounded`, run.globals <= 10, `${run.globals} entries`)
+  check(`seed ${run.seed}: globalThis stayed bounded`, run.globals <= 11, `${run.globals} entries`)
   check(`seed ${run.seed}: no update ran next to another`, run.maxConcurrent <= 1, `${run.maxConcurrent} at once`)
   check(`seed ${run.seed}: every answer carried a status`, run.statusCounts !== undefined && Object.keys(run.statusCounts).length > 0)
 }

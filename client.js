@@ -1438,11 +1438,12 @@ window.__ModuleLoader__.load({
       zIndex: 30, // ui-copy-ignore
       display: 'flex', // ui-copy-ignore
       flexDirection: 'column', // ui-copy-ignore
-      alignItems: 'stretch', // ui-copy-ignore
+      alignItems: 'flex-end', // ui-copy-ignore
       gap: 6, // ui-copy-ignore
-      // An absolutely placed box shrinks to the button's own width, which turned the sentence into
-      // a column a few characters wide. It needs its own width to read as a line.
-      width: 'min(340px, 82vw)', // ui-copy-ignore
+      // A short sentence gets a short box: the card hugs its own words up to a reading width, so a
+      // six-character answer does not sit in a 340px frame with two thirds of it empty.
+      maxWidth: 'min(340px, 82vw)', // ui-copy-ignore
+      alignSelf: 'flex-end', // ui-copy-ignore
       padding: '6px 8px', // ui-copy-ignore
       borderRadius: 6,
       border: '1px solid var(--dsh-color-border, rgba(127,127,127,0.28))',

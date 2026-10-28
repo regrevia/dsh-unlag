@@ -177,7 +177,9 @@ const live = model.runningPresses()
 check('live press rows stay bounded', (live?.size ?? 0) <= 128, `${live?.size ?? 0} rows`)
 
 const globals = globalEntries().filter((row) => row.name.startsWith('dsh-unlag'))
-check('globalThis keeps only the plugin state it needs', globals.length <= 10, globals.map((row) => row.name).join(', '))
+// One of the eleven is the page's frozen startup list: a press replaces this plugin, so that report
+// has to outlive the copy that received it or the next press cannot say what the page booted with.
+check('globalThis keeps only the plugin state it needs', globals.length <= 11, globals.map((row) => row.name).join(', '))
 
 check('the plugin registered its seven routes and no more', model.routes.size === 7, `${model.routes.size} routes`)
 check('no update ever ran next to another', model.counters.maxConcurrent <= 1, `${model.counters.maxConcurrent} at once`)
