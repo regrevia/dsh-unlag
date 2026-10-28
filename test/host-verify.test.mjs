@@ -297,5 +297,94 @@ check('a startup list the size of this app\'s own profile verifies', measuredBig
 
 // Counted at the end: a check appended after a mid-file summary must still be able to fail this run.
 const failed = checks.filter((row) => !row.pass)
+// One startup row can carry several plugins in one bundle, and the chunk a body loads is asked by
+// replacing the file in that same bundle: `plugins/@local/a/chunk-1.js` is a different address, and
+// when both plugins have a file of that name the first one's bytes would vouch for the second's.
+// The check has to ask the address the next document really asks.
+{
+  const batchedRow = '/plugins/??@local/a,@local/b/client.js&rev=old'
+  const batchedUrl = '/plugins/??@local/a,@local/b/client.js&rev=new'
+  const batchedBody = `window.__ModuleLoader__.load({ id: "@local/a", factory() {} });window.__ModuleLoader__.load({ id: "@local/b", factory() {} });require.async("chunk-1.js")`
+  const batchedGraph = {
+    rev: 'new',
+    entries: [
+      { id: '@local/a', rev: 'new', url: batchedUrl },
+      { id: '@local/b', rev: 'new', url: batchedUrl },
+    ],
+    batches: [{ url: batchedUrl, entries: ['@local/a', '@local/b'], rev: 'new' }],
+  }
+  const batchedCheck = async (chunkAnswers) => {
+    const asked = []
+    const chunkOf = async (address) => {
+      asked.push(String(address))
+      return chunkAnswers(String(address)) ? { status: 200 } : { status: 404 }
+    }
+    const result = await verifyStartupRows(
+      batchedGraph,
+      async () => ({ status: 200, servedRev: 'new', arrayBuffer: async () => batchedBody }),
+      [batchedRow],
+      9000,
+      null,
+      chunkOf,
+    )
+    return { result, asked }
+  }
+
+  const own = await batchedCheck((address) => address.includes('??@local/a,@local/b/chunk-1.js'))
+  check('a chunk is asked from the bundle the startup row names', own.asked.some((path) => path.includes('??@local/a,@local/b/chunk-1.js')) === true, own.asked.join(' '))
+  check('and never from one entry inside that bundle', own.asked.some((path) => path.includes('/plugins/@local/a/chunk-1.js') || path.includes('/plugins/@local/b/chunk-1.js')) === false, own.asked.join(' '))
+  check('so a bundle whose own chunk answers approves the list', own.result.status === 'ok', JSON.stringify(own.result))
+
+  // The bug: entry A answers a file of the same name and the check reads it as B's chunk.
+  const borrowed = await batchedCheck((address) => address.includes('/plugins/@local/a/chunk-1.js'))
+  check('another entry own file does not answer for the bundle chunk', borrowed.result.status === 'blocked', JSON.stringify(borrowed.result))
+  check('and the refusal names the address the page asks', typeof borrowed.result.detail === 'string' && borrowed.result.detail.includes('??@local/a,@local/b/chunk-1.js') === true, String(borrowed.result.detail))
+}
+
 console.log(`\n${checks.length - failed.length}/${checks.length} passed`)
 if (failed.length > 0) process.exitCode = 1
+
+// --- one document made of two generations ----------------------------------------------------
+// The page rebuilt from the shell's frozen list takes its main script at the revision that list
+// names and each chunk at the revision the table serves now. `/verify` approved exactly that pair
+// once, and the loader then failed inside the new page (`helper.legacyFunction is not a function`):
+// an answer made of two interfaces is not a page this press can promise. The check reads which
+// generation each answer came from and refuses the pair.
+{
+  const mixedRows = ['/plugins/??@local/a/client.js&rev=old']
+  const mainBody = `require.async("./helper.js")\n${registered('@local/a')}`
+  const chunkOf = async (address) => {
+    if (String(address).includes('rev=new')) return { status: 200, servedRev: 'new', arrayBuffer: async () => 'export function legacyFunction() {}' }
+    return { status: 404 }
+  }
+  const mixed = await verifyStartupRows(
+    { rev: 'new', entries: [{ id: '@local/a', rev: 'new' }], batches: [] },
+    async () => ({ status: 200, servedRev: 'old', arrayBuffer: async () => mainBody }),
+    mixedRows,
+    9000,
+    null,
+    chunkOf,
+  )
+  check('an old main body with a newer chunk is refused as mixed', mixed.status === 'blocked' && mixed.reason === 'mixed', JSON.stringify(mixed))
+  check('and the refusal names both generations', /old/u.test(String(mixed.detail)) && /new/u.test(String(mixed.detail)), String(mixed.detail))
+
+  const coherent = await verifyStartupRows(
+    { rev: 'new', entries: [{ id: '@local/a', rev: 'new' }], batches: [] },
+    async () => ({ status: 200, servedRev: 'new', arrayBuffer: async () => mainBody }),
+    mixedRows,
+    9000,
+    null,
+    chunkOf,
+  )
+  check('a main body at the current generation with its own chunk verifies', coherent.status === 'ok', JSON.stringify(coherent).slice(0, 160))
+
+  const assembled = await verifyStartupRows(
+    { rev: 'new', entries: [{ id: '@local/a', rev: 'new' }], batches: [] },
+    async () => ({ status: 200, servedRev: 'sha256:0123456789abcdef', arrayBuffer: async () => mainBody }),
+    mixedRows,
+    9000,
+    null,
+    chunkOf,
+  )
+  check('a body assembled from the current set is not the stale side of a pair', assembled.status === 'ok', JSON.stringify(assembled).slice(0, 160))
+}

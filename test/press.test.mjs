@@ -458,6 +458,87 @@ for (const [label, options] of [
   const rebuilt = page.reloads.length + page.navigations.length
   check('a press with an empty composer still rebuilds', rebuilt >= 1, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
 }
+// The consent is about the files and nothing else. A press that agreed to give them up still has
+// to commit the focused field, let the other plugins save, and hear their refusal: a consent that
+// skipped those checks let a press drop saved work and walk past a plugin that said no.
+{
+  const page = harness({ draftFiles: 1, activeThrows: true })
+  await page.press()
+  await page.press()
+  check('a press that gave up its files still reads the focused field', page.navigations.length === 0 && page.reloads.length === 0, JSON.stringify({ navigations: page.navigations, reloads: page.reloads }))
+  check('and it says the page state could not be read', /state|screen/iu.test(String(page.detail() ?? page.notice())), String(page.detail() ?? page.notice()))
+}
+{
+  const page = harness({ draftFiles: 1, hold: (event) => { if (event.type === 'dsh-unlag:before') event.preventDefault() } })
+  await page.press()
+  await page.press()
+  check('a press that gave up its files still hears another plugin refuse', page.navigations.length === 0 && page.reloads.length === 0, JSON.stringify({ navigations: page.navigations, reloads: page.reloads }))
+}
+{
+  // A file picked while the consented press is reading the page changes the set the person agreed
+  // to give up, so the agreement no longer covers what the rebuild would drop. The files are held
+  // by the composer service here: with that service answering, the markup is not a second witness.
+  const conversation = { draftAttachments: new Map([['one', { id: 'one' }]]), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, input: { shell: () => undefined } }
+  let seen = 0
+  const page = harness({
+    conversation,
+    sessions: { list: () => [{ id: 's1' }] },
+    hold: (event) => {
+      if (event.type !== 'dsh-unlag:before') return
+      seen += 1
+      if (seen === 1) conversation.draftAttachments.set('later', { id: 'later' })
+    },
+  })
+  await page.press()
+  check('a press with a file in the composer does not rebuild', page.navigations.length === 0 && page.reloads.length === 0, JSON.stringify({ navigations: page.navigations, reloads: page.reloads }))
+  await page.press()
+  check('a file added after the consent is refused again', page.navigations.length === 0 && page.reloads.length === 0, JSON.stringify({ navigations: page.navigations, reloads: page.reloads }))
+  check('and the notice asks again for those files', /attach|send/iu.test(String(page.notice())), String(page.notice()))
+}
+
+// --- the page the app really serves ---------------------------------------------------------
+// The desktop shell serves a document that hands its boot data over after registering itself; it
+// has no `__DSH_BOOT__` at all. A check that looked for that literal refused every normal desktop
+// rebuild, twice, on a page that boots fine.
+{
+  const desktop = '<!doctype html><html><body><div id="root"></div><script>globalThis.__DSH_BOOT_READY__ = Promise.withResolvers()</script></body></html>'
+  // The checked address has to differ from the one this document is on, or the fake host answers
+  // from the "this very address" branch and the document never reaches the check.
+  const page = harness({ pageHtml: desktop, href: 'http://127.0.0.1:62542/?interface=old' })
+  await page.press()
+  check('a real desktop document rebuilds on the first press', page.reloads.length + page.navigations.length === 1, JSON.stringify({ navigations: page.navigations, reloads: page.reloads, notice: page.notice() }))
+}
+
+// --- the official SubmitMachine's own `sending` phase ---------------------------------------
+// The app marks a send `sending` before it is admitted, and that phase is not a draft or a file:
+// a press that only knew two phase names let a rebuild run under a send it would drop.
+{
+  const shell = { snapshot: { attachmentIds: [], draft: '', phase: 'sending' }, detachedDrafts: new Map(), failedDetached: new Map(), attachmentFlights: new Map() }
+  const conversation = { draftAttachments: new Map(), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, input: { shell: () => shell } }
+  const page = harness({ conversation, sessions: { list: () => [{ id: 's1' }] } })
+  await page.press()
+  check('a send in the app own sending phase holds the rebuild', page.reloads.length === 0 && page.navigations.length === 0, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+  check('and it says a message is being sent', /sending|sent/iu.test(String(page.notice())), String(page.notice()))
+}
+{
+  // The phase is read in every retained session, not only the one in front, and checked again
+  // right before the document goes.
+  const shell = { snapshot: { attachmentIds: [], draft: '', phase: 'idle' }, detachedDrafts: new Map(), failedDetached: new Map(), attachmentFlights: new Map() }
+  const conversation = { draftAttachments: new Map(), pendingFileUploads: new Set(), fileUploads: { getSnapshot: () => ({}) }, input: { shell: () => shell } }
+  let seen = 0
+  const page = harness({
+    conversation,
+    sessions: { list: () => [{ id: 'front' }, { id: 'other' }] },
+    hold: (event) => {
+      if (event.type !== 'dsh-unlag:before') return
+      seen += 1
+      if (seen === 1) shell.snapshot.phase = 'sending'
+    },
+  })
+  await page.press()
+  check('a send that starts while the press checks holds it before it goes', page.reloads.length === 0 && page.navigations.length === 0, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+}
+
 // --- a message that is still being sent -----------------------------------------------------
 // A send waiting for admission is retained by the composer with the text it carries. That text is
 // in neither the transcript nor the draft field: a rebuild here would drop what the person wrote,

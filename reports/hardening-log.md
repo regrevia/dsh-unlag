@@ -113,3 +113,19 @@
 - 日志写真实原因：`applied:document:http:404`、`:noboot`、`:timeout`、`:noanswer`、`refused:http:401`、`attachments:picker`、`unchecked:timeout`。以后任何一次「按了没成」都能在 `~/.dsh/unlag-reload.log` 里查到是哪一档。
 - 证据：新增 `test/reload-unchecked.test.mjs`（18 条：读不到→保留+再按可走、确定没有→两次都不走、401→放行且不写「没准备好」、刚重建→静默）；`test/press.test.mjs` 加 2 条（附件第二次按会重建、日志记 `attachments`）；`test/press-deadline.test.mjs` 的旧块改成「目标地址与当前地址不同」的假服务（它原来用同一个地址，新服务对当前地址照常答 200，测的就不是那个意思了）。全量 `node scripts/test.mjs`：55 个测试文件通过（1312 条 PASS）；`npm run audit`、`ui-copy-lint`（0 error）、`style-lint`、`zh-lint` 通过。
 - 没解决的，写在这里：`timeout` 那一档仍然是「未确认就导航」，导航后如果落空，这页会没有任何字（壳已 `exit(1)`）——这是全有或全无换来的代价，换来的是「能刷的时候一定刷得成」。要彻底消掉它，得让壳在启动脚本 404 时不退出，那是宿主侧改动，不在本插件里。
+
+## 第八轮：评审判 1.14.4 有四个发布阻断项（→ 1.14.5）
+
+- 评审结论是「先暂停新增功能，四项作为下一版阻断项」。逐条核对属实，没有一条是误报：
+  1. 附件第二次按的同意成了通行证：`prepareInterface({ discardAttachments })` 在附件一项放行后**没有继续**跑焦点提交、别的插件的保存、插件自己的 `dsh-unlag:before` 拒绝和发送检查——为了丢附件，把整轮准备都跳过了。而且「同意」只比对内容签名，换一个会话、换一批同名附件也能复用。
+  2. 发送保护漏了官方阶段 `sending`（只认 `adjudicating`/`submitting`），并且最后一次检查发生在 `await askAddress(target)` **之前**：地址检查等待期间开始发送、选文件，页面照样导航。
+  3. 一次启动清单可以带多个插件（`plugins/??@local/a,@local/b/client.js`），分块却一律按清单里第一个插件要（`plugins/@local/a/x.js`）：B 的分块可能被 A 的同名文件证明，`/verify` 答 ok，页面起来仍报 `helper.legacyFunction is not a function`；这个问题不按按钮也会出现。
+  4. 桌面端正常 HTML 被误判「没有启动数据」：检查只认字面 `__DSH_BOOT__`，而桌面静态 HTML 注入的是 `globalThis.__DSH_BOOT_READY__ = Promise.withResolvers()`，启动数据随后由 `dshDesktopBoot.ready()` 送进来；第一次按被判 `noboot`，第二次才重建。
+- 修法按评审要求落在合同层，不去改句子：
+  - 附件同意只豁免附件这一项，其余检查照跑；同意绑定到「这一份文档、这个会话、这组附件编号」，签名对不上就重新问。
+  - `sendHold()` 认 `sending` 并扫描**所有保留的会话**；地址检查之后加一道同步终检（对话框、发送、附件），这一眼和导航之间没有 `await`，看到变化就停在原地。
+  - 分块按「这一行自己的 bundle」要：多插件行把主文件名替换成同 bundle 里的分块文件（`??@local/a,@local/b/x.js`），不再借用任何单个条目的地址；单插件行保持原来的条目地址与旧版本号替补读。读不到就拒绝，拒绝句点名页面真正要的地址。
+  - 启动数据两种形状分开认：字面 `__DSH_BOOT__`，或 `__DSH_BOOT_READY__` + `id="root"`（桌面静态 HTML 的启动标记），不再把正常桌面页面拒成 `noboot`。
+- 测试转向真实合同：桌面那一条原来和当前地址相同，假宿主走「就是这一页」分支，测的根本不是文档形状——改成另一个地址后才真正走到检查；新增 `sending` 阶段用例（真 `sending` → 不导航，去掉 `sending` → 导航）；新增多插件 bundle 用例：分块必须问 `??@local/a,@local/b/chunk-1.js`，问单条目地址一律不算数，A 的同名文件答 200 也不能让 B 的分块通过。
+- 证据：`node scripts/test.mjs` 全量通过（55 个测试文件，1333 条 PASS）；`test/host-verify.test.mjs` 52/52；`test/press.test.mjs` 187 条。`npm run audit`、`ui-copy-lint`、`style-lint`、`zh-lint` 均 0 error。
+- 仍未做、也不假装做了的：评审要求的「真实官方启动响应 / 真实 Loader 执行」合同测试还只有本机假表；HMR 取消入队后的复检、agent 工具在自己 HMR 完成前返回、joined `requestId` 重放不重复执行，这三项留到第三批，不在本版。

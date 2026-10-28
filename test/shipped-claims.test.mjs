@@ -47,7 +47,16 @@ check('the host keeps that report', host.includes("`${BASE_PATH}/boot`") && host
 check('the state route carries it', /boot: liveBoot\.current/u.test(host))
 
 
-check('the page holds a press while a draft attachment is there', /function draftAttachmentReason/.test(client) && /if \(holdDetail !== null\) return 'attachments'/.test(client))
+check('the page holds a press while a draft attachment is there', /function draftAttachmentReason/.test(client) && /attach\.signature !== options\.discardAttachments\) return 'attachments'/.test(client))
+// A press that agreed to give up its files must not skip the rest: the consent excuses those
+// files only, so the focus commit and the other plugins' save still run after the attachment gate,
+// and the synchronous gate is looked at again right before the document goes.
+check(
+  'an attachment consent does not excuse the other checks',
+  /await commitFocusedField\(\)/u.test(client) && /await otherPluginsAreReady\(\)/u.test(client) &&
+    client.indexOf('await commitFocusedField()') > client.indexOf("return 'attachments'"),
+)
+check('and the page looks one last time right before it goes', /const late = finalGate\(discarded\)/u.test(client) && /function finalGate\(discarded\)/u.test(client))
 check(
   'written words in an ordinary draft do not hold the press',
   !/snapshot\?\.draft[\s\S]{0,120}?return '(?:sending|attachments)'/u.test(client),
@@ -56,7 +65,7 @@ check(
 check(
   'a failed send the app did not take back holds the press',
   /function failedSendDraft[\s\S]{0,2000}?failedRestoreRev/u.test(client) &&
-    /failed\.unreadable \|\| failed\.records\.length > 0[\s\S]{0,200}?return 'unsent'/u.test(client) &&
+    /failed\.unreadable \|\| failed\.records\.length > 0[\s\S]{0,200}?return \{ key: 'unsent'/u.test(client) &&
     /unsent: 'A failed message is not back in the input yet/u.test(client),
   'a failed message the app did not restore, or whose record map could not be read, is lost on rebuild',
 )

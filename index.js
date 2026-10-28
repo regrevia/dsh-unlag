@@ -2693,6 +2693,33 @@ function chunkAddress(scriptUrl, id, file) {
   return rev === null ? base : `${base}?rev=${rev[1]}`
 }
 
+/**
+ * The same address, read off the row's own bundle instead of an entry inside it.
+ *
+ * A row can carry several entries, and the document that boots asks for a chunk by replacing the
+ * main file in the bundle it already named, not by picking one of those entries: asking
+ * `plugins/@local/a/chunk-1.js` for a chunk of `??@local/a,@local/b/client.js` reads a different
+ * file, and one that shares a name with A's own chunk would let A's bytes vouch for B's. The bundle
+ * spec names the exact file the loader will ask for; when it cannot be read the caller falls back
+ * to the single entry it could name.
+ */
+function chunkAddressFor(scriptUrl, file) {
+  const raw = String(scriptUrl ?? '')
+  if (raw === '') return null
+  // The bundle spec starts with `??`, so a plain query search would cut the path in half at the
+  // second question mark; the query, when there is one, starts after the spec.
+  const spec = raw.indexOf('??')
+  const from = spec === -1 ? 0 : spec + 2
+  const found = raw.slice(from).search(/[?#]/u)
+  const cut = found === -1 ? -1 : from + found
+  const pathPart = cut === -1 ? raw : raw.slice(0, cut)
+  const tail = cut === -1 ? '' : raw.slice(cut)
+  // The row names its main body last, sometimes followed by the revision the bundle carries.
+  if (!/client\.js(?:&rev=[^&#]*)?$/u.test(pathPart)) return null
+  const asked = pathPart.replace(/client\.js(&rev=[^&#]*)?$/u, (_whole, rev) => `${file}${rev ?? ''}`)
+  return asked === pathPart ? null : `${asked}${tail}`
+}
+
 /** Ids a body reads from the loader's table through `require`, which must already be registered. */
 function requiredIds(body) {
   const ids = new Set()
@@ -2826,6 +2853,9 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
     try {
       if (response?.standIn === true) standInRows += 1
     } catch {}
+    // Which generation answered this body, when the reader can say: the mix check below compares it
+    // with the generation each chunk it loads comes from.
+    const mainRev = answerRevision(response)
     let bytes = null
     try {
       bytes = Buffer.from(await response.arrayBuffer())
@@ -2848,7 +2878,7 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
     }
     // Only what the cross-checks below need from this body is kept; the text itself is let go here,
     // so a list of large scripts costs one script of memory rather than the whole list.
-    const record = { url: item.url, ids: item.ids, registered, required: requiredIds(text), lazy: [...lazyChunkFiles(text)] }
+    const record = { url: item.url, ids: item.ids, registered, required: requiredIds(text), lazy: [...lazyChunkFiles(text)], servedRev: mainRev }
     record.digest = createHash('sha256').update(bytes).digest('hex').slice(0, 16)
     bodies.push(record)
     /**
@@ -2860,11 +2890,23 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
      * own address in the reason instead of leaving it to the boot.
      */
     let chunksRead = 0
-    const owner = item.ids.find((id) => served.has(id))
+    const owners = item.ids.filter((id) => served.has(id))
+    const owner = owners[0]
+    // A row that carries one plugin is asked for its chunks by that entry's own address, as it
+    // always has been. A row that carries several plugins has no single entry to name: the document
+    // asks by replacing the file in the bundle it already named, and picking one of the entries
+    // would read a different file — the exact address another entry's same-named chunk answers.
+    const batched = owners.length > 1
+    const currentRow = owner === undefined ? null : entries.get(owner)
+    const fromRow = typeof currentRow?.url === 'string' && currentRow.url !== '' ? currentRow.url : null
+    // The bundle the row is served from now, not the frozen address the document keeps.
+    const currentUrl = batched ? fromRow ?? item.url : item.url
     for (const file of record.lazy) {
       if (owner === undefined || chunksRead >= MAX_CHUNK_READS) break
       chunksRead += 1
-      const address = chunkAddress(item.url, owner, file)
+      const address = batched
+        ? chunkAddressFor(currentUrl, file) ?? chunkAddress(currentUrl, owner, file)
+        : chunkAddress(item.url, owner, file)
       const chunkRead = await withDeadline(() => fetchChunk(address), budgetMs - (Date.now() - began))
       if (chunkRead.timedOut === true) {
         return { status: 'blocked', reason: 'slow', detail: `${address} did not answer within the time this check waits` }
@@ -2873,6 +2915,23 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
         return { status: 'blocked', reason: 'network', detail: `${address}: ${String(chunkRead.error?.message ?? chunkRead.error)}` }
       }
       const chunkStatus = chunkRead.value?.status ?? null
+      if (chunkStatus === 200) {
+        /**
+         * The document the next page really receives is one main and its chunks: a main body served
+         * at an older generation with a chunk served at a newer one is two interfaces in one page,
+         * and the check would approve a boot the loader then fails (`helper.legacyFunction is not a
+         * function`). Nothing here can make the old side current, so the press is held with what
+         * the page would have been made of; opening the app again composes both sides anew.
+         */
+        const chunkServedRev = answerRevision(chunkRead.value) || revisionInUrl(address)
+        if (mixesGenerations(mainRev, chunkServedRev, revisionAtStart ?? '')) {
+          return {
+            status: 'blocked', // ui-copy-ignore
+            reason: 'mixed', // ui-copy-ignore
+            detail: `${address} answers at ${chunkServedRev}, while the script it belongs to answers at ${mainRev}`,
+          }
+        }
+      }
       if (chunkStatus !== 200) {
         /**
          * The route answers a chunk the plugin still has at the revision it serves now, so an
@@ -2887,6 +2946,18 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
             return { status: 'blocked', reason: 'slow', detail: `${spare.address} did not answer within the time this check waits` }
           }
           if (!('error' in spareRead)) spareStatus = spareRead.value?.status ?? null
+          if (spareStatus === 200) {
+            // The same mix question, over the address the rebuilt page actually reaches: an old main
+            // body with a chunk substituted to the newer generation is still two interfaces.
+            const spareServedRev = answerRevision(spareRead.value) || revisionInUrl(spare.address)
+            if (mixesGenerations(mainRev, spareServedRev, revisionAtStart ?? '')) {
+              return {
+                status: 'blocked', // ui-copy-ignore
+                reason: 'mixed', // ui-copy-ignore
+                detail: `${spare.address} answers at ${spareServedRev}, while the script it belongs to answers at ${mainRev}`,
+              }
+            }
+          }
         }
         if (spareStatus !== 200) {
           /**
@@ -2988,16 +3059,68 @@ export async function readStartupScript(clientModules, url) {
     // no longer knows, so the check reads in that same order: bytes taken from the mapping while the
     // route had an answer were bytes the next page would never run.
     const served = await fetchBundleAt(clientModules, url, 'GET')
-    if (served !== null && served.status === 200) return served
+    if (served !== null && served.status === 200) return withServedRev(served, revisionInUrl(url))
     const answer = await currentBundleAnswer(clientModules, 'GET', url)
     // `standIn` rides along: these bytes stand in for a plugin the set no longer has, and the check
     // says so when it refuses, so the log can tell that from a body the app really serves.
-    if (answer !== null) return { status: 200, standIn: answer.standIn === true, arrayBuffer: async () => answer.body }
+    if (answer !== null) {
+      return { status: 200, standIn: answer.standIn === true, servedRev: answer.servedRev, arrayBuffer: async () => answer.body }
+    }
   } catch (error) {
     // The fallback is still the right answer; the failure itself must not vanish.
     log(`cannot answer ${oneLine(url)} at the revision the app serves now: ${oneLine(error?.message ?? error)}; asking the app's own route`)
   }
   return fetchBundleAt(clientModules, url, 'GET')
+}
+
+/**
+ * Record which generation a script body was served at, on the object the check reads.
+ *
+ * A response cannot be rebuilt without losing its own methods, so the mark is written onto it: the
+ * check is short-lived and the object is not shared beyond it. A response that refuses the write is
+ * still readable — its revision is simply unknown, which the mix check treats as no evidence.
+ */
+function withServedRev(response, rev) {
+  try {
+    if (response !== null && typeof response === 'object' && typeof rev === 'string' && rev !== '') {
+      response.servedRev = rev
+    }
+  } catch {
+    // A frozen response keeps its bytes; only the generation mark is lost.
+  }
+  return response
+}
+
+/** The generation an answer names, from its own mark or from the substitution's header. */
+function answerRevision(value) {
+  try {
+    const direct = value?.servedRev
+    if (typeof direct === 'string' && direct !== '') return direct
+    const header = value?.headers?.get?.('x-dsh-unlag-served-rev')
+    return typeof header === 'string' ? header : ''
+  } catch {
+    return ''
+  }
+}
+
+/** Whether a revision names a generation rather than an assembled body's digest. */
+function namesGeneration(rev) {
+  return typeof rev === 'string' && rev !== '' && !rev.startsWith('sha256:')
+}
+
+/**
+ * Whether one document would be made of two generations.
+ *
+ * A page rebuilt from the shell's frozen list gets its main script at the revision that list names
+ * and each chunk at the revision the table serves that plugin now. Bytes assembled by the mapping
+ * are current by construction and say so with a digest rather than a revision, so they are never
+ * part of this question; two real generations in one document are.
+ */
+function mixesGenerations(mainRev, chunkRev, checkRev) {
+  if (!namesGeneration(mainRev) || !namesGeneration(chunkRev)) return false
+  if (mainRev === chunkRev) return false
+  // A main body already at the revision this check reads is not the stale side of the pair.
+  return mainRev !== checkRev
 }
 
 /** Ask the same question of the plugin table the plugin itself talks to. */

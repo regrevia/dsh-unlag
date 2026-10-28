@@ -9,8 +9,8 @@ window.__ModuleLoader__.load({
     const lang = (typeof document !== 'undefined' && document?.documentElement?.lang) || navigator.language || '';
     const zh = /^zh/i.test(lang);
     const COPY = zh
-      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', off: '两个开关都关着，先在设置里打开一个', replaced: '插件代码已更新，页面保持不动', stalled: '这次刷新没有回应，页面没有变，稍后再按一次', working: '正在刷新', cannotLoad: '新页面没有准备好，页面保持不动，稍后再按一次', stayedReplaced: '插件代码已更新，页面没有重建；稍后再按一次', stayed: '页面没有重建；稍后再按一次', done: '插件代码已是最新', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次', unconfirmed: '没读到插件状态，先不重建；稍后再按一次', attachments: '还有没发出去的附件，先发出去再按；再按一次会丢掉这些附件', unchecked: '这次没能确认新页面可用，再按一次仍会重建', quiet: '刚重建过，页面已经是新的，稍等再按', unsent: '有一条发送失败的消息还没回到输入框，先把这条重发再按', sending: '消息正在发送，请稍候' , menu: '按下按钮时', switchPlugins: '换掉插件代码', switchPage: '重建页面', switchAgent: 'Agent 可以自己刷新', switchesFailed: '设置没改成，稍后再试', switchesUnsaved: '设置只在这次运行里有效', rawShow: '详情', rawHide: '收起'} // ui-copy-ignore
-      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', off: 'Both switches are off; turn one on in settings', replaced: 'Plugin code updated; the page stayed as it is', stalled: 'No answer in time; the page stayed as it is; press again later', working: 'Refreshing', cannotLoad: 'The new page did not come up; this page stayed; press again later', stayedReplaced: 'Plugin code updated; the page did not rebuild; press again shortly', stayed: 'The page did not rebuild; press again shortly', done: 'Plugin code is already up to date', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later', unconfirmed: 'Plugin state could not be read, so the page stays; press again shortly', attachments: 'Files are attached but not sent; send them first, or press again to discard them', unchecked: 'The new page could not be confirmed this time; press again to rebuild anyway', quiet: 'Just rebuilt; the page is already the new one, give it a moment', unsent: 'A failed message is not back in the input yet; resend it first', sending: 'A message is being sent; wait for it to finish' , menu: 'On press', switchPlugins: 'Replace plugin code', switchPage: 'Rebuild page', switchAgent: 'Agents may refresh on their own', switchesFailed: 'Settings not changed; try again later', switchesUnsaved: 'Settings apply to this run only', rawShow: 'Details', rawHide: 'Hide'};
+      ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', off: '两个开关都关着，先在设置里打开一个', replaced: '插件代码已更新，页面保持不动', stalled: '这次刷新没有回应，页面没有变，稍后再按一次', working: '正在刷新', cannotLoad: '新页面没有准备好，页面保持不动，稍后再按一次', stayedReplaced: '插件代码已更新，页面没有重建；稍后再按一次', stayed: '页面没有重建；稍后再按一次', done: '插件代码已是最新', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次', unconfirmed: '没读到插件状态，先不重建；稍后再按一次', attachments: '还有没发出去的附件，先发出去再按；再按一次会丢掉这些附件', unchecked: '这次没能确认新页面可用，再按一次仍会重建', quiet: '刚重建过，页面已经是新的，稍等再按', unsent: '有一条发送失败的消息还没回到输入框，先把这条重发再按', sending: '消息正在发送，请稍候' , mixed: '这次刷新会混用新旧插件代码，先重新打开应用', menu: '按下按钮时', switchPlugins: '换掉插件代码', switchPage: '重建页面', switchAgent: 'Agent 可以自己刷新', switchesFailed: '设置没改成，稍后再试', switchesUnsaved: '设置只在这次运行里有效', rawShow: '详情', rawHide: '收起'} // ui-copy-ignore
+      : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', off: 'Both switches are off; turn one on in settings', replaced: 'Plugin code updated; the page stayed as it is', stalled: 'No answer in time; the page stayed as it is; press again later', working: 'Refreshing', cannotLoad: 'The new page did not come up; this page stayed; press again later', stayedReplaced: 'Plugin code updated; the page did not rebuild; press again shortly', stayed: 'The page did not rebuild; press again shortly', done: 'Plugin code is already up to date', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later', unconfirmed: 'Plugin state could not be read, so the page stays; press again shortly', attachments: 'Files are attached but not sent; send them first, or press again to discard them', unchecked: 'The new page could not be confirmed this time; press again to rebuild anyway', quiet: 'Just rebuilt; the page is already the new one, give it a moment', unsent: 'A failed message is not back in the input yet; resend it first', sending: 'A message is being sent; wait for it to finish' , mixed: 'This rebuild would mix old and new plugin code; reopen the app first', menu: 'On press', switchPlugins: 'Replace plugin code', switchPage: 'Rebuild page', switchAgent: 'Agents may refresh on their own', switchesFailed: 'Settings not changed; try again later', switchesUnsaved: 'Settings apply to this run only', rawShow: 'Details', rawHide: 'Hide'};
 
     /**
      * Why the interface was left as it is, in words a person can act on. The checks below record
@@ -25,14 +25,15 @@ window.__ModuleLoader__.load({
     const BOOT_GAP_NOTICE = zh ? '缺插件，重启应用后恢复' : 'a plugin is missing, so reopen the app';
 
     const REASONS = zh
-      ? { list: '读不到启动信息', slow: '启动信息读得太慢', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', size: '启动脚本太大', verify: '插件后端没有应答', screen: '页面状态读不到', busy: '另一次刷新还在进行', dependencies: '插件依赖还没有运行', missing: '启动清单里有插件已经不见了', network: '读取插件时出错', register: '插件没有登记自己', entries: '启动清单里的插件已卸载，重启应用后再刷新', generation: '插件刚被换过，再按一次刷新', boot: '重启应用后用上新代码', url: '启动信息太长，读不全' }
-      : { list: 'startup info is unavailable', slow: 'the startup list answered too slowly', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete', size: 'a startup script is too large', verify: 'the plugin is not answering', screen: 'the page state cannot be read', busy: 'another rebuild is already running', dependencies: 'a plugin dependency is not running', missing: 'a plugin in the startup list is gone', network: 'the plugins could not be read', register: 'a plugin did not register itself', entries: 'a plugin in the startup list was uninstalled, so restart the app before rebuilding', generation: 'the plugins were replaced a moment ago, press again', boot: 'reopen the app to use the new code', url: 'the startup info is too long to keep' };
+      ? { list: '读不到启动信息', slow: '启动信息读得太慢', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', size: '启动脚本太大', verify: '插件后端没有应答', screen: '页面状态读不到', busy: '另一次刷新还在进行', dependencies: '插件依赖还没有运行', missing: '启动清单里有插件已经不见了', network: '读取插件时出错', register: '插件没有登记自己', entries: '启动清单里的插件已卸载，重启应用后再刷新', generation: '插件刚被换过，再按一次刷新', boot: '重启应用后用上新代码', url: '启动信息太长，读不全', mixed: '新页面会混用新旧插件代码，先重新打开应用' }
+      : { list: 'startup info is unavailable', slow: 'the startup list answered too slowly', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete', size: 'a startup script is too large', verify: 'the plugin is not answering', screen: 'the page state cannot be read', busy: 'another rebuild is already running', dependencies: 'a plugin dependency is not running', missing: 'a plugin in the startup list is gone', network: 'the plugins could not be read', register: 'a plugin did not register itself', entries: 'a plugin in the startup list was uninstalled, so restart the app before rebuilding', generation: 'the plugins were replaced a moment ago, press again', boot: 'reopen the app to use the new code', url: 'the startup info is too long to keep', mixed: 'the next page would mix old and new plugin code, so reopen the app first' };
 
     /** The last reason a readiness check refused for, or null after a check that passed. */
     let holdReason = null;
 
     /** The exact state that held the last check, when the reason alone would not tell. */
     let holdDetail = null;
+    let holdSignature = null;
 
     /** What the refusing check itself said, kept for the press that wants to read it. */
     let holdRaw = null;
@@ -480,6 +481,7 @@ window.__ModuleLoader__.load({
       dependencies: 'covers',
       entries: 'entries', generation: 'generation', boot: 'boot',
       list: 'list', // ui-copy-ignore
+      mixed: 'mixed', // ui-copy-ignore
     };
 
     /** Read every bundle the next boot would load and prove each listed plugin is inside. */
@@ -934,6 +936,21 @@ window.__ModuleLoader__.load({
      * replaced is gone from the history with it. Asking first is what makes a refused rebuild keep
      * the page the person is reading instead of trading a slow page for no page at all.
      */
+    /**
+     * Whether a served document is one the app can boot from.
+     *
+     * The desktop shell serves a static page carrying `__DSH_BOOT_READY__` and then fetches the
+     * startup manifest over its own channel, so the literal `__DSH_BOOT__` is absent from a page
+     * that boots perfectly. Requiring it turned every normal desktop address into "no boot" and
+     * refused the press twice, every time. The root container is what makes the body a page rather
+     * than an error document; the manifest itself is checked where the app already checks it.
+     */
+    function documentCanBoot(body) {
+      if (typeof body !== 'string' || body === '') return false;
+      if (body.includes('__DSH_BOOT__')) return true; // ui-copy-ignore
+      return body.includes('__DSH_BOOT_READY__') && /id\s*=\s*["']root["']/u.test(body); // ui-copy-ignore
+    }
+
     async function askAddress(target) {
       const read = async (url) => {
         try {
@@ -942,7 +959,7 @@ window.__ModuleLoader__.load({
           if (res.ok !== true) return { ok: false, why: `http:${res.status}` };
           const body = await withTimeout(res.text());
           if (typeof body !== 'string') return { ok: false, why: 'noanswer' };
-          return body.includes('__DSH_BOOT__') ? { ok: true, why: 'ok' } : { ok: false, why: 'noboot' };
+          return documentCanBoot(body) ? { ok: true, why: 'ok' } : { ok: false, why: 'noboot' };
         } catch (error) {
           return { ok: false, why: error?.message === 'timeout' ? 'timeout' : 'noanswer' };
         }
@@ -1110,40 +1127,13 @@ window.__ModuleLoader__.load({
               // this reads the composer the app actually mounted for that session.
               const shell = shells?.shell?.(id) ?? shells?.for?.(id);
               if (shell === null || shell === undefined) continue;
-              // A composer that is deciding or submitting is mid-send: the text and its files are
-              // held by the composer, not yet in the transcript, and a rebuild would drop both.
-              const phase = shell.snapshot?.phase;
-              if (phase === 'adjudicating' || phase === 'submitting') return 'sending';
               /**
-               * Written words are not a reason to hold: the app keeps each session's draft in its
-               * own store, and the next document reads it back, so the person finds the sentence
-               * where they left it. Files are the opposite: a draft attachment is a browser file
-               * object that lives only in this document, so the composer's file list holds the
-               * press. The text a send carries is not read here for the same reason — the send
-               * itself is (below), because that is what the rebuild would interrupt.
+               * Files the composer still owns are the attachment question, and it is asked on its
+               * own below the send question: a send in flight is checked first, in `sendHold`, so a
+               * draft file can never mask a send that a rebuild would interrupt. Written words are
+               * not a reason to hold either — the app keeps each session's draft in its own store.
                */
               if ((shell.snapshot?.attachmentIds?.length ?? 0) > 0) return 'composer';
-              if ((shell.attachmentFlights?.size ?? 0) > 0) return 'sending';
-              /**
-               * A send is retained until admission settles: the composer still owns something that
-               * is neither a draft nor in the transcript, and a rebuild would leave the person
-               * without an answer or a way to ask again.
-               */
-              for (const record of shell.detachedDrafts?.values?.() ?? []) {
-                if ((record?.attachmentIds?.length ?? 0) > 0) return 'sending';
-                if (typeof record?.draft === 'string' && record.draft.trim() !== '') return 'sending';
-              }
-              // A send that failed holds the press unless a restore put it back into the draft the
-              // app already wrote down. Walking that per record, and never judging it by what the
-              // composer happens to show, is what keeps both a message the person cannot see and a
-              // message the app already saved from reading alike.
-              const failed = failedSendDraft(shell);
-              // An unreadable book is answered as a waiting message: the press may not assume the
-              // failure went away because the answer never arrived.
-              if ((failed.unreadable || failed.records.length > 0) && !failed.restored) {
-                if (failed.attachments) return 'draft';
-                return 'unsent';
-              }
             } catch {
               // One session whose composer cannot be read does not make the others empty; its own
               // composer still answers below through the markup fallback when it can.
@@ -1168,12 +1158,152 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** The identities a collection holds, whatever shape it keeps them in. */
+    function attachmentIdsIn(collection) {
+      const ids = [];
+      try {
+        if (collection === null || collection === undefined) return ids;
+        if (typeof collection.keys === 'function') {
+          for (const key of collection.keys()) ids.push(String(key));
+          return ids;
+        }
+        if (typeof collection !== 'string' && typeof collection[Symbol.iterator] === 'function') {
+          for (const piece of collection) ids.push(String(piece));
+          return ids;
+        }
+        if (typeof collection === 'object') ids.push(...Object.keys(collection));
+      } catch {
+        // A collection that cannot be walked adds no identity; the detail still holds the press.
+      }
+      return ids;
+    }
+
+    /**
+     * The files a rebuild would take, and the identity of that exact set.
+     *
+     * A second press may agree to give the files up, and the agreement is worth something only for
+     * the files the sentence was about: deleting them and picking different ones a moment later is
+     * a new question. So the answer carries a signature of the attachment ids, the session they
+     * belong to, and the picker's file names — an approval names a set, not a category.
+     * @returns {{detail: string, signature: string}|null} what holds, and which files those are.
+     */
+    function attachmentSet() {
+      const detail = draftAttachmentReason();
+      if (detail === null) return null;
+      const pieces = [];
+      try {
+        const conversation = appContext?.get?.('conversation');
+        if (conversation !== null && conversation !== undefined) {
+          pieces.push(...attachmentIdsIn(conversation.draftAttachments));
+          pieces.push(...attachmentIdsIn(conversation.pendingFileUploads));
+          pieces.push(...attachmentIdsIn(conversation.fileUploadOperations));
+          const uploads = conversation.fileUploads?.getSnapshot?.() ?? conversation.fileUploads ?? {};
+          pieces.push(...attachmentIdsIn(uploads));
+          const sessions = appContext?.get?.('sessions');
+          const shells = conversation.input;
+          for (const id of retainedSessionIds(sessions)) {
+            try {
+              const shell = shells?.shell?.(id) ?? shells?.for?.(id);
+              for (const piece of shell?.snapshot?.attachmentIds ?? []) pieces.push(`${id}:${String(piece)}`);
+            } catch {
+              // This session's files still count through the detail; only their identity is lost.
+            }
+          }
+        }
+      } catch {
+        // The service is unreadable; the detail still holds the press and the markup may name more.
+      }
+      try {
+        for (const picker of document.querySelectorAll?.('input[type="file"]') ?? []) {
+          for (const file of picker?.files ?? []) pieces.push(`${String(file?.name ?? '')}:${String(file?.size ?? '')}`);
+        }
+      } catch {
+        // No markup to read; the answer is what the service said.
+      }
+      const signature = pieces.filter((piece) => piece !== '').sort().join(',');
+      return { detail, signature: `${detail}|${signature}` };
+    }
+
+    /**
+     * The send half of the judgement, scanned across every retained session.
+     *
+     * A message handed to the app but not yet accepted is still on its way out, so a rebuild in
+     * that window interrupts a send the person already made: it holds like any other send. The scan never returns early on a draft file — files are asked about
+     * separately, in `attachmentSet`, precisely so that one cannot mask the other.
+     * @returns {{key: string, detail: string}|null} the send state that holds, if any.
+     */
+    function sendHold() {
+      try {
+        const conversation = appContext?.get?.('conversation');
+        if (conversation === null || conversation === undefined) return null;
+        const sessions = appContext?.get?.('sessions');
+        const shells = conversation.input;
+        for (const id of retainedSessionIds(sessions)) {
+          try {
+            const shell = shells?.shell?.(id) ?? shells?.for?.(id);
+            if (shell === null || shell === undefined) continue;
+            const phase = shell.snapshot?.phase;
+            if (phase === 'sending' || phase === 'adjudicating' || phase === 'submitting') {
+              return { key: 'sending', detail: 'sending' };
+            }
+            if ((shell.attachmentFlights?.size ?? 0) > 0) return { key: 'sending', detail: 'uploading' };
+            /**
+             * A send is retained until admission settles: the composer still owns something that
+             * is neither a draft nor in the transcript, and a rebuild would leave the person
+             * without an answer or a way to ask again.
+             */
+            for (const record of shell.detachedDrafts?.values?.() ?? []) {
+              if ((record?.attachmentIds?.length ?? 0) > 0) return { key: 'sending', detail: 'sending' };
+              if (typeof record?.draft === 'string' && record.draft.trim() !== '') {
+                return { key: 'sending', detail: 'sending' };
+              }
+            }
+            // A send that failed holds the press unless a restore put it back into the draft the
+            // app already wrote down. Walking that per record, and never judging it by what the
+            // composer happens to show, keeps a message the person cannot see and one the app
+            // already saved from reading alike.
+            const failed = failedSendDraft(shell);
+            if ((failed.unreadable || failed.records.length > 0) && !failed.restored) {
+              if (!failed.attachments) return { key: 'unsent', detail: 'unsent' };
+            }
+          } catch {
+            // One session whose composer cannot be read does not make the others empty.
+          }
+        }
+      } catch {
+        // Nothing readable: there is no send state to hold, and the markup fallback still runs.
+      }
+      return null;
+    }
+
+    /**
+     * The last look before the document goes, taken with no `await` after it.
+     *
+     * The address check above can take a moment, and a file can be picked or a send started while
+     * it runs. Everything read here is the page's own state, read synchronously, so the answer
+     * describes the document that is about to be replaced rather than an earlier one.
+     * @returns {{key: string, detail: string, signature?: string}|null} what holds, if anything.
+     */
+    function finalGate(discarded) {
+      if (screenHasOpenWindow()) return { key: 'dialog', detail: 'dialog' };
+      const send = sendHold();
+      if (send !== null) return send;
+      const attach = attachmentSet();
+      if (attach !== null && attach.signature !== discarded) {
+        return { key: 'attachments', detail: attach.detail, signature: attach.signature };
+      }
+      return null;
+    }
+
     /**
      * The automatic judgement: every reason a rebuild would take something away is checked here,
      * in the order that costs the user least. A null answer means the interface can go.
+     * @param {{discardAttachments?: string|null}} options the exact attachment set the person has
+     *   agreed to give up, if any. It excuses those files and nothing else: focus commit, other
+     *   plugins' save and refusal events, and the dialog check all still run.
      * @returns the copy key of the reason to stop, or null when a rebuild is safe.
      */
-    async function prepareInterface() {
+    async function prepareInterface(options = {}) {
       if (!(await startupLooksServable())) return 'blocked';
       /**
        * Everything below reads the page itself: the document, the events it answers, the fields it
@@ -1182,12 +1312,20 @@ window.__ModuleLoader__.load({
        * an unreadable page holds the rebuild and says so.
        */
       holdDetail = null;
+      holdSignature = null;
       try {
         if (screenHasOpenWindow()) return 'dialog';
-        holdDetail = draftAttachmentReason();
-        if (holdDetail === 'sending') return 'sending';
-        if (holdDetail === 'unsent') return 'unsent';
-        if (holdDetail !== null) return 'attachments';
+        const send = sendHold();
+        if (send !== null) {
+          holdDetail = send.detail;
+          return send.key;
+        }
+        const attach = attachmentSet();
+        if (attach !== null) {
+          holdDetail = attach.detail;
+          holdSignature = attach.signature;
+          if (attach.signature !== options.discardAttachments) return 'attachments';
+        }
         await commitFocusedField();
         const ready = await otherPluginsAreReady();
         if (!ready || stillHeldBack()) return 'unsaved';
@@ -1462,9 +1600,6 @@ window.__ModuleLoader__.load({
           return;
         }
         pressInFlight = true;
-        // Set when this press was told it gives up the files in the draft: the later look at the
-        // composer must not turn the same files into a refusal again.
-        let filesGivenUp = false;
         setMenu(false);
         setPending(true);
         // A press starts from nothing: a refusal from an earlier press must not answer this one,
@@ -1607,18 +1742,21 @@ window.__ModuleLoader__.load({
             report('replaced');
             return stop(replaced ? 'replaced' : hostSaidOff ? 'off' : 'done');
           }
-          const reason = await prepareInterface();
+          const agreed = attachmentsHold !== null && Date.now() - attachmentsHold.at < 60000 // ui-copy-ignore
+            ? attachmentsHold.signature
+            : null;
+          const agreedDetail = agreed === null ? null : attachmentsHold.detail;
+          attachmentsHold = null;
+          const reason = await prepareInterface({ discardAttachments: agreed });
           if (answered) return undefined;
-          const discardAttachments = reason === 'attachments' && attachmentsHold !== null
-            && attachmentsHold.detail === holdDetail && Date.now() - attachmentsHold.at < 60000; // ui-copy-ignore
-          if (reason !== null && discardAttachments) {
-            filesGivenUp = true;
-            // The person pressed a second time inside the minute with the sentence on screen: the
-            // files in the draft are what the press gives up, and it was said before the press.
-            report('rebuild', `attachments:${holdDetail}`);
-            attachmentsHold = null;
-          } else if (reason !== null) {
-            if (reason === 'attachments') attachmentsHold = { detail: holdDetail, at: Date.now() };
+          // The second press on the same files: they are what the press gives up, and that was said
+          // before it. Only those files are excused — the save and refusal checks above still ran.
+          const discarded = reason === null && agreed !== null ? agreed : null;
+          if (discarded !== null) report('rebuild', `attachments:${agreedDetail ?? 'attachments'}`);
+          if (reason !== null) {
+            if (reason === 'attachments') {
+              attachmentsHold = { signature: holdSignature, detail: holdDetail, at: Date.now() };
+            }
             // The log keeps the exact check that refused, so a held press can be explained later.
             const gate = reason === 'blocked' && holdReason !== null
               ? `blocked:${holdReason}`
@@ -1629,23 +1767,6 @@ window.__ModuleLoader__.load({
                   : reason;
             report('held', replaced ? `applied:${gate}` : gate);
             return stop(reason, replaced);
-          }
-          // The checks above can take a moment; a file can be picked into the draft while they run.
-          // This is the last look before the document goes, and it costs one read of the composer.
-          holdDetail = draftAttachmentReason();
-          if (holdDetail !== null) {
-            const late = holdDetail === 'sending' ? 'sending' : holdDetail === 'unsent' ? 'unsent' : 'attachments';
-            const again = late === 'attachments' && attachmentsHold !== null
-              && attachmentsHold.detail === holdDetail && Date.now() - attachmentsHold.at < 60000; // ui-copy-ignore
-            if (again) filesGivenUp = true;
-            if (again || filesGivenUp) {
-              filesGivenUp = true;
-              attachmentsHold = null;
-            } else {
-              if (late === 'attachments') attachmentsHold = { detail: holdDetail, at: Date.now() };
-              report('held', replaced ? `applied:${late}:${holdDetail}` : `${late}:${holdDetail}`);
-              return stop(late, replaced);
-            }
           }
           // Before the document is replaced, the address it is replaced with has to answer. A page
           // that cannot come up is not a rebuild; it is a page the person can no longer read.
@@ -1665,6 +1786,19 @@ window.__ModuleLoader__.load({
             addressHold = null;
           }
           if (answered) return undefined;
+          /**
+           * The address check can take a moment, and a file can be picked or a send started while
+           * it waits. Everything read here is synchronous, so the answer describes the document
+           * that is about to be replaced — checked with no `await` between it and the navigation.
+           */
+          const late = finalGate(discarded);
+          if (late !== null) {
+            if (late.key === 'attachments') {
+              attachmentsHold = { signature: late.signature, detail: late.detail, at: Date.now() };
+            }
+            report('held', replaced ? `applied:${late.key}:${late.detail}` : `${late.key}:${late.detail}`);
+            return stop(late.key, replaced);
+          }
           // Written only now, when the document really is about to go: a press that was held changed
           // nothing, so the next press must not be turned away as if this one had been answered.
           // The navigation is this press's answer, so the deadline set at its start is spent here.

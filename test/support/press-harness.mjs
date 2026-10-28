@@ -61,7 +61,7 @@ function show(tree) {
 
 // `documentAnswers` stands for the page the press is about to enter: a rebuild walks into that
 // address, so a fake app has to say whether a page really comes up there.
-function harnessWith(sourceText, { settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], lateOperation = null, revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, draftImages = 0, draftFiles = 0, conversation = null, sessions = null, language = 'en-US', href, switchAnswer = 'done', stampInStore = false, verifyAnswer = { status: 'ok' }, documentAnswers = true, rebuiltMark = null } = {}) {
+function harnessWith(sourceText, { settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], lateOperation = null, revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, draftImages = 0, draftFiles = 0, conversation = null, sessions = null, language = 'en-US', href, switchAnswer = 'done', stampInStore = false, verifyAnswer = { status: 'ok' }, documentAnswers = true, rebuiltMark = null, pageHtml = null } = {}) {
   const requests = []
   const navigations = []
   const current = { rev: graph.rev, code: 'c1' }
@@ -135,6 +135,10 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
       // `refused` is an auth answer the check gets for every address: it says nothing about the page.
       if (documentAnswers === 'refused') return new Response('authentication required', { status: 401 })
       if (!documentAnswers) return new Response('No page here', { status: 404 })
+      // The page the press is about to enter, as the app really serves it: the desktop shell hands
+      // over its boot data through `dshDesktopBoot.ready()` after the document registers itself
+      // with `__DSH_BOOT_READY__`, so this document carries no `__DSH_BOOT__` at all.
+      if (pageHtml !== null) return new Response(pageHtml, { status: 200, headers: { 'content-type': 'text/html' } })
       return new Response('<!doctype html><script>window.__DSH_BOOT__ = {};</script>', { status: 200, headers: { 'content-type': 'text/html' } })
     }
     const answer = scripts[path]
