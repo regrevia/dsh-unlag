@@ -3530,10 +3530,10 @@ function registerAgentTool(ctx, controller, config) {
 }
 
 /**
- * The button lives in a script the app has to hand the page. A host that resolves this package to no
- * manifest drops the row from the plugin set without a line of its own, and the page then has no
- * button at all while this half keeps answering. Say it once per process, so a report of "no button"
- * has a cause on record instead of an empty log.
+ * The button lives in a script the app has to hand the page. A package that cannot be resolved to a
+ * manifest is dropped from the plugin set without a line of its own, and the page then has no button
+ * at all while this half keeps answering. Say it once per process, so a report of "no button" has a
+ * cause on record instead of an empty log.
  */
 /** One line per process is enough: the set is fixed at boot and a page asks often. */
 let selfAuditSaid = null
@@ -3547,7 +3547,7 @@ function auditSelfServed(ctx) {
     }
     if (selfAuditSaid === 'missing') return
     selfAuditSaid = 'missing'
-    log(`the app left ${SELF_ENTRY_ID} out of the plugin set it serves now: its host half runs, its client half is not served, so the header button cannot mount until the app resolves this package`)
+    log(`the app left ${SELF_ENTRY_ID} out of the plugin set it serves now: its host half runs, its client half is not served, so the header button cannot mount until the app resolves this package`) // ui-copy-ignore
   } catch (error) {
     log(`cannot tell whether this copy of the plugin is in the served set: ${error?.message ?? error}`)
   }

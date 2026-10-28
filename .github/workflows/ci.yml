@@ -12,6 +12,14 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      # Off by default: until this repository has a runner on the Windows
+      # machine, a dispatched run must still be able to prove the Linux legs
+      # instead of sitting queued on a job nothing can pick up.
+      windows:
+        description: also run the self-hosted Windows job
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -43,7 +51,7 @@ jobs:
   # repositories, no minute quota).
   windows:
     name: test (regrevia-win, node ${{ matrix.node }})
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch' && inputs.windows == true
     runs-on: [self-hosted, windows, x64, regrevia-win]
     timeout-minutes: 30
     # The machine is shared with other projects on the same Windows user: one
