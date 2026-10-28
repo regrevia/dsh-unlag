@@ -20,6 +20,13 @@ on:
         description: also run the self-hosted Windows job
         type: boolean
         default: false
+      # GitHub-hosted Windows: proves the Windows legs on a dispatched run
+      # without depending on the shared machine being reachable or free. The
+      # self-hosted job above stays opt-in and separate.
+      windows_hosted:
+        description: also run the GitHub-hosted Windows job
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -85,7 +92,7 @@ jobs:
   # must never run fork code. Public repository: these minutes are not metered.
   windows-pr:
     name: test (windows-latest, node ${{ matrix.node }})
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.windows_hosted != false)
     runs-on: windows-latest
     timeout-minutes: 20
     strategy:
