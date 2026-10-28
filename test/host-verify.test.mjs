@@ -296,7 +296,6 @@ const measuredBig = await verifyStartupRows(
 check('a startup list the size of this app\'s own profile verifies', measuredBig.status === 'ok', JSON.stringify(measuredBig).slice(0, 160))
 
 // Counted at the end: a check appended after a mid-file summary must still be able to fail this run.
-const failed = checks.filter((row) => !row.pass)
 // One startup row can carry several plugins in one bundle, and a chunk is asked of the plugin
 // whose body loads it: the official loader derives `plugins/<owner>/<file>` from that module's own
 // row (measured against the app's own startup bundle at 0.2.1: the four chunks one batch loads are
@@ -350,9 +349,6 @@ const failed = checks.filter((row) => !row.pass)
   check('and its answering chunk approves the list', other.result.status === 'ok', JSON.stringify(other.result))
 }
 
-console.log(`\n${checks.length - failed.length}/${checks.length} passed`)
-if (failed.length > 0) process.exitCode = 1
-
 // --- one document made of two generations ----------------------------------------------------
 // The page rebuilt from the shell's frozen list takes its main script at the revision that list
 // names and each chunk at the revision the table serves now. `/verify` approved exactly that pair
@@ -368,7 +364,8 @@ if (failed.length > 0) process.exitCode = 1
   }
   const mixed = await verifyStartupRows(
     { rev: 'new', entries: [{ id: '@local/a', rev: 'new' }], batches: [] },
-    async () => ({ status: 200, servedRev: 'old', arrayBuffer: async () => mainBody }),
+    // The route answered the frozen address itself: the bytes are the old generation's.
+    async () => ({ status: 200, servedRev: 'old', servedFromAsked: true, arrayBuffer: async () => mainBody }),
     mixedRows,
     9000,
     null,
@@ -379,7 +376,7 @@ if (failed.length > 0) process.exitCode = 1
 
   const coherent = await verifyStartupRows(
     { rev: 'new', entries: [{ id: '@local/a', rev: 'new' }], batches: [] },
-    async () => ({ status: 200, servedRev: 'new', arrayBuffer: async () => mainBody }),
+    async () => ({ status: 200, servedRev: 'new', servedFromAsked: true, arrayBuffer: async () => mainBody }),
     mixedRows,
     9000,
     null,
@@ -396,4 +393,40 @@ if (failed.length > 0) process.exitCode = 1
     chunkOf,
   )
   check('a body assembled from the current set is not the stale side of a pair', assembled.status === 'ok', JSON.stringify(assembled).slice(0, 160))
+
+  /**
+   * The pair a page gets after any plugin update, and the one that held every press: the startup row
+   * no longer answers, so the route serves it from the revision that does — a batch revision — while
+   * the chunk is asked at the entry revision of its own plugin. Both answers are the current
+   * generation; only the strings differ, because a batch revision and an entry revision are two
+   * namespaces. Reading that difference as two generations refuses a rebuild that carries the page
+   * forward unchanged.
+   */
+  const substituted = await verifyStartupRows(
+    { rev: 'graph-new', entries: [{ id: '@local/a', rev: 'entry-new' }], batches: [] },
+    async () => ({ status: 200, servedRev: 'batch-new', servedFromAsked: false, arrayBuffer: async () => mainBody }),
+    ['/plugins/??@local/a/client.js&rev=old'],
+    9000,
+    null,
+    async () => ({ status: 200, servedRev: 'entry-new', arrayBuffer: async () => 'export function legacyFunction() {}' }),
+  )
+  check('a startup row served from the current set with its own chunk verifies', substituted.status === 'ok', JSON.stringify(substituted).slice(0, 240))
+
+  // The honest refusal is kept for the one case that is two generations: the bytes at the frozen
+  // address are the old generation's, and the chunk the page loads next is the new one's.
+  const staleWithoutProof = await verifyStartupRows(
+    { rev: 'graph-new', entries: [{ id: '@local/a', rev: 'entry-new' }], batches: [] },
+    async () => ({ status: 200, servedRev: 'old', arrayBuffer: async () => mainBody }),
+    ['/plugins/??@local/a/client.js&rev=old'],
+    9000,
+    null,
+    async () => ({ status: 200, servedRev: 'entry-new', arrayBuffer: async () => 'export function legacyFunction() {}' }),
+  )
+  check('a body whose source the check cannot prove is not refused as mixed', staleWithoutProof.status === 'ok', JSON.stringify(staleWithoutProof).slice(0, 240))
 }
+
+// Every check above counts: the summary is printed last, so a refused pair or a false refusal
+// changes the exit code of the whole suite, not just the log.
+const failed = checks.filter((row) => !row.pass)
+console.log(`\n${checks.length - failed.length}/${checks.length} passed`)
+if (failed.length > 0) process.exitCode = 1

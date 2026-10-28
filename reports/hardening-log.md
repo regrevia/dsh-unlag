@@ -142,3 +142,13 @@
   - 有一次换的是最末那条启动包，界面仍完整启动：那条只带晚加载的面板，换掉它不影响启动。换成 shell 那条才复现「另一代正文」的错误，测试按后者写。
 - 证据：`node scripts/loader-contract.mjs` 退出码 0，19/19 通过，输出三行对照（`served: ok · loader booted · composer true` / `missing: blocked/missing · loader failed` / `replaced: blocked/network · loader booted`），并打印当次 `revision`、启动行数、条目数。`test/host-verify.test.mjs` 改成新语义后 54/54（多插件行必须问发起模块自己的地址、绝不问 `??` 组合地址、同名文件不得替另一个插件作答、一行里第二个插件按它自己的版本问）。全量 `node scripts/test.mjs` 通过；`npm run audit`、`ui-copy-lint`、`style-lint`、`zh-lint` 0 error。
 - 没做的、也不假装做了的：`legacyFunction` 那条症状收回——装好的 0.2.1 构建里 0 处匹配，1.14.5 CHANGELOG 里那句是按调用顺序推的样例，不是实测；1.14.6 起这条规则的依据换成加载器源码与实测地址。真实 Electron 桌面端重装后的表现仍未验（不重启应用、不刷新页面）；HMR 三项仍在第三批；版本号固定的回放夹具（sha256 + 抓取脚本）留作后续。
+
+## 第十轮：用户报「现在又刷不了了」——`mixed` 误拦（→ 1.14.7）
+
+- 现象：升级到 1.14.6 后每一次按都答「插件更新过，页面留在原样：下一张页面会混着新旧两代插件代码，先重开应用」，日志里每次按三行同一条 `a startup check refused the page: mixed (… answers at ed58424113bd, while the script it belongs to answers at d13c73eba3a5)`，再一行 `rebuild held back: applied then blocked then mixed`。也就是插件代码已经换好、页面却再也重建不了。
+- 先看它凭什么判：`mixed` 由 `mixesGenerations(mainRev, chunkRev, revisionAtStart)` 给出，条件只是「两串版本号不等、且都不等于整张表的 `graph.rev`」。而 `mainRev` 在「清单点名的地址已经 404、改由当前这一版作答」这条路上取的是 `currentBundleAnswer` 给的 `servedRev = revisionInUrl(target)`，target 是**某个组合行/某个插件条目**的地址；`chunkRev` 是分块地址里的版本，分块按**发起 `require.async` 的那个模块自己**那条 row 的版本问。同一代里组合行版本、条目版本各成一套（实测组合行 `bf456991cccd,023852472753,f2afdf945d25`，条目版本另一组，`graph.rev` 又是第三组），所以只要走了替补，这两串必然不等——**判据本身把「同一代」写成了「两代」**。1.14.5 之前没有这条比较（当时只查可读性），所以那时能刷。
+- 修法：不再比较跨命名空间的版本号，改看这份主脚本的字节从哪来。`readStartupScript` 原样答回时给响应打 `servedFromAsked: true`，替补答回时打 `false`；`verifyStartupRows` 由此得到 `mainStale`——**只有原样答回的字节才算旧侧**，且要再确认这个地址的版本已经不是当前清单认的那一版（新增 `staleBundleAddress`，判法与路由替换前问的 `currentBundleUrls` 成员判断同一套，检查与路由对「旧地址」的定义因此一致）。替补答回的正文按构造是当前代，不参与比较，`mixed` 只在「原样旧字节 + 当前分块」时成立，拒绝句仍点名地址与两个版本号。
+- 回归证据（先红后绿）：新加的两条单测在 1.14.6 的 `index.js` 上直接退 1，`58/60 passed`，失败句与线上同形（`answers at entry-new, while the script it belongs to answers at batch-new`）；在新 `index.js` 上 `60/60`、退出码 0。合同测试 `node scripts/loader-contract.mjs` 加一档真应用用例（把真启动清单的版本号全换成应用不再认的版本，模拟页面停在上一代冻结清单，走 `verifyStartup` → `readStartupScript` 真 404 + 真替补 200）：1.14.6 会在这档拒，现在 21/21 通过，另两档（原样送达 `ok`、缺加载器包 `blocked/missing`）不变。
+- 顺带修掉测试自己的说明力漏洞：`test/host-verify.test.mjs` 的汇总原先写在文件中间，末尾追加的 6 条判失败也不影响退出码（日志里照样 `60/60 passed`）。汇总移到末尾重算，回退版 `index.js` 现在会真正退 1。
+- 证据：`test/host-verify.test.mjs` 60/60；`node scripts/loader-contract.mjs` 21/21 退出码 0；`node scripts/test.mjs` 全量通过；`npm run audit`、`ui-copy-lint`、`style-lint`、`zh-lint` 0 error。
+- 没做的、也不假装做了的：线上那次按下的日志只能证明「判据把同一代读成两代」，不能证明宿主对旧地址一定 404（若宿主仍原样答旧字节，新判据会照旧拒绝，这正是保留的那一档真阳性）；真实 Electron 桌面端重装后的表现仍未验（不重启应用、不刷新页面）；HMR 三项仍在第三批。

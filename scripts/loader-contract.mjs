@@ -310,6 +310,35 @@ try {
   check('the refusal names a missing answer as the reason', ['missing', 'boot'].includes(String(missing.result.reason)), String(missing.result.reason))
   check('and names the address the page would ask', String(missing.result.detail ?? '').includes('dsh-client-modules/client.js'), oneLine(missing.result.detail, 200))
 
+  /**
+   * A page loaded before the plugin set changed holds the startup list the shell froze then: the
+   * addresses no longer answer at that revision, and the route maps each to the revision it serves
+   * now. The rebuilt page is one generation. This is the press that follows every plugin update, so
+   * the check reads those frozen addresses through the shipped reader — a real 404 at the address the
+   * list named, a real answer at the mapped one — and must approve the document it composes.
+   * Revision strings are not the evidence here: a batch row and another plugin's entry name one
+   * generation under two namespaces, and comparing them refused every press after 1.14.6.
+   */
+  const { verifyStartup, startupPath } = await import('../index.js')
+  const staleRev = '0000000000ff'
+  const frozenRows = rows.map((row) => row.replace(/rev=[0-9a-f]+/u, `rev=${staleRev}`))
+  const staleAsked = []
+  const fetchBundle = async (request) => {
+    const raw = typeof request === 'string' ? request : String(request?.url ?? '')
+    staleAsked.push(raw)
+    // The shipped reader addresses the app by path; the instance lives under its own host, so the
+    // path is resolved against it rather than followed to whatever host the address named.
+    const response = await fetch(new URL(startupPath(raw), base), { headers: { cookie } })
+    return { status: response.status, arrayBuffer: async () => Buffer.from(await response.arrayBuffer()), headers: response.headers }
+  }
+  const frozen = await verifyStartup({ graph: () => graph, fetchBundle }, frozenRows)
+  check('a frozen older startup list is approved after the plugin set moved on', frozen.status === 'ok', JSON.stringify(frozen).slice(0, 300))
+  check(
+    'because the shipped reader asked the frozen address and then the revision that holds it',
+    staleAsked.some((one) => startupPath(one).includes(staleRev)) && staleAsked.some((one) => !startupPath(one).includes(staleRev)),
+    staleAsked.slice(0, 4).map((one) => startupPath(one)).join(' '),
+  )
+
   // A body that does not belong at a startup address is the generation switch seen from the page:
   // the document is the old generation, the bytes answered at its bundle address are another one.
   const bootstrapBody = await (await fetch(new URL(bootstrap, base), { headers: { cookie } })).arrayBuffer()

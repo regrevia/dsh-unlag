@@ -1947,6 +1947,27 @@ async function currentBundleAnswer(clientModules, method, url, deadline = Date.n
   return surviving === null ? null : { ...surviving, standIn: true }
 }
 
+/**
+ * Whether one address names a revision the list running now no longer answers.
+ *
+ * The same question the mapping asks itself before it substitutes anything, so the check and the
+ * route agree on what "stale" means. A revision the table still answers is the current side of the
+ * page, whatever other rows of the same generation are called.
+ */
+function staleBundleAddress(graph, rawUrl) {
+  try {
+    const request = bundleRequest(rawUrl)
+    if (request === null) return false
+    const now = servedRevisionOf(graph)
+    if (now === '' || request.rev === now) return false
+    const urls = currentBundleUrls(graph, request)
+    if (urls.length === 0) return false
+    return !urls.some((target) => target.endsWith(`&rev=${request.rev}`))
+  } catch {
+    return false
+  }
+}
+
 /** The revision a stale request named, or '' when it named none. */
 function askedRevisionOf(request) {
   return typeof request?.rev === 'string' ? request.rev : ''
@@ -2856,6 +2877,13 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
     // Which generation answered this body, when the reader can say: the mix check below compares it
     // with the generation each chunk it loads comes from.
     const mainRev = answerRevision(response)
+    // Bytes the route answered at the address the frozen list named are only current when that
+    // address is still one the list answers; otherwise the next page is made of this older main and
+    // the chunks read below at the entry revisions the table serves now.
+    let mainStale = false
+    try {
+      mainStale = response?.servedFromAsked === true && staleBundleAddress(graph, item.url) === true
+    } catch {}
     let bytes = null
     try {
       bytes = Buffer.from(await response.arrayBuffer())
@@ -2921,7 +2949,7 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
          * the page would have been made of; opening the app again composes both sides anew.
          */
         const chunkServedRev = answerRevision(chunkRead.value) || revisionInUrl(address)
-        if (mixesGenerations(mainRev, chunkServedRev, revisionAtStart ?? '')) {
+        if (mixesGenerations(mainRev, chunkServedRev, mainStale)) {
           return {
             status: 'blocked', // ui-copy-ignore
             reason: 'mixed', // ui-copy-ignore
@@ -2947,7 +2975,7 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
             // The same mix question, over the address the rebuilt page actually reaches: an old main
             // body with a chunk substituted to the newer generation is still two interfaces.
             const spareServedRev = answerRevision(spareRead.value) || revisionInUrl(spare.address)
-            if (mixesGenerations(mainRev, spareServedRev, revisionAtStart ?? '')) {
+            if (mixesGenerations(mainRev, spareServedRev, mainStale)) {
               return {
                 status: 'blocked', // ui-copy-ignore
                 reason: 'mixed', // ui-copy-ignore
@@ -3056,12 +3084,15 @@ export async function readStartupScript(clientModules, url) {
     // no longer knows, so the check reads in that same order: bytes taken from the mapping while the
     // route had an answer were bytes the next page would never run.
     const served = await fetchBundleAt(clientModules, url, 'GET')
-    if (served !== null && served.status === 200) return withServedRev(served, revisionInUrl(url))
+    // `servedFromAsked` is what the mix check reads: bytes from the address the list named are only
+    // current if that address is one the list running now still answers, while bytes from the
+    // mapping are current by construction and need no revision comparison at all.
+    if (served !== null && served.status === 200) return withServedRev(served, revisionInUrl(url), true)
     const answer = await currentBundleAnswer(clientModules, 'GET', url)
     // `standIn` rides along: these bytes stand in for a plugin the set no longer has, and the check
     // says so when it refuses, so the log can tell that from a body the app really serves.
     if (answer !== null) {
-      return { status: 200, standIn: answer.standIn === true, servedRev: answer.servedRev, arrayBuffer: async () => answer.body }
+      return { status: 200, standIn: answer.standIn === true, servedRev: answer.servedRev, servedFromAsked: false, arrayBuffer: async () => answer.body }
     }
   } catch (error) {
     // The fallback is still the right answer; the failure itself must not vanish.
@@ -3074,13 +3105,14 @@ export async function readStartupScript(clientModules, url) {
  * Record which generation a script body was served at, on the object the check reads.
  *
  * A response cannot be rebuilt without losing its own methods, so the mark is written onto it: the
- * check is short-lived and the object is not shared beyond it. A response that refuses the write is
- * still readable — its revision is simply unknown, which the mix check treats as no evidence.
+ * check is short-lived and the object is not shared beyond it. A frozen response keeps its bytes;
+ * without the mark the mix check reads no evidence, and no evidence does not refuse a press.
  */
-function withServedRev(response, rev) {
+function withServedRev(response, rev, fromAsked = false) {
   try {
-    if (response !== null && typeof response === 'object' && typeof rev === 'string' && rev !== '') {
-      response.servedRev = rev
+    if (response !== null && typeof response === 'object') {
+      if (typeof rev === 'string' && rev !== '') response.servedRev = rev
+      response.servedFromAsked = fromAsked === true
     }
   } catch {
     // A frozen response keeps its bytes; only the generation mark is lost.
@@ -3113,11 +3145,16 @@ function namesGeneration(rev) {
  * are current by construction and say so with a digest rather than a revision, so they are never
  * part of this question; two real generations in one document are.
  */
-function mixesGenerations(mainRev, chunkRev, checkRev) {
+function mixesGenerations(mainRev, chunkRev, mainStale) {
+  /**
+   * Only a main body the table no longer answers at its own address can be the stale side. Two
+   * revisions are comparable only when they name the same page: a startup row and another plugin's
+   * entry carry independent revision namespaces even in one generation, so an inequality between
+   * them is not evidence of two generations and must never hold a press.
+   */
+  if (mainStale !== true) return false
   if (!namesGeneration(mainRev) || !namesGeneration(chunkRev)) return false
-  if (mainRev === chunkRev) return false
-  // A main body already at the revision this check reads is not the stale side of the pair.
-  return mainRev !== checkRev
+  return mainRev !== chunkRev
 }
 
 /** Ask the same question of the plugin table the plugin itself talks to. */
