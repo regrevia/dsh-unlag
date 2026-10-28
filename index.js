@@ -1632,7 +1632,9 @@ async function captureBootSnapshot(clientModules, boot) {
         digest: createHash('sha256').update(buffer).digest('hex').slice(0, 16),
         ids: [...registeredIds(text)],
         required: [...requiredIds(text)],
-        lazy: [...lazyChunksByOwner(text).keys()],
+        // The frozen row keeps file names: it answers which files this page asks for, and the
+        // per-owner address is rebuilt when the check reads them against the live list.
+        lazy: [...new Set(lazyChunksByOwner(text).map((chunk) => chunk.file))],
       })
     } catch (error) {
       log(`cannot freeze one startup script: ${oneLine(error?.message ?? error)}`)
@@ -2178,7 +2180,10 @@ async function newerLoadsFile(fetchChunk, row, file, budgetMs) {
     return 'unknown'
   }
   if (bytes.length === 0) return 'unknown'
-  return lazyChunksByOwner(bytes.toString('utf8')).has(file) ? 'loads' : 'no'
+  // The newer body may carry several plugins, and a same-named chunk under another owner is not
+  // this plugin's file: the question is about this entry's own module.
+  const owner = typeof row?.id === 'string' && row.id !== '' ? entryIdOf(row.id) : null
+  return lazyChunksByOwner(bytes.toString('utf8')).some((chunk) => chunk.file === file && (owner === null || chunk.owner === owner)) ? 'loads' : 'no'
 }
 
 /**
@@ -2709,19 +2714,32 @@ function lazyChunksByOwner(body) {
     }
     return files
   }
-  const owners = new Map()
+  /**
+   * A chunk is a pair of its owner and its file name, never a file name alone: two plugins in one
+   * batch may both load a `./client.helper.js`, and each is a different address with different
+   * bytes. Keying by file name let the later owner overwrite the earlier one, so the first
+   * plugin's chunk was never read and a 404 there was approved.
+   */
+  const chunks = []
+  const seen = new Set()
+  const add = (owner, file) => {
+    const key = `${owner ?? ''}\u0000${file}`
+    if (seen.has(key)) return
+    seen.add(key)
+    chunks.push({ owner, file })
+  }
   // A call belongs to the module whose body contains it: the loader reads each module's own
   // `require`, and the body's next registration is where that module ends.
   for (let at = 0; at < markers.length; at += 1) {
     const segment = body.slice(markers[at].at, at + 1 < markers.length ? markers[at + 1].at : body.length)
-    for (const file of filesIn(segment)) owners.set(file, markers[at].id)
+    for (const file of filesIn(segment)) add(markers[at].id, file)
   }
   // A call before any registration is one module's script with its registration later in the same
   // body; a body that names several modules and loads before naming any belongs to none, and the
   // caller drops it rather than guess an address.
   const beforeAny = markers.length === 0 ? body : body.slice(0, markers[0].at)
-  for (const file of filesIn(beforeAny)) owners.set(file, markers.length === 1 ? markers[0].id : null)
-  return owners
+  for (const file of filesIn(beforeAny)) add(markers.length === 1 ? markers[0].id : null, file)
+  return chunks
 }
 
 /**
@@ -2906,8 +2924,8 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
     }
     // Only what the cross-checks below need from this body is kept; the text itself is let go here,
     // so a list of large scripts costs one script of memory rather than the whole list.
-    const lazyOwners = lazyChunksByOwner(text)
-    const record = { url: item.url, ids: item.ids, registered, required: requiredIds(text), lazy: [...lazyOwners.keys()], servedRev: mainRev }
+    const lazyChunks = lazyChunksByOwner(text)
+    const record = { url: item.url, ids: item.ids, registered, required: requiredIds(text), lazy: [...new Set(lazyChunks.map((chunk) => chunk.file))], servedRev: mainRev }
     record.digest = createHash('sha256').update(bytes).digest('hex').slice(0, 16)
     bodies.push(record)
     /**
@@ -2919,19 +2937,25 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
      * own address in the reason instead of leaving it to the boot.
      */
     let chunksRead = 0
-    for (const file of record.lazy) {
+    const askedAddresses = new Set()
+    for (const chunk of lazyChunks) {
       if (chunksRead >= MAX_CHUNK_READS) break
       // The loader asks the file's own plugin for it: the owner is read off the module whose body
       // made the call, and the address is that entry's row with the file name replaced — never the
       // bundle spec, which is a startup row and not a chunk address. A chunk whose owner the next
       // document no longer serves, or a call in a body that names several modules before naming any,
       // has no address to ask: the entries and register steps report it instead of a guessed one.
-      const lazyOwner = lazyOwners.get(file)
+      const lazyOwner = chunk.owner
+      const file = chunk.file
       if (typeof lazyOwner !== 'string' || lazyOwner === '') continue
       const lazyEntry = entries.get(lazyOwner)
       if (lazyEntry === undefined) continue
-      chunksRead += 1
       const address = chunkAddress(lazyEntry.url ?? item.url, lazyOwner, file)
+      // Two owners loading the same file name ask two different addresses; one owner loading the
+      // same file twice asks one, and the second read would prove nothing new.
+      if (askedAddresses.has(address)) continue
+      askedAddresses.add(address)
+      chunksRead += 1
       const chunkRead = await withDeadline(() => fetchChunk(address), budgetMs - (Date.now() - began))
       if (chunkRead.timedOut === true) {
         return { status: 'blocked', reason: 'slow', detail: `${address} did not answer within the time this check waits` }

@@ -601,7 +601,9 @@ for (const [label, options] of [
   check('an edited restoration is an ordinary saved draft and does not hold the rebuild', page.reloads.length + page.navigations.length >= 1, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
 }
 // Files are the other half: a failed record the app did not take back still holds an upload that
-// only lives in this document, so the press waits for it like any other draft attachment.
+// only lives in this document, so the press waits for it like any other draft attachment. Words and
+// files in one record are judged apart: an unrestored message is a lost message whatever files rode
+// with it, and only a record that carried no words is answered as a file question.
 {
   const shell = composerShell()
   shell.type('newer words')
@@ -609,8 +611,19 @@ for (const [label, options] of [
   const page = harnessWithComposer(shell)
   await page.press()
   check('a failed send still holding a file holds the rebuild', page.reloads.length === 0 && page.navigations.length === 0, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
-  check('and the notice names the file to send first', /attach|send|file|附件/u.test(String(page.notice())), String(page.notice()))
-  check('it is held as an attachment, not reported as a lost message', page.requests.some((request) => request.path.includes('event=held') && /attachments%3A(composer|draft)/u.test(request.path)), page.requests.map((r) => r.path).join(' '))
+  check('and the notice names the failed message, not just its file', /not back in the input|没回到输入框/u.test(String(page.notice())), String(page.notice()))
+  check('it is held as a lost message even though the same record carried a file', page.requests.some((request) => request.path.includes('event=held') && request.path.includes('unsent')), page.requests.map((r) => r.path).join(' '))
+}
+// The other side of that split: a record that only ever carried files is the file question, and the
+// second press is what gives those files up.
+{
+  const shell = composerShell()
+  shell.fail('f1', { draft: '', attachmentIds: ['a1'] })
+  const page = harnessWithComposer(shell)
+  await page.press()
+  check('a failed send that carried only files asks about those files', page.reloads.length === 0 && page.navigations.length === 0, JSON.stringify({ reloads: page.reloads, navigations: page.navigations }))
+  check('and the notice names the files to send first', /attach|files|附件/u.test(String(page.notice())), String(page.notice()))
+  check('the refusal is the attachment question, not a lost message', page.requests.some((request) => request.path.includes('event=held') && /attachments%3A/u.test(request.path)), page.requests.map((r) => r.path).join(' '))
 }
 // The app publishes its sessions as one snapshot keyed by id; that is the interface a page can
 // actually read, so the check must not depend on a list function that the service does not have.

@@ -153,3 +153,16 @@
 - 顺带修掉测试自己的说明力漏洞：`test/host-verify.test.mjs` 的汇总原先写在文件中间，末尾追加的 6 条判失败也不影响退出码（日志里照样 `60/60 passed`）。汇总移到末尾重算，回退版 `index.js` 现在会真正退 1。
 - 证据：`test/host-verify.test.mjs` 60/60；`node scripts/loader-contract.mjs` 21/21 退出码 0；`node scripts/test.mjs` 全量通过；`npm run audit`、`ui-copy-lint`、`style-lint`、`zh-lint` 0 error。
 - 没做的、也不假装做了的：线上那次按下的日志只能证明「判据把同一代读成两代」，不能证明宿主对旧地址一定 404（若宿主仍原样答旧字节，新判据会照旧拒绝，这正是保留的那一档真阳性）；真实 Electron 桌面端重装后的表现仍未验（不重启应用、不刷新页面）；HMR 三项仍在第三批。
+
+## 第十一轮：外部评审判 1.14.7「主流程变好、稳定性没收敛」（→ 1.14.8）
+
+- 评审的判决语被当成验收标准：「该刷时能刷，不能刷时明确保留当前页面，每一次结果都能被用户核对」；同时要求这一轮不再加刷新模式或自动化入口——本版一个都没加。
+- 第一批四项逐条核对，全部属实：
+  1. 分块身份写成了 `Map<fileName, ownerId>`，一行里两个插件有同名文件时，B 的分块会被 A 的地址「已经读过」顶掉，判 `ok` 实则缺件。改成 `(owner, fileName)` 对，按完整分块地址去重，两个 owner 各自问、各算一次读取预算；`freezeStartup` 行里仍只记文件名（与冻结清单交叉核对 `frozenChunks` 用的是名字），只有逐地址核验才用 owner 对。
+  2. 保存协议的缺口：地址检查是网络等待，最长数秒，而它是**在**准备流程（提交焦点、让别的插件保存）之后跑的，这一等里新输入的字和插件触发的保存都没人再看一眼。改成先问地址（只读网络），过了再进保存循环，用草稿指纹（每会话 `draftRev|draft|附件数`）判断「保存的是不是当前这一版」，两轮仍在变就判 `unsaved` 保住页面。
+  3. 旧宿主兼容回归：1.14.4 拦「有文字没回到输入框的失败消息」，1.14.7 的条件写成「记录里有附件就不看文字」，于是一起带过附件的失败消息被放行。改成文字、附件分开判；纯附件才进「再按一次丢掉」的确认。`test/press.test.mjs` 里原先把旧优先级钉死的那条按新合同改写，并补一条纯附件对照，两个方向都有断言。
+  4. 合同测试假阴性：`verdict({...})` 漏传 `blocked`，`blocked !== null` 对 `undefined` 为真，`undefined.startsWith()` 抛错被外层 catch 成 `{reason:'network'}`——「换正文必须被拒」这条其实是测试自己崩了，而传 `blocked: null` 的对照会 `ok`。修在判据函数（`matchRow`/`chooseStandIn`，缺省 null + 类型守卫），错误正文档加「非 network + 正文不含 startsWith/Cannot read + 替换分支确实被访问」三条断言，再加一条同正文健康对照必须 `ok`。红证据：HEAD 版 `verdict` 对同一输入答 `{"status":"blocked","reason":"network","detail":"...Cannot read properties of undefined (reading 'startsWith')"}`、`answered: []`。新 `test/loader-contract-selftest.test.mjs`（`--self-check` 5/5）进 `npm test`；真应用 25/25，`replaced: blocked/register`。
+- 顺带收掉评审列在第二批、但和本批同一条调用链的两项（不新增开关，只改已有路径的收尾）：45 秒超时后 `pressInFlight` 还压着 ~7 秒，再按只说「还在应用」——现在按下记 `{requestId, operationId, stalled}`，超时只标 `stalled`，下一次按拿这次更新的 operation/请求名去问真实终态并按终态说话，`pressInFlight` 只在 finally 清；附件签名并入 `File` 对象编号，同名同大小换文件会重新问，放弃授权仍只认上一次问过的那组。
+- 团队分工与写范围：Lead 改 `index.js` 与两份宿主测试（分块身份、`newerLoadsFile`、逐地址核验）；`client-gates` 只改 `client.js` 与 `test/client-gates.test.mjs`（A1–A4）；`contract-check` 只改 `scripts/loader-contract.mjs` 与新增的 `test/loader-contract-selftest.test.mjs`。评审要求的「每加一个拒绝条件就带一条相邻的通过场景」按此落在各自测试文件里。
+- 证据：`node scripts/test.mjs` → 57 个测试文件全过（新增 `test/client-gates.test.mjs` 12 条、`test/loader-contract-selftest.test.mjs` 4 条）；分块修复先红后绿：1.14.7 的 `index.js` 跑新用例退 5 条（含 `a same-named chunk missing under the second owner holds the press` → `{"status":"ok"}`），修好后全过；`node scripts/loader-contract.mjs --self-check` 5/5 且不启应用；真应用合同测试 25/25；`npm run audit`、`ui-copy-lint`（0 error / 7 warn，与基线同）、`zh-lint`（0 error / 3 warn，与基线同）、`style-lint` 通过；`node --check index.js client.js scripts/loader-contract.mjs` 均 ok；用户可见文案字面零改动（`ui-copy-ignore` 131 → 131）。
+- 没有做的、也不假装做了的：评审 P2 的三项（同一批里别的插件改版导致字节相同仍可能 `mixed` 误判、附件授权 1 分钟时限、HMR 三项）本版未动；合同测试仍不在 CI（脚本是 top-level CLI，已把命令体收进 `runAsCommand` 守卫的 `main()`，导入不再启动应用，`--self-check` 可在 CI 跑，但真实 App/Chromium 那一层仍需本机）；**真实 Electron 桌面端验收**（`dsh-app://`、IPC 启动清单、真按钮重建、失败恢复、消息/任务保留）仍没有记录，本版只做到本机 `dsh web` 合同测试；桌面端每版至少一条验收记录这条门禁仍未建立。

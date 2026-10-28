@@ -76,10 +76,37 @@ window.__ModuleLoader__.load({
     /** What this document remembers about its last press, so two presses cannot overlap. */
     const STAMP_KEY = 'dsh-unlag:at'; // ui-copy-ignore
     let pressInFlight = false;
+    /**
+     * The press this page is still finishing, and whether its deadline already answered for it. A
+     * press that outlived the person's patience is finished as far as the button is concerned, but
+     * the update it named is not: this record is what the next press reads to answer with the
+     * update's own end instead of repeating "still applying" until the old call finally settles.
+     */
+    let pressRecord = null;
 
     /** The address a press could not check, so the next press inside the minute can go ahead. */
     let addressHold = null;
     let attachmentsHold = null;
+    /**
+     * A picked file has no id this page can read, and two different files can share one name and
+     * one size. The picker's own object is the file, so each one gets a stable number of its own:
+     * a file swapped for another under the same name then reads as a different set to give up.
+     */
+    const pickedFileIds = new WeakMap();
+    let pickedFileSeq = 0;
+    function pickedFileId(file) {
+      if (file === null || typeof file !== 'object') return '';
+      try {
+        const known = pickedFileIds.get(file);
+        if (known !== undefined) return known;
+        pickedFileSeq += 1;
+        pickedFileIds.set(file, pickedFileSeq);
+        return pickedFileSeq;
+      } catch {
+        // A file object that cannot be keyed is still described by its own name and size.
+        return '';
+      }
+    }
     /** Until this moment the page itself was just rebuilt, so another press has nothing to do. */
     let quietUntil = 0;
 
@@ -368,6 +395,7 @@ window.__ModuleLoader__.load({
         if (!response.ok) return 'failed';
         const data = await withTimeout(response.json());
         replacedOperation = typeof data?.operationId === 'number' ? data.operationId : null;
+    if (pressRecord !== null) pressRecord.operationId = replacedOperation;
         return reloadVerdict(data);
       } catch {
         // Nothing answered: the update may or may not have happened, and only the set can say.
@@ -1070,6 +1098,13 @@ window.__ModuleLoader__.load({
       const records = [];
       let attachments = false;
       /**
+       * Words and files are held apart because the app restores them apart. A record whose words
+       * no restore accounts for is a message the person cannot get back by resending, whatever
+       * else the same record dragged along; a record that only ever carried files is a file
+       * question. Judging the two together let a file excuse a lost message.
+       */
+      let text = false;
+      /**
        * A record map that throws is not a map with no failures. Answering it as empty let the press
        * rebuild over a message the app still holds, so the read is reported instead of swallowed.
        */
@@ -1080,6 +1115,7 @@ window.__ModuleLoader__.load({
           // A restored record's files go back into the composer's rail; an unrestored one keeps its
           // files in a map only this document has.
           if ((record?.attachmentIds?.length ?? 0) > 0) attachments = true;
+          if (typeof record?.draft === 'string' && record.draft.trim() !== '') text = true;
         }
       } catch {
         unreadable = true;
@@ -1092,7 +1128,7 @@ window.__ModuleLoader__.load({
         && typeof restoreRev === 'number'
         && typeof draftRev === 'number'
         && restoreRev === draftRev;
-      return { records, attachments, restored, unreadable };
+      return { records, attachments, text, restored, unreadable };
     }
 
     /**
@@ -1215,13 +1251,41 @@ window.__ModuleLoader__.load({
       }
       try {
         for (const picker of document.querySelectorAll?.('input[type="file"]') ?? []) {
-          for (const file of picker?.files ?? []) pieces.push(`${String(file?.name ?? '')}:${String(file?.size ?? '')}`);
+          for (const file of picker?.files ?? []) pieces.push(`${String(file?.name ?? '')}:${String(file?.size ?? '')}#${String(pickedFileId(file))}`);
         }
       } catch {
         // No markup to read; the answer is what the service said.
       }
       const signature = pieces.filter((piece) => piece !== '').sort().join(',');
       return { detail, signature: `${detail}|${signature}` };
+    }
+
+    /**
+     * What the retained composers hold right now, as one comparable string: the revision the
+     * composer publishes, the words it shows, and how many files its rail carries. A save that
+     * landed before an edit and one that landed after it must not read alike, or the edit is lost
+     * with the save that claimed it.
+     * @returns {string} the composers' current state, stable while nothing is typed or picked.
+     */
+    function draftStamp() {
+      const parts = [];
+      try {
+        const conversation = appContext?.get?.('conversation');
+        const shells = conversation?.input;
+        for (const id of retainedSessionIds(appContext?.get?.('sessions'))) {
+          try {
+            const shell = shells?.shell?.(id);
+            if (shell === null || shell === undefined) continue;
+            const snapshot = shell.snapshot ?? {};
+            parts.push(`${id}|${String(snapshot.draftRev ?? '')}|${String(snapshot.draft ?? '')}|${snapshot.attachmentIds?.length ?? 0}`);
+          } catch {
+            parts.push(`${id}|unreadable`);
+          }
+        }
+      } catch {
+        return 'unreadable';
+      }
+      return parts.join('\n');
     }
 
     /**
@@ -1264,7 +1328,7 @@ window.__ModuleLoader__.load({
             // already saved from reading alike.
             const failed = failedSendDraft(shell);
             if ((failed.unreadable || failed.records.length > 0) && !failed.restored) {
-              if (!failed.attachments) return { key: 'unsent', detail: 'unsent' };
+              if (!failed.attachments || failed.text) return { key: 'unsent', detail: 'unsent' };
             }
           } catch {
             // One session whose composer cannot be read does not make the others empty.
@@ -1326,14 +1390,25 @@ window.__ModuleLoader__.load({
           holdSignature = attach.signature;
           if (attach.signature !== options.discardAttachments) return 'attachments';
         }
-        await commitFocusedField();
-        const ready = await otherPluginsAreReady();
-        if (!ready || stillHeldBack()) return 'unsaved';
+        /**
+         * A save is the save of what the composer held when it ran. Words typed while a plugin was
+         * saving are newer than that save, and the app has already written the older text down: a
+         * press that leaves now drops them. So the check is made again against what the composer
+         * holds after the save, and a composer that moved gets one more save. The count is bounded
+         * because a person who keeps typing keeps the page, which is the honest answer.
+         */
+        for (let round = 0; round < 2; round += 1) {
+          const before = draftStamp();
+          await commitFocusedField();
+          const ready = await otherPluginsAreReady();
+          if (!ready || stillHeldBack()) return 'unsaved';
+          if (draftStamp() === before) return null;
+        }
+        return 'unsaved';
       } catch {
         held('screen');
         return 'blocked';
       }
-      return null;
     }
 
     const WRAP_STYLE = { position: 'relative', display: 'inline-flex', alignItems: 'center' };
@@ -1585,9 +1660,35 @@ window.__ModuleLoader__.load({
           : BUTTON_STYLE;
 
       const onClick = async () => {
-        // A press already running is joined, and the press that joined says so instead of nothing.
+        /**
+         * A press already running is joined, and the press that joined says so instead of nothing.
+         * One exception: a press whose deadline already said the page stayed is not still working
+         * for anyone. Its update may be, though, so this press reads that update's own end and
+         * answers with it, then leaves the old call to finish where nobody is waiting.
+         */
         if (pressInFlight) {
+          const running = pressRecord;
+          if (running === null || running.stalled !== true) {
+            say(COPY.applying);
+            return;
+          }
+          // Taken before the read so a second press during it joins instead of asking twice.
+          running.stalled = false;
           say(COPY.applying);
+          const settled = verdictOfOperation(await settledOperation(running.operationId, running.requestId));
+          if (settled === 'done') {
+            report('plugin-held', 'late-done');
+            say(COPY.stayedReplaced);
+          } else if (settled === 'restart') {
+            report('plugin-held', 'late-restart');
+            say(COPY.restart);
+          } else if (settled === 'unconfirmed') {
+            report('plugin-held', 'late-unconfirmed');
+            say(COPY.unconfirmed);
+          } else {
+            report('plugin-held', 'late-failed');
+            say(COPY.failed);
+          }
           return;
         }
         if (pending) {
@@ -1600,6 +1701,7 @@ window.__ModuleLoader__.load({
           return;
         }
         pressInFlight = true;
+        pressRecord = { requestId: null, operationId: null, stalled: false };
         setMenu(false);
         setPending(true);
         // A press starts from nothing: a refusal from an earlier press must not answer this one,
@@ -1631,6 +1733,9 @@ window.__ModuleLoader__.load({
         pressTimer = setTimeout(() => {
           // A press that already answered or already navigated has nothing left to report.
           if (answered) return;
+          // The button stops waiting here, but the update is still out there: the record keeps the
+          // name this press gave it, so the next press can ask how it really ended.
+          if (pressRecord !== null) pressRecord.stalled = true;
           report('stalled');
           stop('stalled');
         }, PRESS_DEADLINE_MS); // ui-copy-ignore
@@ -1674,6 +1779,7 @@ window.__ModuleLoader__.load({
              */
             const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`; // ui-copy-ignore
             replacedRequest = requestId;
+            if (pressRecord !== null) pressRecord.requestId = requestId;
             let status = await withTimeout(replacePlugins(requestId)).catch(() => 'lost');
             if (status === 'lost') {
               const settled = await settledPress(requestId);
@@ -1747,6 +1853,24 @@ window.__ModuleLoader__.load({
             : null;
           const agreedDetail = agreed === null ? null : attachmentsHold.detail;
           attachmentsHold = null;
+          // Before the document is replaced, the address it is replaced with has to answer. A page
+          // that cannot come up is not a rebuild; it is a page the person can no longer read.
+          const target = freshAddress();
+          const address = await askAddress(target);
+          if (address.refused === true) report('rebuild', `refused:${address.why}`);
+          if (!address.safe) {
+            const repeat = addressHold !== null && addressHold.target === target && Date.now() - addressHold.at < 60000; // ui-copy-ignore
+            if (address.definite || !repeat) {
+              if (!address.definite) addressHold = { target, at: Date.now() };
+              report('held', replaced ? `applied:document:${address.why}` : `document:${address.why}`);
+              return stop(address.definite ? 'cannotLoad' : 'unchecked', replaced);
+            }
+            addressHold = null;
+            report('rebuild', `unchecked:${address.why}`);
+          } else {
+            addressHold = null;
+          }
+          if (answered) return undefined;
           const reason = await prepareInterface({ discardAttachments: agreed });
           if (answered) return undefined;
           // The second press on the same files: they are what the press gives up, and that was said
@@ -1768,24 +1892,6 @@ window.__ModuleLoader__.load({
             report('held', replaced ? `applied:${gate}` : gate);
             return stop(reason, replaced);
           }
-          // Before the document is replaced, the address it is replaced with has to answer. A page
-          // that cannot come up is not a rebuild; it is a page the person can no longer read.
-          const target = freshAddress();
-          const address = await askAddress(target);
-          if (address.refused === true) report('rebuild', `refused:${address.why}`);
-          if (!address.safe) {
-            const repeat = addressHold !== null && addressHold.target === target && Date.now() - addressHold.at < 60000; // ui-copy-ignore
-            if (address.definite || !repeat) {
-              if (!address.definite) addressHold = { target, at: Date.now() };
-              report('held', replaced ? `applied:document:${address.why}` : `document:${address.why}`);
-              return stop(address.definite ? 'cannotLoad' : 'unchecked', replaced);
-            }
-            addressHold = null;
-            report('rebuild', `unchecked:${address.why}`);
-          } else {
-            addressHold = null;
-          }
-          if (answered) return undefined;
           /**
            * The address check can take a moment, and a file can be picked or a send started while
            * it waits. Everything read here is synchronous, so the answer describes the document
@@ -1827,6 +1933,10 @@ window.__ModuleLoader__.load({
           stop('failed');
           return undefined;
         } finally {
+          // The update has really ended, so the record has nothing left to answer and the button
+          // is nobody's: a press that stalled gave its answer long ago, and this is the only place
+          // the flag is cleared.
+          pressRecord = null;
           pressInFlight = false;
           // The document goes away on a rebuild, so the button only needs re-enabling when it does not.
           if (!navigated) setPending(false);

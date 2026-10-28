@@ -283,4 +283,77 @@ await settledBoot(dropped.routes)
 const droppedRes = await postJson(dropped.routes.get('/dsh-unlag/verify'), JSON.stringify({ rows: [urlA, urlB] }))
 check('a chunk the newer body no longer loads does not hold the press', verdict(droppedRes.body) === 'ok', droppedRes.body)
 
+// --- two plugins in one body loading a file of the same name -----------------------------------
+// The loader resolves a chunk against the module that asked for it, so `./client.helper.js` under
+// @local/a and under @local/b are two addresses with different bytes. A check that keys the call by
+// file name only keeps the later owner and never reads the earlier one: the missing earlier chunk
+// then passes and the rebuilt page dies on it. Both owners are read, in either registration order.
+const helperAddress = (owner) => `/plugins/${owner}/client.helper.js?rev=old`
+const twoOwners = (first, second) => [
+  `window.__ModuleLoader__.load({ id: "@local/${first}", factory() {} });`,
+  '; require.async("./client.helper.js");',
+  `window.__ModuleLoader__.load({ id: "@local/${second}", factory() {} });`,
+  '; require.async("./client.helper.js");',
+].join('')
+const bothUrl = '/plugins/??@local/a,@local/b/client.js&rev=old'
+
+function sharedChunkApp(state) {
+  const graph = {
+    rev: 'old',
+    entries: [
+      { id: '@local/a', rev: 'old', url: '/plugins/??@local/a/client.js&rev=old' },
+      { id: '@local/b', rev: 'old', url: '/plugins/??@local/b/client.js&rev=old' },
+    ],
+    batches: [{ url: bothUrl, entries: ['@local/a', '@local/b'], rev: 'old' }],
+  }
+  return mount(
+    {},
+    {
+      clientModules: {
+        graph: () => graph,
+        fetchBundle: async (request) => {
+          const url = String(request?.url ?? request)
+          if (url.includes('client.helper.js')) {
+            state.asked.push(url)
+            return state.present[url.includes('@local/a') ? '@local/a' : '@local/b'] === true ? served('/* helper */') : new Response('', { status: 404 })
+          }
+          if (url.includes('??@local/a,@local/b')) return served(state.body)
+          return new Response('', { status: 404 })
+        },
+      },
+    },
+  )
+}
+
+async function sharedChunkVerdict(state) {
+  const app = sharedChunkApp(state)
+  await postJson(app.routes.get('/dsh-unlag/boot'), bootJson([bothUrl], 'old'))
+  await settledBoot(app.routes)
+  const res = await postJson(app.routes.get('/dsh-unlag/verify'), JSON.stringify({ rows: [bothUrl] }))
+  return res.body
+}
+
+async function ownersCase(label, first, second, present, expect) {
+  const state = { body: twoOwners(first, second), present, asked: [] }
+  const body = await sharedChunkVerdict(state)
+  check(label, verdict(body) === expect, body)
+  if (expect !== 'ok') {
+    // The refusal has to name the missing owner's own address, not the other owner's file.
+    const missingOwner = present['@local/a'] === true ? '@local/b' : '@local/a'
+    check(`  ${label}: the refusal names ${missingOwner}'s own chunk`, body.includes(helperAddress(missingOwner)), body)
+  }
+  return { body, state }
+}
+
+await ownersCase('a same-named chunk missing under the second owner holds the press', 'a', 'b', { '@local/b': true }, 'blocked')
+await ownersCase('a same-named chunk missing under the first owner holds the press', 'a', 'b', { '@local/a': true }, 'blocked')
+await ownersCase('swapped registration order still reads the first owner', 'b', 'a', { '@local/b': true }, 'blocked')
+await ownersCase('swapped registration order still reads the second owner', 'b', 'a', { '@local/a': true }, 'blocked')
+{
+  const both = await ownersCase('both same-named chunks answer: the press goes ahead', 'a', 'b', { '@local/a': true, '@local/b': true }, 'ok')
+  // Approval must rest on both addresses having been read, not on the file name being seen once.
+  const askedBoth = (owner) => both.state.asked.some((url) => url.endsWith(helperAddress(owner)))
+  check('  both owners were asked at their own address', askedBoth('@local/a') && askedBoth('@local/b'), JSON.stringify(both.state.asked))
+}
+
 console.log(out.join('\n'))
