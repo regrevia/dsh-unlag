@@ -8,7 +8,7 @@
 import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const out = []
 function check(label, ok, extra = '') {
@@ -16,7 +16,7 @@ function check(label, ok, extra = '') {
   if (!ok) process.exitCode = 1
 }
 
-const clientPath = process.env.DSH_UNLAG_CLIENT ?? new URL('../client.js', import.meta.url).pathname
+const clientPath = process.env.DSH_UNLAG_CLIENT ?? fileURLToPath(new URL('../client.js', import.meta.url))
 const sourceText = readFileSync(clientPath, 'utf8')
 
 // Two branches of the shared harness stand between a test and the gates themselves, and neither is
