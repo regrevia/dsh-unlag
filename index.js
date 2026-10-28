@@ -170,6 +170,41 @@ function answerBudgetMs() {
  */
 const MAX_VERIFY_MS = 9000
 const MIN_INTERVAL_MS = 1500
+/**
+ * How long the page is given to say what it did with a press this side has already answered. The
+ * page is the only side that can tell a person whether their page was rebuilt, and a document that
+ * goes away mid-press can never report at all: without this bound the log would show a press that
+ * replaced plugins and then nothing, which is exactly the silence a person reads as a dead button.
+ */
+const PRESS_RECORD_MS = 30_000
+/** The same bound for a test that must reach it quickly. */
+function pressRecordMs() {
+  const set = Number(process.env.DSH_UNLAG_PRESS_RECORD_MS ?? '')
+  return set > 0 ? set : PRESS_RECORD_MS
+}
+/** How many reports the page has made, so a press can tell a later report from an earlier one. */
+let pageReportSeq = 0
+/** The press whose answer the page has not described yet, and when it was answered. */
+let unansweredPress = null
+/**
+ * A press is answered by the page it walks into, and that page is the only side that knows what the
+ * person saw. A document that goes away mid-press can never report, so the log would end at the
+ * plugins; the next call settles it instead. A timer per press would be a second thing to clear.
+ */
+function settlePressRecord() {
+  if (unansweredPress === null) return
+  // The count, not the clock: a report can land in the same millisecond as the answer it describes.
+  if (pageReportSeq > unansweredPress.seq) {
+    unansweredPress = null
+    return
+  }
+  if (Date.now() - unansweredPress.at < pressRecordMs()) return
+  const answeredAs = unansweredPress.status
+  unansweredPress = null
+  log(
+    `the press was answered as ${answeredAs} and the page never said what it did: it went away before it could report`,
+  )
+}
 /** The route the app publishes client bundles under; the same key the module table registers. */
 const BUNDLE_ROUTE = '/plugins'
 /** Marks a route handler already wrapped here, so a plugin reload cannot wrap it twice. */
@@ -3480,6 +3515,9 @@ function serveButton(ctx, controller, config) {
             query = new URL(String(req?.url ?? ''), 'http://x').searchParams.toString()
           } catch {}
           const params = new URLSearchParams(query)
+          // The page said something: whatever this side was still owed about the last press is over.
+          pageReportSeq += 1
+          settlePressRecord()
           const event = params.get('event') ?? ''
           // A query comes from outside: one shaped gate keeps a forged line out of the log. A press
           // that got a plugin set applied and then stopped says which two things happened
@@ -3574,6 +3612,9 @@ function serveButton(ctx, controller, config) {
           if (method !== 'POST') return sendJson(res, 405, { status: 'method' })
           if (buttonAllowed(req) === false) return sendJson(res, 403, { status: 'forbidden' })
           if (!switches.plugins) return sendJson(res, 200, { status: 'off' })
+          // A press is also what settles the record of the one before it: if that page never said
+          // what its press did, the log says so now, before this press writes another line.
+          settlePressRecord()
           const limit = Number(process.env.DSH_UNLAG_ANSWER_MS ?? '') || RELOAD_ANSWER_MS
           // The page names this press so a lost answer can be checked against the same operation
           // instead of against a revision that anything else could have moved.
@@ -3582,6 +3623,7 @@ function serveButton(ctx, controller, config) {
             requestId = new URL(String(req?.url ?? ''), 'http://dsh.invalid').searchParams.get('requestId')
           } catch {}
           if (requestId !== null && (requestId === '' || requestId.length > 120)) requestId = null
+          const askedAt = Date.now()
           const { outcome, timeRanOut, work } = await answerReload(controller, limit, requestId)
           /**
            * The answer the page waits for is bounded, but the update is not. Whatever the update
@@ -3597,6 +3639,14 @@ function serveButton(ctx, controller, config) {
             )
           }
           sendJson(res, 200, { ...outcome, operationId: outcome.operationId ?? controller.operation?.()?.id ?? null })
+          /**
+           * The press has an answer; the page still owes its own line about what the person sees.
+           * A page that never sends one has gone away, and the log says so instead of ending at the
+           * plugins: what happened to the document is the part a person asks about afterwards.
+           */
+          if (outcome.status !== 'applying' && outcome.status !== 'queued') {
+            unansweredPress = { status: String(outcome.status ?? 'unknown'), at: askedAt, seq: pageReportSeq }
+          }
         } catch (error) {
           log(`cannot apply a plugin reload: ${error?.message ?? error}`)
           sendJson(res, 500, { status: 'failed', detail: String(error?.message ?? error) })

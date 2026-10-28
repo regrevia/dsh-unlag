@@ -59,7 +59,9 @@ function show(tree) {
   return said === '' ? null : said
 }
 
-function harnessWith(sourceText, { settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], lateOperation = null, revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, draftImages = 0, draftFiles = 0, conversation = null, sessions = null, language = 'en-US', href, switchAnswer = 'done', stampInStore = false, verifyAnswer = { status: 'ok' } } = {}) {
+// `documentAnswers` stands for the page the press is about to enter: a rebuild walks into that
+// address, so a fake app has to say whether a page really comes up there.
+function harnessWith(sourceText, { settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], lateOperation = null, revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, draftImages = 0, draftFiles = 0, conversation = null, sessions = null, language = 'en-US', href, switchAnswer = 'done', stampInStore = false, verifyAnswer = { status: 'ok' }, documentAnswers = true } = {}) {
   const requests = []
   const navigations = []
   const current = { rev: graph.rev, code: 'c1' }
@@ -119,6 +121,12 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
       if (next === undefined) return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
       if (next === 0) throw new Error('the route was not listening')
       return new Response('{}', { status: next, headers: { 'content-type': 'application/json' } })
+    }
+    // The page itself, asked before the press walks into it: an address that answers no page is
+    // the one case where a rebuild would trade a slow page for no page at all.
+    if (path === '/' || path.startsWith('/?') || path.includes('interface=')) {
+      if (!documentAnswers) return new Response('No page here', { status: 404 })
+      return new Response('<!doctype html><script>window.__DSH_BOOT__ = {};</script>', { status: 200, headers: { 'content-type': 'text/html' } })
     }
     const answer = scripts[path]
     if (answer === undefined) return new Response('', { status: 404 })

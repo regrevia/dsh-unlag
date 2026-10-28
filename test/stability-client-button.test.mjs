@@ -206,6 +206,13 @@ export async function stablePage(options = {}) {
       if (opts.switchAnswer === 'readonly') return new Response('', { status: 403 })
       return json({ ...body, status: 'done', saved: opts.switchAnswer !== 'unsaved' })
     }
+    // The address a rebuild walks into has to answer a page: the press asks before it goes.
+    if (path === '/' || path.startsWith('/?') || path.includes('interface=')) {
+      return new Response('<!doctype html><script>window.__DSH_BOOT__ = {};</script>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      })
+    }
     return new Response('', { status: 404 })
   }
 
