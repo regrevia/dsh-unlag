@@ -129,3 +129,16 @@
 - 测试转向真实合同：桌面那一条原来和当前地址相同，假宿主走「就是这一页」分支，测的根本不是文档形状——改成另一个地址后才真正走到检查；新增 `sending` 阶段用例（真 `sending` → 不导航，去掉 `sending` → 导航）；新增多插件 bundle 用例：分块必须问 `??@local/a,@local/b/chunk-1.js`，问单条目地址一律不算数，A 的同名文件答 200 也不能让 B 的分块通过。
 - 证据：`node scripts/test.mjs` 全量通过（55 个测试文件，1333 条 PASS）；`test/host-verify.test.mjs` 52/52；`test/press.test.mjs` 187 条。`npm run audit`、`ui-copy-lint`、`style-lint`、`zh-lint` 均 0 error。
 - 仍未做、也不假装做了的：评审要求的「真实官方启动响应 / 真实 Loader 执行」合同测试还只有本机假表；HMR 取消入队后的复检、agent 工具在自己 HMR 完成前返回、joined `requestId` 重放不重复执行，这三项留到第三批，不在本版。
+
+## 第九轮：用户问「这个做出来吧」——把官方加载器真的跑起来的合同测试（→ 1.14.6）
+
+- 做之前先按 1.14.5 的判决跑了一遍真的应用：`verifyStartupRows` 对一份官方自己渲染出来的正常启动文档答 `blocked/boot`，理由是被它自己点名的地址答 404——也就是说上一版刚修好的「多插件行」在真机上把每一次刷新都挡住了。先抓住这个误拦，再谈合同测试，否则测试只是把一个错答案写成合同。
+- 根因不是地址拼错，而是**归属读错**：`lazyChunkFiles(body)` 把一整行（可含 14 个插件）当成一个 owner，又把分块地址拼成 `plugins/??…`。官方 `client-modules` 运行时的 `chunkUrl(row, fileName, rev)` 是：取该模块自己那条 row 的 url，截掉 `/??` 之后的部分，再拼 `${行首}/${moduleId}/${fileName}?${rev 段}`——线上每个分块都落在**发起 `require.async` 的那个模块**自己的 `plugins/<id>/<file>?rev=<该插件当前版本>`，组合地址只用于主文档，不用于分块。本机实测：9 MB 那条启动清单里的四个懒加载文件分别归 `dsh-client-ui-sidebar-documentpreview`（`client.frontmatter-fields.js`、`client.pdf.js`、`client.excel.js`，rev `1ba5c4b0fcaa`）与 `dsh-client-ui-sidebar-terminal`（`client.terminal.js`，rev `efba91a5f17e`）；按各自地址读 200，按 `??` 组合地址读 404。
+- 修法：`lazyChunksByOwner(body)` 按 `__ModuleLoader__.load({ id: … })` 把一行切成各模块自己的段，`require.async` 归到它所在段的模块；段外、且整行只有一个模块时仍归这个模块，一行有多个模块又找不到归属就不猜地址（交给 entries/register 两步报）。地址一律走 `chunkAddress(entry.url, ownerId, file)`，用 owner 的条目版本；删掉 `chunkAddressFor` 与那套组合地址分支。真机复跑：同一份文档由 `blocked/boot` 变成 `ok`，并按加载器自己会问的四条地址各读一次，全 200。
+- 合同测试 `scripts/loader-contract.mjs`（不进 `npm test`，需要本机应用和浏览器）：一次性 `HOME` 起真的 `dsh web`（`--profile web --no-open --port 0`），读应用自己渲染的启动文档，取其中真实的 `__DSH_BOOT__` 与三条启动行，先让 `verifyStartupRows` 对真地址判一次；再用真 Chromium（Playwright 自带 chromium，`--use-mock-keychain`）走 CDP 跑官方加载器：`Fetch.fulfillRequest` 把指定的那一行改成 404、或换成本文档里另一条启动行的正文，并 `Network.setCacheDisabled` 防止第二次导航吃到缓存。三份场景逐条对判决：
+  - 原样送达：检查 `ok`，加载器的页面有输入框、没有 `Failed to load plugins`、没有 `client-modules:` 报错。
+  - 把加载器自己的启动包（`plugins/??@deepseek-ai/dsh-client-modules/client.js`）改成 404：检查 `blocked/missing` 且点名这个地址；页面只剩 `HARNESS` 与 `Failed to load plugins`，控制台是 `client-modules: HTML did not preload …`，没有任何应用界面。
+  - 把 shell 那条启动包换成本文档里 client-modules 那条的正文：检查 `blocked`；加载器自己报 `client-modules: duplicate factory registration`。这一档要老实说：界面**可能照常画出来**（这次实测输入框在），所以判据只能是加载器自己的拒绝，不能等像素——这也正是检查必须在导航前拒绝、而不是「重开再说」的理由。
+  - 有一次换的是最末那条启动包，界面仍完整启动：那条只带晚加载的面板，换掉它不影响启动。换成 shell 那条才复现「另一代正文」的错误，测试按后者写。
+- 证据：`node scripts/loader-contract.mjs` 退出码 0，19/19 通过，输出三行对照（`served: ok · loader booted · composer true` / `missing: blocked/missing · loader failed` / `replaced: blocked/network · loader booted`），并打印当次 `revision`、启动行数、条目数。`test/host-verify.test.mjs` 改成新语义后 54/54（多插件行必须问发起模块自己的地址、绝不问 `??` 组合地址、同名文件不得替另一个插件作答、一行里第二个插件按它自己的版本问）。全量 `node scripts/test.mjs` 通过；`npm run audit`、`ui-copy-lint`、`style-lint`、`zh-lint` 0 error。
+- 没做的、也不假装做了的：`legacyFunction` 那条症状收回——装好的 0.2.1 构建里 0 处匹配，1.14.5 CHANGELOG 里那句是按调用顺序推的样例，不是实测；1.14.6 起这条规则的依据换成加载器源码与实测地址。真实 Electron 桌面端重装后的表现仍未验（不重启应用、不刷新页面）；HMR 三项仍在第三批；版本号固定的回放夹具（sha256 + 抓取脚本）留作后续。

@@ -1,6 +1,6 @@
 {
   "name": "dsh-unlag",
-  "version": "1.14.5",
+  "version": "1.14.6",
   "type": "module",
   "description": "DSH 桌面端自己的刷新按钮：改插件不用重启、开久了卡了也点一下，正在进行的会话不受影响。",
   "license": "MIT",
@@ -53,7 +53,8 @@
   "scripts": {
     "test": "node scripts/test.mjs",
     "audit": "eslint --no-config-lookup --rule '{\"no-undef\":\"error\",\"no-unused-vars\":[\"error\",{\"args\":\"none\",\"caughtErrors\":\"none\"}]}' --global window --global performance --global document --global navigator --global location --global sessionStorage --global localStorage --global fetch --global Headers --global Response --global Request --global URL --global URLSearchParams --global AbortController --global CustomEvent --global Event --global setTimeout --global clearTimeout --global setInterval --global clearInterval --global requestAnimationFrame --global queueMicrotask --global structuredClone --global Buffer --global process --global console index.js client.js",
-    "smoke": "node scripts/live-smoke.mjs"
+    "smoke": "node scripts/live-smoke.mjs",
+    "contract": "node scripts/loader-contract.mjs"
   },
   "devDependencies": {
     "eslint": "9.39.0"

@@ -297,14 +297,15 @@ check('a startup list the size of this app\'s own profile verifies', measuredBig
 
 // Counted at the end: a check appended after a mid-file summary must still be able to fail this run.
 const failed = checks.filter((row) => !row.pass)
-// One startup row can carry several plugins in one bundle, and the chunk a body loads is asked by
-// replacing the file in that same bundle: `plugins/@local/a/chunk-1.js` is a different address, and
-// when both plugins have a file of that name the first one's bytes would vouch for the second's.
-// The check has to ask the address the next document really asks.
+// One startup row can carry several plugins in one bundle, and a chunk is asked of the plugin
+// whose body loads it: the official loader derives `plugins/<owner>/<file>` from that module's own
+// row (measured against the app's own startup bundle at 0.2.1: the four chunks one batch loads are
+// answered at `plugins/@deepseek-ai/dsh-client-ui-sidebar-documentpreview/…` and
+// `plugins/@deepseek-ai/dsh-client-ui-sidebar-terminal/…`, and the bundle-spec form answers 404).
+// Asking the row's bundle instead holds a boot that would have come up.
 {
   const batchedRow = '/plugins/??@local/a,@local/b/client.js&rev=old'
   const batchedUrl = '/plugins/??@local/a,@local/b/client.js&rev=new'
-  const batchedBody = `window.__ModuleLoader__.load({ id: "@local/a", factory() {} });window.__ModuleLoader__.load({ id: "@local/b", factory() {} });require.async("chunk-1.js")`
   const batchedGraph = {
     rev: 'new',
     entries: [
@@ -313,7 +314,11 @@ const failed = checks.filter((row) => !row.pass)
     ],
     batches: [{ url: batchedUrl, entries: ['@local/a', '@local/b'], rev: 'new' }],
   }
-  const batchedCheck = async (chunkAnswers) => {
+  const module = (id) => `window.__ModuleLoader__.load({ id: "@local/${id}", factory() {} });`
+  // The chunk call sits in the loading module's own segment of the bundle.
+  const aLoads = (file) => `${module('a')} require.async("./${file}");${module('b')}`
+  const bLoads = (file) => `${module('a')}${module('b')} require.async("./${file}");`
+  const batchedCheck = async (body, chunkAnswers) => {
     const asked = []
     const chunkOf = async (address) => {
       asked.push(String(address))
@@ -321,7 +326,7 @@ const failed = checks.filter((row) => !row.pass)
     }
     const result = await verifyStartupRows(
       batchedGraph,
-      async () => ({ status: 200, servedRev: 'new', arrayBuffer: async () => batchedBody }),
+      async () => ({ status: 200, servedRev: 'new', arrayBuffer: async () => body }),
       [batchedRow],
       9000,
       null,
@@ -330,15 +335,19 @@ const failed = checks.filter((row) => !row.pass)
     return { result, asked }
   }
 
-  const own = await batchedCheck((address) => address.includes('??@local/a,@local/b/chunk-1.js'))
-  check('a chunk is asked from the bundle the startup row names', own.asked.some((path) => path.includes('??@local/a,@local/b/chunk-1.js')) === true, own.asked.join(' '))
-  check('and never from one entry inside that bundle', own.asked.some((path) => path.includes('/plugins/@local/a/chunk-1.js') || path.includes('/plugins/@local/b/chunk-1.js')) === false, own.asked.join(' '))
-  check('so a bundle whose own chunk answers approves the list', own.result.status === 'ok', JSON.stringify(own.result))
+  const own = await batchedCheck(aLoads('chunk-1.js'), (address) => address.includes('/plugins/@local/a/chunk-1.js?rev=new'))
+  check('a chunk is asked of the plugin whose body loads it', own.asked.some((path) => path === '/plugins/@local/a/chunk-1.js?rev=new') === true, own.asked.join(' '))
+  check('and never from the bundle spec the startup row names', own.asked.some((path) => path.includes('??@local/a,@local/b')) === false, own.asked.join(' '))
+  check('so a batched row whose own chunk answers approves the list', own.result.status === 'ok', JSON.stringify(own.result))
 
-  // The bug: entry A answers a file of the same name and the check reads it as B's chunk.
-  const borrowed = await batchedCheck((address) => address.includes('/plugins/@local/a/chunk-1.js'))
-  check('another entry own file does not answer for the bundle chunk', borrowed.result.status === 'blocked', JSON.stringify(borrowed.result))
-  check('and the refusal names the address the page asks', typeof borrowed.result.detail === 'string' && borrowed.result.detail.includes('??@local/a,@local/b/chunk-1.js') === true, String(borrowed.result.detail))
+  // Same file name, other plugin: B's bytes must not answer A's question, and A's must not answer B's.
+  const borrowed = await batchedCheck(aLoads('chunk-1.js'), (address) => address.includes('/plugins/@local/b/chunk-1.js'))
+  check('another plugin own file does not answer for this plugin chunk', borrowed.result.status === 'blocked', JSON.stringify(borrowed.result))
+  check('and the refusal names the address the loader asks', typeof borrowed.result.detail === 'string' && borrowed.result.detail.includes('/plugins/@local/a/chunk-1.js?rev=new') === true, String(borrowed.result.detail))
+
+  const other = await batchedCheck(bLoads('chunk-1.js'), (address) => address.includes('/plugins/@local/b/chunk-1.js?rev=new'))
+  check('the second plugin of a batch is asked at its own revision', other.asked.some((path) => path === '/plugins/@local/b/chunk-1.js?rev=new') === true, other.asked.join(' '))
+  check('and its answering chunk approves the list', other.result.status === 'ok', JSON.stringify(other.result))
 }
 
 console.log(`\n${checks.length - failed.length}/${checks.length} passed`)

@@ -1632,7 +1632,7 @@ async function captureBootSnapshot(clientModules, boot) {
         digest: createHash('sha256').update(buffer).digest('hex').slice(0, 16),
         ids: [...registeredIds(text)],
         required: [...requiredIds(text)],
-        lazy: [...lazyChunkFiles(text)],
+        lazy: [...lazyChunksByOwner(text).keys()],
       })
     } catch (error) {
       log(`cannot freeze one startup script: ${oneLine(error?.message ?? error)}`)
@@ -2157,7 +2157,7 @@ async function newerLoadsFile(fetchChunk, row, file, budgetMs) {
     return 'unknown'
   }
   if (bytes.length === 0) return 'unknown'
-  return lazyChunkFiles(bytes.toString('utf8')).has(file) ? 'loads' : 'no'
+  return lazyChunksByOwner(bytes.toString('utf8')).has(file) ? 'loads' : 'no'
 }
 
 /**
@@ -2666,14 +2666,41 @@ function entryIdOf(id) {
   return id.replace(/\/(?:client|external|inject)$/u, '')
 }
 
-/** The chunk files a body loads after boot: the pieces of one plugin generation, by file name. */
-function lazyChunkFiles(body) {
-  const files = new Set()
-  for (const match of body.matchAll(/\brequire\s*\.\s*async\s*\(\s*(["'])([^"']+)\1\s*\)/gu)) {
-    const name = String(match[2]).split('/').pop() ?? ''
-    if (name !== '') files.add(name)
+/**
+ * The chunk files a body loads after boot, and the module of that body which loads each one.
+ *
+ * One bundle can carry several plugins, and the loader resolves `require.async("./x")` against the
+ * file's own plugin: the chunk is served at `plugins/<owner>/<file>` at that entry's revision, the
+ * address the loader derives from the module's own row. Reading the call without knowing which
+ * module made it asks one plugin's address for another plugin's file, and a boot that would have
+ * come up is held. The measured app's own startup bundle carries four such chunks this way.
+ */
+function lazyChunksByOwner(body) {
+  const markers = []
+  for (const match of body.matchAll(/__ModuleLoader__\s*\.\s*load\s*\(\s*\{[\s\S]{0,8192}?\bid\s*:\s*(["'`])([^"'`]+)\1/gu)) {
+    markers.push({ at: match.index, id: entryIdOf(match[2]) })
   }
-  return files
+  const filesIn = (segment) => {
+    const files = []
+    for (const match of segment.matchAll(/\brequire\s*\.\s*async\s*\(\s*(["'])([^"']+)\1\s*\)/gu)) {
+      const name = String(match[2]).split('/').pop() ?? ''
+      if (name !== '') files.push(name)
+    }
+    return files
+  }
+  const owners = new Map()
+  // A call belongs to the module whose body contains it: the loader reads each module's own
+  // `require`, and the body's next registration is where that module ends.
+  for (let at = 0; at < markers.length; at += 1) {
+    const segment = body.slice(markers[at].at, at + 1 < markers.length ? markers[at + 1].at : body.length)
+    for (const file of filesIn(segment)) owners.set(file, markers[at].id)
+  }
+  // A call before any registration is one module's script with its registration later in the same
+  // body; a body that names several modules and loads before naming any belongs to none, and the
+  // caller drops it rather than guess an address.
+  const beforeAny = markers.length === 0 ? body : body.slice(0, markers[0].at)
+  for (const file of filesIn(beforeAny)) owners.set(file, markers.length === 1 ? markers[0].id : null)
+  return owners
 }
 
 /**
@@ -2691,33 +2718,6 @@ function chunkAddress(scriptUrl, id, file) {
   const base = `${BUNDLE_ROUTE}/${id}/${file}`
   const rev = /[?&]rev=([^&#]*)/u.exec(String(scriptUrl ?? ''))
   return rev === null ? base : `${base}?rev=${rev[1]}`
-}
-
-/**
- * The same address, read off the row's own bundle instead of an entry inside it.
- *
- * A row can carry several entries, and the document that boots asks for a chunk by replacing the
- * main file in the bundle it already named, not by picking one of those entries: asking
- * `plugins/@local/a/chunk-1.js` for a chunk of `??@local/a,@local/b/client.js` reads a different
- * file, and one that shares a name with A's own chunk would let A's bytes vouch for B's. The bundle
- * spec names the exact file the loader will ask for; when it cannot be read the caller falls back
- * to the single entry it could name.
- */
-function chunkAddressFor(scriptUrl, file) {
-  const raw = String(scriptUrl ?? '')
-  if (raw === '') return null
-  // The bundle spec starts with `??`, so a plain query search would cut the path in half at the
-  // second question mark; the query, when there is one, starts after the spec.
-  const spec = raw.indexOf('??')
-  const from = spec === -1 ? 0 : spec + 2
-  const found = raw.slice(from).search(/[?#]/u)
-  const cut = found === -1 ? -1 : from + found
-  const pathPart = cut === -1 ? raw : raw.slice(0, cut)
-  const tail = cut === -1 ? '' : raw.slice(cut)
-  // The row names its main body last, sometimes followed by the revision the bundle carries.
-  if (!/client\.js(?:&rev=[^&#]*)?$/u.test(pathPart)) return null
-  const asked = pathPart.replace(/client\.js(&rev=[^&#]*)?$/u, (_whole, rev) => `${file}${rev ?? ''}`)
-  return asked === pathPart ? null : `${asked}${tail}`
 }
 
 /** Ids a body reads from the loader's table through `require`, which must already be registered. */
@@ -2878,7 +2878,8 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
     }
     // Only what the cross-checks below need from this body is kept; the text itself is let go here,
     // so a list of large scripts costs one script of memory rather than the whole list.
-    const record = { url: item.url, ids: item.ids, registered, required: requiredIds(text), lazy: [...lazyChunkFiles(text)], servedRev: mainRev }
+    const lazyOwners = lazyChunksByOwner(text)
+    const record = { url: item.url, ids: item.ids, registered, required: requiredIds(text), lazy: [...lazyOwners.keys()], servedRev: mainRev }
     record.digest = createHash('sha256').update(bytes).digest('hex').slice(0, 16)
     bodies.push(record)
     /**
@@ -2890,23 +2891,19 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
      * own address in the reason instead of leaving it to the boot.
      */
     let chunksRead = 0
-    const owners = item.ids.filter((id) => served.has(id))
-    const owner = owners[0]
-    // A row that carries one plugin is asked for its chunks by that entry's own address, as it
-    // always has been. A row that carries several plugins has no single entry to name: the document
-    // asks by replacing the file in the bundle it already named, and picking one of the entries
-    // would read a different file — the exact address another entry's same-named chunk answers.
-    const batched = owners.length > 1
-    const currentRow = owner === undefined ? null : entries.get(owner)
-    const fromRow = typeof currentRow?.url === 'string' && currentRow.url !== '' ? currentRow.url : null
-    // The bundle the row is served from now, not the frozen address the document keeps.
-    const currentUrl = batched ? fromRow ?? item.url : item.url
     for (const file of record.lazy) {
-      if (owner === undefined || chunksRead >= MAX_CHUNK_READS) break
+      if (chunksRead >= MAX_CHUNK_READS) break
+      // The loader asks the file's own plugin for it: the owner is read off the module whose body
+      // made the call, and the address is that entry's row with the file name replaced — never the
+      // bundle spec, which is a startup row and not a chunk address. A chunk whose owner the next
+      // document no longer serves, or a call in a body that names several modules before naming any,
+      // has no address to ask: the entries and register steps report it instead of a guessed one.
+      const lazyOwner = lazyOwners.get(file)
+      if (typeof lazyOwner !== 'string' || lazyOwner === '') continue
+      const lazyEntry = entries.get(lazyOwner)
+      if (lazyEntry === undefined) continue
       chunksRead += 1
-      const address = batched
-        ? chunkAddressFor(currentUrl, file) ?? chunkAddress(currentUrl, owner, file)
-        : chunkAddress(item.url, owner, file)
+      const address = chunkAddress(lazyEntry.url ?? item.url, lazyOwner, file)
       const chunkRead = await withDeadline(() => fetchChunk(address), budgetMs - (Date.now() - began))
       if (chunkRead.timedOut === true) {
         return { status: 'blocked', reason: 'slow', detail: `${address} did not answer within the time this check waits` }
