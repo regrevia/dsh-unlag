@@ -78,16 +78,17 @@ const lines = () => readFileSync(LOG, 'utf8').split('\n').filter((line) => line 
   )
 }
 
-// --- the page: a press says it is working before it has an answer -------------------------------
+// --- the page: a press shows no words while it waits -------------------------------------------
 {
   const page = harness()
   page.holdReload()
   const running = page.press()
-  check('a press says what it is doing while it waits', /Refreshing/u.test(String(page.notice())), String(page.notice()))
+  check('a press says nothing while it waits', page.notice() === null, String(page.notice()))
+  check('and the button is the only sign it runs', page.render().button.props.style.opacity === 0.4, String(page.render().button.props.style.opacity))
   page.release()
   await running
-  // The document is on its way, so the progress line goes with it: nothing is left claiming work.
-  check('and replaces those words with the outcome', page.notice() === null, String(page.notice()))
+  // The document is on its way: nothing is left claiming work in a card.
+  check('and the rebuild leaves no card behind', page.notice() === null, String(page.notice()))
 }
 
 // --- the host: a press the page never reports is written down by the host ----------------------
