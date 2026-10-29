@@ -57,7 +57,7 @@ jobs:
   # pull_request keeps using GitHub-hosted windows-latest (free for public
   # repositories, no minute quota).
   windows:
-    name: test (regrevia-win, node ${{ matrix.node }})
+    name: test (regrevia-win, node on machine)
     if: github.event_name == 'workflow_dispatch' && inputs.windows == true
     runs-on: [self-hosted, windows, x64, regrevia-win]
     timeout-minutes: 30
@@ -66,10 +66,11 @@ jobs:
     concurrency:
       group: ci-regrevia-win-${{ github.ref }}
       cancel-in-progress: false
-    strategy:
-      fail-fast: false
-      matrix:
-        node: [20, 22, 24]
+    # No actions/setup-node here on purpose: this machine's network cannot
+    # finish downloading that action archive (codeload times out after three
+    # attempts, the job dies in "Set up job" before any test runs). It already
+    # has Node installed for its own projects, so the job uses that one and CI
+    # reports which version it ran. Version coverage lives on windows-latest.
     steps:
       - uses: actions/checkout@v4
 
@@ -81,12 +82,17 @@ jobs:
           Write-Host "runner=$env:RUNNER_NAME os=$env:RUNNER_OS"
           Write-Host "ps=$($PSVersionTable.PSVersion)"
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node }}
+      - name: node on this machine
+        shell: powershell
+        run: |
+          node --version
+          npm --version
+          (Get-Command node).Source
 
       - run: npm install --no-audit --no-fund
+        shell: powershell
       - run: npm test
+        shell: powershell
 
   # Pull-request Windows coverage stays on GitHub-hosted runners; the machine
   # must never run fork code. Public repository: these minutes are not metered.
