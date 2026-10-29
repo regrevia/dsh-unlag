@@ -37,7 +37,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { resolveBrowser, resolveCli } from './lib/desktop-paths.mjs'
+import { isWin, resolveBrowser, resolveCli } from './lib/desktop-paths.mjs'
 
 const CLI = resolveCli()
 const ORIGIN = 'http://127.0.0.1'
@@ -66,7 +66,11 @@ async function startApp() {
   if (CLI === '') {
     throw new Error('no dsh CLI found: install the desktop app, or set DSH_CONTRACT_CLI to a global dsh')
   }
-  const child = spawn(CLI, ['--profile', 'web', '--no-open', '--port', '0'], {
+  // A global npm install on Windows is a `.cmd` shim, and Node refuses to execute one without a
+  // shell; the desktop install is a native binary and is spawned directly on every platform.
+  const args = ['--profile', 'web', '--no-open', '--port', '0']
+  const child = spawn(CLI, args, {
+    ...(isWin && /\.(cmd|bat)$/iu.test(CLI) ? { shell: true } : {}),
     // A throwaway home on every platform: Node reads HOME on macOS/Linux and USERPROFILE on Windows,
     // and the app takes its state directory from DSH_HOME alone.
     env: { ...process.env, HOME: home, USERPROFILE: home, DSH_HOME: join(home, '.dsh') },
@@ -550,7 +554,17 @@ async function runContract() {
     try { cdp?.close() } catch {}
     try { if (chrome?.child !== undefined) chrome.child.kill('SIGTERM') } catch {}
     try { if (chrome?.profile !== undefined) rmSync(chrome.profile, { recursive: true, force: true }) } catch {}
-    try { if (instance?.child !== undefined) instance.child.kill('SIGTERM') } catch {}
+    // A shell-spawned runtime on Windows is a cmd wrapper around the real Node process: killing
+    // the wrapper alone leaves the app running, so the whole process tree is closed by pid there.
+    try {
+      if (instance?.child !== undefined) {
+        if (isWin && instance.child.pid !== undefined) {
+          spawn('taskkill', ['/pid', String(instance.child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+        } else {
+          instance.child.kill('SIGTERM')
+        }
+      }
+    } catch {}
     try { rmSync(home, { recursive: true, force: true }) } catch {}
   }
   return failed
