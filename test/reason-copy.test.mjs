@@ -59,7 +59,10 @@ const rawStyle = style('RAW_STYLE')
 // A short sentence gets a short card: the box hugs its words and only wraps when they reach the
 // reading width, so the frame matches the line instead of standing 340px wide around six characters.
 check('the notice card may wrap its line', pillStyle !== '' && pillStyle.includes("whiteSpace: 'normal'"), pillStyle.slice(0, 160))
-check('and its width follows the words up to the reading width', pillStyle.includes("maxWidth: 'min(340px, 82vw)'") && !/\n\s+width:/u.test(pillStyle), pillStyle.slice(0, 200))
+// The card is placed absolutely inside the 28px button wrapper, so with no width of its own its
+// shrink-to-fit box is that wrapper: a whole sentence stacked one letter per line. `max-content`
+// gives the words the width and the max-width above clamps the long ones.
+check('and its width follows the words up to the reading width', pillStyle.includes("width: 'max-content'") && pillStyle.includes("maxWidth: 'min(340px, 82vw)'") && !/(?:^|\n)\s+width:\s*['"]?\d/u.test(pillStyle), pillStyle.slice(0, 240))
 check('the detail is laid out inside the card, not absolutely beside it', rawStyle !== '' && !rawStyle.includes("position: 'absolute'"), rawStyle.slice(0, 120))
 check('an opened detail keeps the notice on screen', /if \(showRaw\) return undefined/u.test(client))
 

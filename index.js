@@ -856,6 +856,15 @@ function pluginReloader(ctx, config) {
      */
     const work = (async () => {
     let result = null
+    /**
+     * Whether this update already asked the app a second time. An update the app rejected as
+     * unfinished leaves the entry it could not bring up stopped, and a press after this one would
+     * be judged on what it changes rather than on what was already down — so the same set, asked
+     * once more without that entry, is the answer the person would get from pressing again. Asking
+     * it here keeps one press from being spent on somebody else's broken plugin, and the flag keeps
+     * this from becoming a loop.
+     */
+    let retriedOnce = false
     try {
     for (let attempt = 0; ; attempt += 1) {
       try {
@@ -874,6 +883,20 @@ function pluginReloader(ctx, config) {
             handle.unref?.()
           })
           continue
+        }
+        if (!retriedOnce) {
+          const settled = settleEntryHealth(requiredBefore)
+          const asked = new Set(requiredBefore)
+          const stopped = settled.readable ? settled.unhealthy.filter((entryId) => asked.has(entryId)) : []
+          if (stopped.length > 0) {
+            retriedOnce = true
+            log(`this update left an entry stopped (${stopped.slice(0, 5).join(', ')}); asked once more without it`)
+            // The stopped entries are named as not required, so the second ask is judged on the set
+            // that can run instead of on the one this update already took down.
+            const skip = new Set([...settled.unhealthy, ...settled.carried])
+            requiredBefore = activeEntryIds(ctx).filter((entryId) => entryId !== SELF_ENTRY_ID && !skip.has(entryId))
+            continue
+          }
         }
         throw error
       }

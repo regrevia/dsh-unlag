@@ -164,7 +164,7 @@ check('an empty address stays empty', startupPath('') === '')
 }
 {
   writeFileSync(LOG, '')
-  const { routes } = mount({
+  const { routes, applies } = mount({
     before: [{ id: '@local/a', state: 2 }],
     after: [{ id: '@local/a', state: 1 }],
     delay: 200,
@@ -174,10 +174,17 @@ check('an empty address stays empty', startupPath('') === '')
   check('a press that will fail late is told it is still applying first', answer.body.status === 'applying', JSON.stringify(answer.body))
   await settle()
   const state = await stateOf(routes)
-  check('an update that failed after the answer ends failed', state.body.operation?.status === 'failed', JSON.stringify(state.body.operation))
+  /**
+   * The app rejected that update as unfinished, which leaves the entry it could not bring up
+   * stopped. Asking again without that entry is what pressing the button again would do, so the
+   * press does that itself and the record ends done for the set that can run. The entry stays
+   * named as carried: the update did take it down, and that is not forgotten.
+   */
+  check('an update that failed is asked once more and ends done for the set that runs', state.body.operation?.status === 'done' && state.body.operation?.rebuild === 'safe', JSON.stringify(state.body.operation))
+  check('and the second ask is written down with the entry it left behind', lines().some((line) => /this update left an entry stopped \(@local\/a\); asked once more without it/u.test(line)), lines().slice(-6).join(' | '))
+  check('and the press asked the app exactly twice, not in a loop', applies() === 2, String(applies()))
   // The plugin is still down because that failed update took it down. The record of that failure is
-  // kept until the plugin runs again or leaves the profile, so pressing again cannot make it go
-  // away: the retry is judged against the same stopped plugin and fails too.
+  // kept until the plugin runs again or leaves the profile, so the next press reads it as carried.
   const retry = await pressSlow(routes)
   check('and the next press does not forget that the plugin is still down', (retry.body.carriedEntries ?? []).includes('@local/a'), JSON.stringify(retry.body))
   check('and that press ends done so the page can come up on what runs', retry.body.status === 'done', JSON.stringify(retry.body))

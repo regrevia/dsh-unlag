@@ -1451,6 +1451,10 @@ window.__ModuleLoader__.load({
       gap: 6, // ui-copy-ignore
       // A short sentence gets a short box: the card hugs its own words up to a reading width, so a
       // six-character answer does not sit in a 340px frame with two thirds of it empty.
+      // `max-content` is what makes it hug: this card is absolutely placed inside a 28px button
+      // wrapper, and without a width basis its shrink-to-fit box is squeezed to that 28px — which
+      // stacked a whole sentence one letter per line. max-width then clamps the long ones.
+      width: 'max-content', // ui-copy-ignore
       maxWidth: 'min(340px, 82vw)', // ui-copy-ignore
       alignSelf: 'flex-end', // ui-copy-ignore
       padding: '6px 8px', // ui-copy-ignore

@@ -1,3 +1,11 @@
+## 1.14.11
+
+- 第一次按就能刷成功（#3 现场）：更新被应用判成「没完成」时（本机实测 `dsh: warning: 1 entry did not activate fast-mode (dsh-fast-mode): failed to import: TypeError: z.enum is not a function`，是这个插件自己导入时抛的），以前这次按就答「插件更新没完成，稍后再按一次」并把页面留住；再按一次才成——因为第二次按判的是「这一按改了什么」，那个已经停掉的插件算「本来就停着」。现在同一次按里再问一次应用，问的时候把这一按已经停掉的条目从必需清单里去掉，也就是第二次按做的事，所以一次按就能拿到第二次按的结果：状态 `done`、`rebuild: safe`、页面照常重建。
+- 只重问一次，不会循环：`retriedOnce` 只放一次，第二次还失败就走原来的失败路径。日志多一行 `this update left an entry stopped (…); asked once more without it`，第二次的结果照常写进去；停掉的插件仍在回答的 `carriedEntries` 里，不会当成没发生。
+- 提示小条被压成 41 px 宽、一个字一行（上一版遗漏）：`PILL_STYLE` 是 `position: absolute; right: 0`，在 28 px 的按钮容器里收缩到最窄。现在 `width: max-content` 按文案撑开，`maxWidth: min(340px, 82vw)` 给长句封顶。
+- 测试：`test/press-final.test.mjs` 里原来钉住「发完之后才失败的那次更新答 failed」的一条，按新合同改写成「会再问一次并答 done、只问两次、日志写明停掉的是哪个条目」，另加一条「第二问之后的下一次按不会再问」；`test/reason-copy.test.mjs` 钉住提示条按文案撑开、不再写死宽度。
+- 证据：`node scripts/test.mjs` 61 个文件、1403 项全绿；`zh-lint`、`ui-copy-lint` 各 0 error（warning 数与基线同）、`style-lint` 通过、`node --check` 两入口 ok。本版不改按钮外观、不新增开关或刷新模式。
+
 ## 1.14.10
 
 - 界面语言不再按宿主的默认值判：桌面壳的 `index.html` 写死 `lang="en"`，真正的语言要等 locale 运行时起来才同步到 `<html lang>`；插件在加载时读到的就是这个默认值，于是中文界面里右键菜单和提示全是英文（#3）。现在先看文档语言：是中文就中文、是别的语言就按那个语言；文档仍停在默认的 `en` 时，按浏览器自己的语言顺序（`navigator.languages`，退到 `navigator.language`）判 —— 顺序和宿主「同步前用浏览器语言」的约定一致。
