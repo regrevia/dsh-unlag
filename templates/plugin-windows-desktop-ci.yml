@@ -1,0 +1,66 @@
+# Windows acceptance for a DSH plugin, in two layers.
+#
+# Layer 1 (windows-pr) is free: a hosted Windows runner runs the repository suite on
+# Node 20/22/24. Copy it as-is.
+#
+# Layer 2 (desktop) needs a self-hosted Windows machine with the DSH desktop app
+# installed. The app ships the runtime, so one install serves every plugin on that
+# machine. Change `runs-on` to your own runner labels, copy `scripts/lib/desktop-paths.mjs`,
+# `scripts/desktop-e2e.mjs` and `scripts/loader-contract.mjs` into your repository, and
+# replace the contract step with your plugin's assertions.
+#
+# Neither layer can press a button inside dsh-app://: the packaged shell refuses
+# --remote-debugging-port, so that one press stays manual for every plugin.
+name: windows
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      desktop:
+        description: run the real-app contract on the self-hosted machine
+        type: boolean
+        default: false
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-pr:
+    name: test (windows-latest, node ${{ matrix.node }})
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+
+  desktop:
+    name: desktop check
+    if: github.event_name == 'workflow_dispatch' && inputs.desktop == true
+    runs-on: [self-hosted, windows, x64]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reports what the machine has; never fails, so a machine without the app
+      # answers instead of turning red.
+      - name: probe install
+        shell: powershell
+        run: node scripts/desktop-e2e.mjs --probe
+
+      # Reported, not gated: this run says what the contract sees here.
+      - name: real-app loader contract
+        shell: powershell
+        timeout-minutes: 12
+        continue-on-error: true
+        run: node scripts/loader-contract.mjs
