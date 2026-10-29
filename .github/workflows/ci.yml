@@ -27,6 +27,13 @@ on:
         description: also run the GitHub-hosted Windows job
         type: boolean
         default: true
+      # Real-app desktop check on the self-hosted Windows machine: reports
+      # whether the app, its CLI and a Chromium are installed there, then runs
+      # the same loader contract the macOS by-hand run uses.
+      desktop:
+        description: also run the real-app desktop check on the Windows machine
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -114,3 +121,22 @@ jobs:
 
       - run: npm install --no-audit --no-fund
       - run: npm test
+
+  # Real-app desktop check on the self-hosted Windows machine. Opt-in: it
+  # needs a desktop install there, and it starts the real app and a browser.
+  # The probe always succeeds and prints what it found, so a machine without
+  # the app produces an answer instead of a red job it cannot fix.
+  desktop:
+    name: desktop check (regrevia-win)
+    if: github.event_name == 'workflow_dispatch' && inputs.desktop == true
+    runs-on: [self-hosted, windows, x64, regrevia-win]
+    timeout-minutes: 30
+    concurrency:
+      group: ci-regrevia-win-desktop-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: probe install
+        shell: powershell
+        run: node scripts/desktop-e2e.mjs --probe
