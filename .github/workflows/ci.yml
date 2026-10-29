@@ -154,6 +154,17 @@ jobs:
           }
           node scripts/desktop-e2e.mjs --probe
 
+      - name: runtime sanity
+        shell: powershell
+        run: |
+          where.exe dsh
+          node -e "console.log('node sees', process.version)"
+          $cli = (node scripts/desktop-e2e.mjs --json | ConvertFrom-Json).cli
+          "cli = $cli"
+          $entry = Join-Path (Split-Path (Split-Path $cli)) 'node_modules\@deepseek-ai\dsh\lib\bin.js'
+          "entry = $entry $(Test-Path $entry)"
+          if (Test-Path $entry) { node $entry --version; "version exit = $LASTEXITCODE" }
+
       - name: real-app loader contract
         shell: powershell
         timeout-minutes: 12
