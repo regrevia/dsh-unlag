@@ -1,3 +1,10 @@
+## 1.14.13
+
+- 一次按压只认一个基线（上一次评审的第一条）：一次按压在排队前先记住「开始那一刻在跑的插件」，之后的重试、补问只改变**问什么**，不改变**判什么**；最终结论永远和这份基线比。于是「这一按停掉的插件」一定记为 `newlyFailed`，「这一按之前就停着的」只进 `carriedEntries`/`preexistingInactive`——同一次按压不会因为多问了一次就把别人的旧账算成自己的失败，也不会把真实损失说成没事。
+- 取消落在应用之前就真的不动（第二条）：页面的路由在响应发出前连接断开、助手的调用被停，都能穿过队列到达「问应用之前」这一道；被停的一次直接中止，不重试、不写失败、不写条目记忆，答 `cancelled`/`rebuild: unknown`，`/state.operation` 记 `cancelled`，日志写 `a press was stopped before it reached the app; nothing was replaced`。已经问过应用的更新不受等待被停影响，仍按真实结果记账；已经发出「还在应用」的响应不算断开，页面在等就照常跑完。
+- 同一个名字只答它那一次更新（第三条）：页面给一次按压起的名字在更新结束时写进那份记录（中途加入的也算它这一次），两次更新之后重问最早的名字，答的仍是它那一次、带那次自己的 `operationId`；重问任何旧名字都不会再触发新的更新。
+- 证据：新增 `test/press-final.test.mjs`（24 项）、`test/press-retry-baseline.test.mjs`（11 项）、`test/press-cancel.test.mjs`（14 项）、`test/press-old-id.test.mjs`（10 项）；`node scripts/test.mjs` 66 个文件、1447 项全绿（EXIT 0）；`node --check index.js client.js` ok；`ui-copy-lint` 0 error（8 warn 与基线同）、`zh-lint` 0 error、`style-lint` 通过。本版不改按钮外观、不新增开关或刷新模式，`rebuild` 在仍有停掉条目时依旧拒绝报 `safe`。
+
 ## 1.14.12
 
 - 第一次按就成功（#3 现场，本机日志 2026-10-29T06:24:49Z）：上一版的「再问一次」只在「这一按停掉的条目」被读到时才触发。本机实测的那次拒绝里，停掉的是**这一按之前就已经停着**的插件（`adb (dsh-mobile-use)`，它自己导入时抛 `JsonSchemaError: unsupported schema` 里的 type 数组），不是这一按降下来的，于是条目清单里找不到它、重问没有发生，这一按答「插件更新没完成」；同一个人 5 秒后再按一次就答 `done`。现在改成：只要应用拒绝了这批条目（不是排队冲突那类），就先等一小会儿再问一次，第二次按现在的运行状态判。日志写 `the update was rejected; asked once more on the set that runs now`；如果第二次问的时候确实读到这一按停掉的条目，仍写原来的 `this update left an entry stopped (…); asked once more without it`，并按「去掉它」的清单问。
