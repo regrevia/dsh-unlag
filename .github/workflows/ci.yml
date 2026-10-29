@@ -140,3 +140,21 @@ jobs:
       - name: probe install
         shell: powershell
         run: node scripts/desktop-e2e.mjs --probe
+
+      # The desktop app is not installed on this machine, so the real-app run
+      # borrows the same runtime from npm: the official dsh package boots a real
+      # Host that serves the real startup document. Bounded: a machine without
+      # registry access fails here in a few minutes instead of hanging the job.
+      - name: fetch the runtime when this machine has none
+        shell: powershell
+        run: |
+          $probe = node scripts/desktop-e2e.mjs --json | ConvertFrom-Json
+          if ($probe.cli -eq 'missing') {
+            npm install -g @deepseek-ai/dsh@next --no-audit --no-fund
+          }
+          node scripts/desktop-e2e.mjs --probe
+
+      - name: real-app loader contract
+        shell: powershell
+        timeout-minutes: 12
+        run: node scripts/loader-contract.mjs

@@ -37,8 +37,9 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { resolveBrowser, resolveCli } from './lib/desktop-paths.mjs'
 
-const CLI = '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh'
+const CLI = resolveCli()
 const ORIGIN = 'http://127.0.0.1'
 
 const checks = []
@@ -52,16 +53,7 @@ function oneLine(value, max = 300) {
 }
 
 function chromePath() {
-  if (process.env.DSH_CONTRACT_CHROME) return process.env.DSH_CONTRACT_CHROME
-  const cache = join(process.env.HOME ?? '', 'Library/Caches/ms-playwright')
-  if (existsSync(cache)) {
-    const builds = readdirSync(cache).filter((name) => name.startsWith('chromium-')).sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]))
-    for (const build of builds) {
-      const binary = join(cache, build, 'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing')
-      if (existsSync(binary)) return binary
-    }
-  }
-  return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+  return resolveBrowser()
 }
 
 // --- the app, run for real in a throwaway profile ---------------------------------------------
@@ -71,8 +63,13 @@ let chrome = null
 let cdp = null
 
 async function startApp() {
+  if (CLI === '') {
+    throw new Error('no dsh CLI found: install the desktop app, or set DSH_CONTRACT_CLI to a global dsh')
+  }
   const child = spawn(CLI, ['--profile', 'web', '--no-open', '--port', '0'], {
-    env: { ...process.env, HOME: home, DSH_HOME: join(home, '.dsh') },
+    // A throwaway home on every platform: Node reads HOME on macOS/Linux and USERPROFILE on Windows,
+    // and the app takes its state directory from DSH_HOME alone.
+    env: { ...process.env, HOME: home, USERPROFILE: home, DSH_HOME: join(home, '.dsh') },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let log = ''
