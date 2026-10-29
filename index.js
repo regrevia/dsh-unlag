@@ -232,6 +232,15 @@ const SHIM_MARK = Symbol.for('dsh-unlag.bundle-shim')
 const SHIM_KEY = Symbol.for('dsh-unlag.shim')
 /** The instance that currently owns the routes and the shim; a late dispose checks it first. */
 const INSTANCE_KEY = Symbol.for('dsh-unlag.instance')
+/**
+ * Marks an update that was stopped before it asked the app anything. It travels as a distinct
+ * throw so the queue callback can refuse at the last moment — after the enqueue, which is exactly
+ * the window a cancel arrives in — and the press path can answer "cancelled" instead of dressing
+ * a refused request up as an update that failed.
+ */
+const PRESS_CANCELLED = Symbol.for('dsh-unlag.press-cancelled')
+const stoppedBeforeStart = () => Object.assign(new Error('the press was stopped before the update started'), { [PRESS_CANCELLED]: true })
+const isStoppedBeforeStart = (error) => error !== null && typeof error === 'object' && error[PRESS_CANCELLED] === true
 
 /**
  * The three rows this plugin shows in Settings, in the schema dialect the settings form reads.
@@ -836,7 +845,7 @@ function pluginReloader(ctx, config) {
     }
   }
 
-  const reload = async (hmr) => {
+  const reload = async (hmr, signal = null) => {
     /**
      * Queue the recomposition through the service's own queue. A watcher callback created while a
      * reload was restarting this plugin inherits that reload's context, and the service reads any
@@ -864,10 +873,19 @@ function pluginReloader(ctx, config) {
     let attempts = 0
     const ask = (service) => {
       const inside = async () => {
+        /**
+         * The queue is where a stopped press can still be stopped: a cancel that arrives between
+         * the first checks and this callback has had whole seconds (another reload may hold the
+         * transaction), and asking the app now would apply an update its caller already walked away
+         * from. Nothing has been touched at this point, so refusing here leaves the set exactly as
+         * the press found it — which is what "cancelled" promises.
+         */
+        if (stoppedBy(signal)) throw stoppedBeforeStart()
         // Snapshot inside the queue, not before it: what is running at the moment the update starts
         // is what the page needs afterwards. Reading it earlier can name an entry another queued
         // update already replaced, and the update would then be failed for somebody else's change.
         const runningNow = activeEntryIds(ctx).filter((id) => id !== SELF_ENTRY_ID)
+        if (stoppedBy(signal)) throw stoppedBeforeStart()
         if (baselineActive === null) baselineActive = runningNow
         attempts += 1
         requiredBefore = runningNow
@@ -921,6 +939,11 @@ function pluginReloader(ctx, config) {
         result = await ask(hmr)
         break
       } catch (error) {
+        /**
+         * Stopped before the app was asked: there is no update to retry or to judge, and retrying
+         * would be the press running behind the back of the caller that cancelled it.
+         */
+        if (isStoppedBeforeStart(error)) throw error
         if (isNestedTransaction(error)) {
           if (attempt >= 9) throw error
           const step = Number(process.env.DSH_UNLAG_RETRY_MS ?? '') || 250
@@ -1060,8 +1083,10 @@ function pluginReloader(ctx, config) {
     }
     } catch (error) {
       // The update failed part-way: what it was required to keep running is still the right list to
-      // judge the next press against, so the memory is settled before the failure travels on.
-      settleEntryHealth(requiredBefore)
+      // judge the next press against, so the memory is settled before the failure travels on. A
+      // press stopped before it asked anything settles nothing: its required list is empty because
+      // nothing ran, and writing that down would erase what an earlier update left carried.
+      if (!isStoppedBeforeStart(error)) settleEntryHealth(requiredBefore)
       throw error
     }
     })()
@@ -1399,7 +1424,7 @@ function pluginReloader(ctx, config) {
     const id = (operation.id += 1)
     operation.state = { id, status: 'applying', pending: 0, failed: 0, restart: null, rebuild: 'pending', healthReadable: null, requestId } // ui-copy-ignore
     try {
-      const outcome = await reload(hmr)
+      const outcome = await reload(hmr, signal)
       noteOperation(id, outcome, requestId)
       /**
        * `pending` means the changed modules are not loaded yet and need a restart this plugin does
@@ -1419,6 +1444,33 @@ function pluginReloader(ctx, config) {
       }
       return outcome
     } catch (error) {
+      if (isStoppedBeforeStart(error)) {
+        /**
+         * The cancel landed before the app was asked, so the set is exactly as the press found it.
+         * This is not a failed update: saying so would tell the person their plugin set is now
+         * partly applied when nothing was applied, and the next press would be judged against a
+         * failure that never happened. The state says cancelled — the same word the page already
+         * reads for a press stopped before it started — so nothing waits on an update running on.
+         */
+        log('a press was stopped before it reached the app; nothing was replaced')
+        operation.state = {
+          id,
+          status: 'cancelled', // ui-copy-ignore
+          pending: 0, // ui-copy-ignore
+          failed: 0, // ui-copy-ignore
+          restart: null, // ui-copy-ignore
+          rebuild: 'unknown', // ui-copy-ignore
+          healthReadable: null,
+          warnings: [], // ui-copy-ignore
+          carriedEntries: [],
+          newlyFailed: [],
+          preexistingInactive: [],
+          completion: 'unknown', // ui-copy-ignore
+          attempts: 0, // ui-copy-ignore
+          requestId,
+        }
+        return cancelledAnswer()
+      }
       if (error?.stillRunning === true) {
         // The queue still holds the request: it may yet apply, so the press is not called failed.
         return plainAnswer('applying')
@@ -1449,7 +1501,10 @@ function pluginReloader(ctx, config) {
           (error) => {
             // The same press ends here, so the same request id is written with it; a record keyed
             // by nothing would leave the page's retry looking like a press with no answer at all.
-            noteOperation(id, { status: 'failed', pending: [], failedEntries: [], restartReason: null }, requestId)
+            // A press stopped before it asked the app has no update to record: writing "failed"
+            // here would invent a broken plugin set out of a request that was refused.
+            if (!isStoppedBeforeStart(error))
+              noteOperation(id, { status: 'failed', pending: [], failedEntries: [], restartReason: null }, requestId)
             release()
           },
         )
@@ -4002,7 +4057,25 @@ function serveButton(ctx, controller, config) {
           } catch {}
           if (requestId !== null && (requestId === '' || requestId.length > 120)) requestId = null
           const askedAt = Date.now()
-          const { outcome, timeRanOut, work } = await answerReload(controller, limit, requestId)
+          /**
+           * The page's own connection is this press's cancel signal. A tab closed, a reload or a
+           * dropped request before the update reaches the queue means nobody is left to see the
+           * result, and replacing the plugin set for a document that is gone is exactly what
+           * "cancelled" is for. The abort is only read before the app is asked: once an update has
+           * begun, stopping the work would leave the half-applied set this plugin exists to avoid.
+           */
+          const pressCancel = new AbortController()
+          /**
+           * Only a connection that closed before the answer was sent is a cancel. The response's
+           * own end also reports "close" on some keep-alive setups, and a page told "still applying"
+           * is still waiting: aborting there would stop an update the page was promised is running.
+           */
+          const abortOnGone = () => {
+            if (res?.writableEnded !== true) pressCancel.abort()
+          }
+          if (typeof res?.once === 'function') res.once('close', abortOnGone)
+          else if (typeof res?.on === 'function') res.on('close', abortOnGone)
+          const { outcome, timeRanOut, work } = await answerReload(controller, limit, requestId, pressCancel.signal)
           /**
            * The answer the page waits for is bounded, but the update is not. Whatever the update
            * did after the page was told it is still applying is written down here: a replacement
