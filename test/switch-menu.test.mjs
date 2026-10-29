@@ -86,6 +86,36 @@ const boxes = (view) => {
   check('and explains why the press is held', String(h.notice()).includes('Cannot rebuild'), String(h.notice()))
 }
 
+// --- two clicks in one tick both land, and the newest answer is the one shown ---------------
+{
+  const h = harness({ settings: { plugins: true, page: true }, switchDelay: 60 })
+  await h.openMenu()
+  const first = h.flip(0)
+  const second = h.flip(1)
+  await Promise.all([first, second])
+  const writes = h.requests.filter((request) => request.path.startsWith('/dsh-unlag/switches')).length
+  check('two clicks in one tick send two writes instead of dropping one', writes === 2, String(writes))
+  check('and both choices are on screen', boxes(h.render()).join('|') === 'false|false|false', boxes(h.render()).join('|'))
+}
+
+// --- a press started while a switch is saving judges the setting the person chose --------------
+{
+  const h = harness({ settings: { plugins: true, page: true }, switchDelay: 120 })
+  await h.openMenu()
+  const first = h.flip(0)
+  const second = h.flip(1)
+  const pressed = h.press()
+  await Promise.all([first, second, pressed])
+  // Only the page half can rebuild on its own here; with both switches off a press has nothing to
+  // do, which is the answer that proves it read the saves rather than the switches from before.
+  const log = h.switchLog.map((entry) => entry.what)
+  check('a press waits for the save in flight before reading the switches',
+    log.lastIndexOf('switches-end') < log.lastIndexOf('state'), log.join('|'))
+  check('and does nothing when the switches it raced left it nothing to do',
+    !h.requests.some((request) => request.path.startsWith('/dsh-unlag/reload')),
+    h.requests.map((request) => request.path).join(','))
+}
+
 console.log(out.join('\n'))
 if (process.exitCode === 1) console.log('\nFAIL')
 else console.log('\nall checks passed')

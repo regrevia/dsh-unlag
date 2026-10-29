@@ -72,13 +72,19 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     check('and one escape still closes it', page.menu() === null)
   }
 
-  // Two flips of one switch before the first save is answered are one save.
+  // Two flips of one switch before the first save is answered are two saves, in order: dropping the
+  // second would leave the box showing a choice the app never got.
   {
     const page = await stablePage()
     await page.rightClick()
     await page.toggleTwice(0)
-    check('two flips of one switch send one save', page.switchesRequests().length === 1,
-      page.switchesRequests().length)
+    const writes = page.switchesRequests()
+    check('two flips of one switch both reach the app', writes.length === 2, writes.length)
+    check('and the second write carries the choice the box shows',
+      writes.map((entry) => JSON.parse(entry.init?.body ?? '{}').plugins).join('|') === 'false|true',
+      writes.map((entry) => JSON.parse(entry.init?.body ?? '{}').plugins).join('|'))
+    check('and the boxes end on that choice', page.checkboxes()[0].props.checked === true,
+      page.checkboxes()[0].props.checked)
   }
 
   // A press during a save must not leave the menu open over a document that is being replaced, and

@@ -1,3 +1,8 @@
+## 1.14.14
+
+- 开关保存和按压不再互相抢先（评审第二批最后一项）：以前一次开关点击发一次保存请求，同一 tick 里的第二次点击仍按页面里的旧值做判断；第一次的迟到回答还会把新选择盖掉；保存没落地就按下刷新时，这一按读到的开关是旧的。现在点一下就把「最新的选择」记下来，保存排在上一次之后发；每次回答只有在自己仍是最新意图时才回写开关，晚到的旧回答直接丢掉，失败也只回滚到这一次点击前。保存进行中按下刷新会先等这份保存落地（最多 4 秒），再读开关决定刷什么，于是这一按看到的就是屏幕上那个开关。
+- 证据：`test/switch-menu.test.mjs` 新增两条——同一 tick 内两次点击发出两次保存（`false|false|false`）、保存未回时按压先等保存再读到新开关（`state|switches-start|switches-end|switches-start|switches-end|state`，答复「无事可做」且不发 `/reload`）；`test/stability-client-menu.test.mjs` 把旧的「两次翻转只发一次保存」按新合同改成「两次都在、后一次带最终选择（`false|true`）、开关停在该选择」。测试替身的 `useRef` 改成和 React 一样跨渲染保持同一对象（`test/support/press-harness.mjs`），否则这类竞态在替身里根本复现不出来；替身另加 `switchDelay` 与 `switchLog` 记录保存的开始/结束与读开关的先后。`node scripts/test.mjs` 66 个文件、1453 项全绿（EXIT 0）；`node --check index.js client.js` ok；`ui-copy-lint` 0 error（8 warn 与基线同）、`zh-lint` 0 error、`style-lint` 通过。本版不改按钮外观、不新增开关或刷新模式。
+
 ## 1.14.13
 
 - 一次按压只认一个基线（上一次评审的第一条）：一次按压在排队前先记住「开始那一刻在跑的插件」，之后的重试、补问只改变**问什么**，不改变**判什么**；最终结论永远和这份基线比。于是「这一按停掉的插件」一定记为 `newlyFailed`，「这一按之前就停着的」只进 `carriedEntries`/`preexistingInactive`——同一次按压不会因为多问了一次就把别人的旧账算成自己的失败，也不会把真实损失说成没事。

@@ -61,7 +61,7 @@ function show(tree) {
 
 // `documentAnswers` stands for the page the press is about to enter: a rebuild walks into that
 // address, so a fake app has to say whether a page really comes up there.
-function harnessWith(sourceText, { settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], lateOperation = null, revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, draftImages = 0, draftFiles = 0, conversation = null, sessions = null, language = 'en-US', href, switchAnswer = 'done', stampInStore = false, verifyAnswer = { status: 'ok' }, documentAnswers = true, documentLang = null, browserLanguages = null, rebuiltMark = null, pageHtml = null } = {}) {
+function harnessWith(sourceText, { settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], lateOperation = null, revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, draftImages = 0, draftFiles = 0, conversation = null, sessions = null, language = 'en-US', href, switchAnswer = 'done', switchDelay = 0, stampInStore = false, verifyAnswer = { status: 'ok' }, documentAnswers = true, documentLang = null, browserLanguages = null, rebuiltMark = null, pageHtml = null } = {}) {
   const requests = []
   const navigations = []
   const current = { rev: graph.rev, code: 'c1' }
@@ -71,6 +71,7 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
   const reloads = []
   // The name a press gives its update; a fake host can answer for that same press by it.
   let lastRequestId = null
+  const switchLog = []
   const location = {
     href: href ?? 'http://127.0.0.1:62542/?interface=live',
     replace: (target) => navigations.push(String(target)),
@@ -80,6 +81,7 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
     const path = String(url).replace(/^https?:\/\/[^/]+/u, '')
     requests.push({ path, init })
     if (path.startsWith('/dsh-unlag/state')) {
+      switchLog.push({ what: 'state' })
       if (settings === null) return new Response('', { status: 503 })
       // A page reads this before, during and after a press: a case that changes what the host says
       // over time queues the answers it wants in order, and later reads fall back to the switches.
@@ -103,7 +105,10 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
     }
     if (path.startsWith('/dsh-unlag/switches')) {
       // The menu writes the two switches the press reads, and the fake host keeps them the way the
-      // real one does: a refused write leaves the old answer in place.
+      // real one does: a refused write leaves the old answer in place. A slow answer models a host
+      // that is still saving when the next press starts.
+      switchLog.push({ what: 'switches-start' })
+      if (switchDelay > 0) await new Promise((resolve) => setTimeout(resolve, switchDelay)) // ui-copy-ignore
       if (switchAnswer === 'error') return new Response('{}', { status: 500, headers: { 'content-type': 'application/json' } })
       if (switchAnswer === 'readonly') return new Response('{}', { status: 403, headers: { 'content-type': 'application/json' } })
       try {
@@ -113,6 +118,7 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
         if (typeof asked.agentRefresh === 'boolean') settings.agentRefresh = asked.agentRefresh
       } catch {}
       const saved = switchAnswer !== 'unsaved'
+      switchLog.push({ what: 'switches-end' })
       return new Response(JSON.stringify({ status: 'done', plugins: settings.plugins, page: settings.page, agentRefresh: settings.agentRefresh === true, saved }), { status: 200, headers: { 'content-type': 'application/json' } })
     }
     if (path.startsWith('/dsh-unlag/verify')) return new Response(JSON.stringify(verifyAnswer), { status: 200, headers: { 'content-type': 'application/json' } })
@@ -210,8 +216,13 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
       return [hooks[slot], (next) => { hooks[slot] = typeof next === 'function' ? next(hooks[slot]) : next }]
     },
     useEffect() {},
+    // A ref keeps one object for the life of the component, exactly as React does: a ref rebuilt
+    // per render would hand a press a different guard than the click that set it.
     useRef(initial) {
-      return { current: initial }
+      const slot = cursor
+      cursor += 1
+      if (slot >= hooks.length) hooks.push({ current: initial })
+      return hooks[slot]
     },
   }
   // A wait the page arms for later is recorded instead of run: a test drives it by hand.
@@ -339,6 +350,17 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
       await menu({ preventDefault() {} })
       return render()
     },
+    /** Change one switch without waiting for its save: what a second click in the same tick does. */
+    flip: (index) => {
+      const inputs = []
+      ;(function walk(node) {
+        if (node === null || typeof node !== 'object') return
+        if (node.type === 'input') inputs.push(node)
+        for (const child of Array.isArray(node.children) ? node.children : []) walk(child)
+      })(render().tree)
+      return inputs[index].props.onChange()
+    },
+    switchLog,
     /** Change one switch from the menu: 0 is plugins, 1 the page, 2 the agent switch. */
     toggle: async (index) => {
       const inputs = []

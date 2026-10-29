@@ -197,6 +197,8 @@ window.__ModuleLoader__.load({
      * instead of holding the button until the page is reloaded by hand.
      */
     const HOST_TIMEOUT_MS = 12000; // ui-copy-ignore
+    /** How long one switch save may take before the page stops believing it will land. */
+    const SWITCH_SAVE_MS = 4000; // ui-copy-ignore
     /**
      * The whole press has a bound of its own. Each call inside it is bounded already, but a chain of
      * them is not: a press that waits on several slow answers in a row can outlive the patience of
@@ -1542,11 +1544,13 @@ window.__ModuleLoader__.load({
       const wrap = React.useRef(null);
 
       /**
-       * The guard that keeps two flips of one switch to one save, and the timer that would speak to
-       * a page that already went away. Both outlive the render that started them, so both are refs:
-       * the state below is a render behind when a second click arrives in the same tick.
+       * The save a flip is still waiting on, the choice the boxes show before its answer lands, and
+       * the timer that would speak to a page that already went away. All three outlive the render
+       * that started them, so all three are refs: the state below is a render behind when a second
+       * click arrives in the same tick, and a press must be able to find the write in flight.
        */
-      const savingRef = React.useRef(false);
+      const savingRef = React.useRef(null);
+      const intentRef = React.useRef(null);
       const navTimer = React.useRef(null);
 
       React.useEffect(() => () => {
@@ -1639,31 +1643,50 @@ window.__ModuleLoader__.load({
         setMenu(true);
       };
 
-      /** Save one switch, and put it back if the app did not take it. */
-      const toggleSwitch = async (key) => {
-        if (savingRef.current) return;
-        savingRef.current = true;
-        const before = switches;
+      /**
+       * Save one switch, and put it back if the app did not take it.
+       *
+       * A flip is a write, and a press is a read that can land on either side of it. Two flips in
+       * one tick used to drop the second one silently, and a press started while the write was in
+       * flight could judge a setting the person had already changed. So flips queue behind the one
+       * in flight, each save carries the newest intent, and only the newest answer writes back to
+       * the boxes: an older answer arriving late is history, not the current choice.
+       */
+      const sendSwitches = (next) => withTimeout(fetch(`${HOST_BASE}/switches`, {
+        method: 'POST', // ui-copy-ignore
+        cache: 'no-store', // ui-copy-ignore
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json', 'x-dsh-unlag': '1' }, // ui-copy-ignore
+        body: JSON.stringify({ plugins: next.plugins, page: next.page, agentRefresh: next.agentRefresh }),
+      }), SWITCH_SAVE_MS);
+      const toggleSwitch = (key) => {
+        const before = intentRef.current ?? switches;
         const next = { ...before, [key]: !before[key] };
+        intentRef.current = next;
         setSwitches(next);
-        try {
-          const response = await fetch(`${HOST_BASE}/switches`, {
-            method: 'POST', // ui-copy-ignore
-            cache: 'no-store', // ui-copy-ignore
-            credentials: 'same-origin',
-            headers: { 'content-type': 'application/json', 'x-dsh-unlag': '1' }, // ui-copy-ignore
-            body: JSON.stringify({ plugins: next.plugins, page: next.page, agentRefresh: next.agentRefresh }),
+        const save = (savingRef.current ?? Promise.resolve())
+          .then(async () => {
+            try {
+              const response = await sendSwitches(next);
+              const data = await withTimeout(response.json(), SWITCH_SAVE_MS);
+              if (!response.ok || data?.status !== 'done') throw new Error('not saved');
+              if (intentRef.current !== next) return;
+              const applied = { plugins: data.plugins === true, page: data.page === true, agentRefresh: data.agentRefresh === true };
+              intentRef.current = applied;
+              setSwitches(applied);
+              if (data.saved !== true) say(COPY.switchesUnsaved);
+            } catch {
+              if (intentRef.current !== next) return;
+              intentRef.current = before;
+              setSwitches(before);
+              say(COPY.switchesFailed);
+            }
+          })
+          .finally(() => {
+            if (savingRef.current === save) savingRef.current = null;
           });
-          const data = await response.json();
-          if (!response.ok || data?.status !== 'done') throw new Error('not saved');
-          setSwitches({ plugins: data.plugins === true, page: data.page === true, agentRefresh: data.agentRefresh === true });
-          if (data.saved !== true) say(COPY.switchesUnsaved);
-        } catch {
-          setSwitches(before);
-          say(COPY.switchesFailed);
-        } finally {
-          savingRef.current = false;
-        }
+        savingRef.current = save;
+        return save;
       };
 
 
@@ -1760,6 +1783,9 @@ window.__ModuleLoader__.load({
           stop('stalled');
         }, PRESS_DEADLINE_MS); // ui-copy-ignore
         try {
+          // A press waits out a switch still being saved (bounded), so it judges the setting the
+          // person chose rather than the one the app had a moment before the write landed.
+          if (savingRef.current !== null) await Promise.race([savingRef.current, new Promise((resolve) => setTimeout(resolve, SWITCH_SAVE_MS))]); // ui-copy-ignore
           const settings = await readSettings();
           /**
            * Without the switches the press cannot know what it was asked for. Rebuilding anyway would
