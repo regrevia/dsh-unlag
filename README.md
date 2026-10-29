@@ -93,6 +93,8 @@ dsh plugin install dsh-unlag
 - 同一支脚本还现场核对路由的守门规则（`contract`）：读路由只认读、写路由缺 `x-dsh-unlag` 头或来自别的源一律 403、未知路径 404。它用的是和页面一样的请求，所以这条规则在运行中的 App 上是否还在，一眼可见。
 - 状态：`GET /dsh-unlag/state` → `{"version":"<当前版本>","code":"<index.js 写入时间>","plugins":true,"page":true,"shim":{...},"served":{"status":"served|missing|unknown","entries":<当前插件图行数>,"id":"dsh-unlag"}}`。`code` 用来分清「版本号没刷」和「旧代码真的还在跑」；`served` 用来分清「按钮没出现」是插件图里没这一行（`missing`）、还是图还没就绪（`unknown`）。
 - 重建后的日志带起页面代次：`interface rebuilt; the page runs the plugins as served now (page <rev>)`，据此判断新文档加载的是新脚本还是旧脚本。
+- 按钮不出现且 `served` 是 `missing`：先看 profile 的 `package.json` 里 `dsh.profile.bundles` 还列不列着 `dsh-unlag`。宿主装别的插件时会按 `dependencies` 重算这份有序清单，手装或软链进来的条目可能被一并丢掉，加回去、重启即可。装清单失败与插件本身无关，已提上游：<https://github.com/deepseek-ai/deepseek-harness/discussions/11383>。
+- 装不上、报 `ECONNREFUSED` 或 `UND_ERR_CONNECT_TIMEOUT`：先看 `~/.npmrc` 里的代理是否在跑，代理没起时换镜像直连也能装。
 
 每类说法对应的测试与现场输出整理在 [EVIDENCE.md](EVIDENCE.md)，含还没证到的两件事。
 
