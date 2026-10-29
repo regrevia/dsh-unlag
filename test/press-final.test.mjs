@@ -180,10 +180,14 @@ check('an empty address stays empty', startupPath('') === '')
   /**
    * The app rejected that update as unfinished, which leaves the entry it could not bring up
    * stopped. Asking again without that entry is what pressing the button again would do, so the
-   * press does that itself and the record ends done for the set that can run. The entry stays
-   * named as carried: the update did take it down, and that is not forgotten.
+   * press does that itself — but the retry must not change what the press is judged on. The entry
+   * was running when this press started, so this press is the one that lost it: it ends failed for
+   * the set the person had. Only a later press, started when the entry was already down, reads it
+   * as carried and may end done.
    */
-  check('an update that failed is asked once more and ends done for the set that runs', state.body.operation?.status === 'done' && state.body.operation?.rebuild === 'safe', JSON.stringify(state.body.operation))
+  check('an update that failed still ends failed for the set the press started with', state.body.operation?.status === 'failed' && state.body.operation?.rebuild === 'unsafe', JSON.stringify(state.body.operation))
+  check('and the entry it lost is named as newly failed, not carried', (state.body.operation?.newlyFailed ?? []).includes('@local/a') && !(state.body.operation?.carriedEntries ?? []).includes('@local/a'), JSON.stringify(state.body.operation))
+  check('and the record says the answer is partial after the one more ask', state.body.operation?.completion === 'partial' && state.body.operation?.attempts === 2, JSON.stringify(state.body.operation))
   check('and the second ask is written down with the entry it left behind', lines().some((line) => /this update left an entry stopped \(@local\/a\); asked once more without it/u.test(line)), lines().slice(-6).join(' | '))
   check('and the press asked the app exactly twice, not in a loop', applies() === 2, String(applies()))
   // The plugin is still down because that failed update took it down. The record of that failure is

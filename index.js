@@ -752,6 +752,18 @@ function pluginReloader(ctx, config) {
         : String(outcome?.status ?? 'failed'), // ui-copy-ignore
     pending: (Array.isArray(outcome?.pending) ? outcome.pending : []).slice(0, 16),
     failed: (Array.isArray(outcome?.failedEntries) ? outcome.failedEntries : []).slice(0, 16),
+    /**
+     * The same press read back after its answer was lost must show the same evidence it showed the
+     * first time: which warnings the app gave, which entries were already down, which ones this
+     * operation caused and how many attempts it took. An empty array here is not "nothing to report"
+     * — it is a fact the record does not have, and a reader cannot tell the two apart.
+     */
+    warnings: (Array.isArray(outcome?.warnings) ? outcome.warnings : []).slice(0, 8),
+    carried: (Array.isArray(outcome?.carriedEntries) ? outcome.carriedEntries : []).slice(0, 16),
+    newlyFailed: (Array.isArray(outcome?.newlyFailed) ? outcome.newlyFailed : []).slice(0, 16),
+    preexistingInactive: (Array.isArray(outcome?.preexistingInactive) ? outcome.preexistingInactive : []).slice(0, 16),
+    completion: ['full', 'partial', 'unknown'].includes(outcome?.completion) ? outcome.completion : 'unknown', // ui-copy-ignore
+    attempts: Number.isInteger(outcome?.attempts) && outcome.attempts > 0 ? outcome.attempts : 1,
     restart: typeof outcome?.restartReason === 'string' && outcome.restartReason !== '' ? outcome.restartReason : null,
     rebuild: rebuildOf(outcome), // ui-copy-ignore
     healthReadable:
@@ -783,9 +795,17 @@ function pluginReloader(ctx, config) {
      * agreement instead of letting each caller judge the raw shape.
      */
     const status = pending.length > 0 || restart !== null ? 'restart' : String(outcome?.status ?? 'failed') // ui-copy-ignore
+    /**
+     * The record carries the whole evidence, not only the counts: a page that lost the answer and
+     * asks again is given the same warnings and the same entry lists the first answer had, and the
+     * joined presses below read them from here when their own answer is written.
+     */
+    const record = doneOf({ ...outcome, status }, id)
     operation.state = {
       id,
       status, // ui-copy-ignore
+      // The counts judge every entry, the names above are only what fits in the answer: a page with
+      // more stopped plugins than the wire carries names for must still read the whole number.
       pending: pending.length,
       failed: Array.isArray(outcome?.failedEntries) ? outcome.failedEntries.length : 0,
       restart,
@@ -794,9 +814,26 @@ function pluginReloader(ctx, config) {
       rebuild: rebuildOf({ ...outcome, status }), // ui-copy-ignore
       healthReadable:
         outcome?.healthReadable === true || outcome?.healthReadable === false ? outcome.healthReadable : null,
+      warnings: record.warnings,
+      carriedEntries: record.carried,
+      newlyFailed: record.newlyFailed,
+      preexistingInactive: record.preexistingInactive,
+      completion: record.completion, // ui-copy-ignore
+      attempts: record.attempts,
       requestId: typeof requestId === 'string' && requestId !== '' ? requestId : (operation.state?.requestId ?? null),
     }
     rememberPress(requestId, outcome, id)
+    /**
+     * Every press that joined this update was told "applying" and has no operation of its own, so
+     * the update's real end is written into that press's own record now, while the join still names
+     * this operation. A retry after a newer update starts therefore reads the end it joined instead
+     * of starting a fresh update, and the link is dropped once the record exists.
+     */
+    for (const [pressId, row] of joined) {
+      if (row?.operationId !== id) continue
+      presses.set(pressId, { ...record })
+      joined.delete(pressId)
+    }
   }
 
   const reload = async (hmr) => {
@@ -815,12 +852,25 @@ function pluginReloader(ctx, config) {
      * instead of against a list the previous update already carried.
      */
     let requiredBefore = []
+    /**
+     * What was running when this press first reached the queue, kept for the whole operation. A retry
+     * asks the app again on the set that can run, but that second ask must not become the baseline:
+     * the entry the first attempt took down is exactly the one the person needs to be told about, and
+     * narrowing the baseline would file it as "already stopped before the press" — a done answer for
+     * a set this press broke. One press, one baseline; attempts change what is asked, never what is
+     * judged.
+     */
+    let baselineActive = null
+    let attempts = 0
     const ask = (service) => {
       const inside = async () => {
         // Snapshot inside the queue, not before it: what is running at the moment the update starts
         // is what the page needs afterwards. Reading it earlier can name an entry another queued
         // update already replaced, and the update would then be failed for somebody else's change.
-        requiredBefore = activeEntryIds(ctx).filter((id) => id !== SELF_ENTRY_ID)
+        const runningNow = activeEntryIds(ctx).filter((id) => id !== SELF_ENTRY_ID)
+        if (baselineActive === null) baselineActive = runningNow
+        attempts += 1
+        requiredBefore = runningNow
         return service.reconcileProfile(requiredBefore)
       }
       return context === null
@@ -955,16 +1005,29 @@ function pluginReloader(ctx, config) {
      * An entry remembered from an earlier update keeps this press from ending `done` until it runs
      * again or leaves the profile.
      */
-    const health = settleEntryHealth(requiredBefore)
+    /**
+     * Judged against what ran before the first attempt, not against the narrowed set a retry asked
+     * with: a retry that drops the entry it just lost must still be reported as losing it.
+     */
+    const health = settleEntryHealth(baselineActive ?? requiredBefore)
     /**
      * A plugin that an earlier press already left stopped is still down, but this press did not do
      * it: the app rejects a reload that newly breaks an entry, so a carried one is a fact about the
      * profile, not about this update. Holding the page back for it would freeze the button forever
      * on one unrelated broken plugin, so the rebuild is judged by what this press changed.
      */
+    const baseline = new Set(baselineActive ?? requiredBefore)
     const carried = new Set(health.carried)
     const stoppedEntries = health.unhealthy
     const brokenNow = stoppedEntries.filter((id) => !carried.has(id))
+    /**
+     * Said apart in the record: an entry that ran before the press and does not run after it is a
+     * loss this operation caused; one that was already stopped is a pre-existing state. The attempt
+     * count is what makes a recovered retry distinguishable from a first-try success afterwards.
+     */
+    const newlyFailed = brokenNow.filter((id) => baseline.has(id))
+    const preexistingInactive = stoppedEntries.filter((id) => !baseline.has(id))
+    const completion = !health.readable ? 'unknown' : stoppedEntries.length > 0 || pending.length > 0 || restartReason !== null ? 'partial' : 'full'
     const inactiveEntries = listed
     if (!health.readable) log('the plugin list could not be read after the update; the update ends without a verdict on the set')
     log(
@@ -989,6 +1052,10 @@ function pluginReloader(ctx, config) {
       failedEntries: brokenNow,
       carriedEntries: health.carried,
       healthReadable: health.readable,
+      completion, // ui-copy-ignore
+      newlyFailed,
+      preexistingInactive,
+      attempts,
       rebuild, // ui-copy-ignore
     }
     } catch (error) {
@@ -1214,10 +1281,15 @@ function pluginReloader(ctx, config) {
       return {
         status: remembered.status, // ui-copy-ignore
         operationId: remembered.id,
-        warnings: [],
+        warnings: (remembered.warnings ?? []).slice(),
         pending: remembered.pending.slice(), // ui-copy-ignore
         restartReason: remembered.restart,
         failedEntries: remembered.failed.slice(),
+        carriedEntries: (remembered.carried ?? []).slice(),
+        newlyFailed: (remembered.newlyFailed ?? []).slice(),
+        preexistingInactive: (remembered.preexistingInactive ?? []).slice(),
+        completion: remembered.completion ?? 'unknown', // ui-copy-ignore
+        attempts: remembered.attempts ?? 1,
         rebuild: remembered.rebuild, // ui-copy-ignore
         healthReadable: remembered.healthReadable ?? null,
       }
@@ -1236,10 +1308,15 @@ function pluginReloader(ctx, config) {
         return {
           status: update.status, // ui-copy-ignore
           operationId: update.id,
-          warnings: [],
+          warnings: (update.warnings ?? []).slice(),
           pending: [],
           restartReason: update.restart,
-          failedEntries: [],
+          failedEntries: (update.newlyFailed ?? []).slice(),
+          carriedEntries: (update.carriedEntries ?? []).slice(),
+          newlyFailed: (update.newlyFailed ?? []).slice(),
+          preexistingInactive: (update.preexistingInactive ?? []).slice(),
+          completion: update.completion ?? 'unknown', // ui-copy-ignore
+          attempts: update.attempts ?? 1,
           rebuild: update.rebuild ?? 'unknown', // ui-copy-ignore
           healthReadable: update.healthReadable ?? null,
         }
@@ -1249,10 +1326,15 @@ function pluginReloader(ctx, config) {
     if (state.status === 'applying') return plainAnswer('applying')
     return {
       status: state.status, // ui-copy-ignore
-      warnings: [],
+      warnings: (state.warnings ?? []).slice(),
       pending: [],
       restartReason: state.restart,
-      failedEntries: [],
+      failedEntries: (state.newlyFailed ?? []).slice(),
+      carriedEntries: (state.carriedEntries ?? []).slice(),
+      newlyFailed: (state.newlyFailed ?? []).slice(),
+      preexistingInactive: (state.preexistingInactive ?? []).slice(),
+      completion: state.completion ?? 'unknown', // ui-copy-ignore
+      attempts: state.attempts ?? 1,
       rebuild: state.rebuild ?? 'unknown', // ui-copy-ignore
       healthReadable: state.healthReadable ?? null,
     }
