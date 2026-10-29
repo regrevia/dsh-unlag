@@ -66,6 +66,7 @@ npm run live-smoke           # 对着运行中的 App 复核；输出里 verdict
 
 - **人手按下的那一下**：只有人按才会真的换插件代码，这台机器上最后一次真按是 1.9.30。`pressPath.ready` 证明的是「此刻按下去会被接受」，不是「按过了」。
 - **日志轮转在真实 App 里发生**：真实日志还不到上限的一半，轮转只有离线测试（`log-cap.test.mjs`）证过，没在现场触发过。
+- **Electron 壳里按下的那一下**：壳没有受支持的调试入口，脚本点不到壳里的按钮；见「桌面验收能跑到哪一步」。
 
 ## 1.14.9：老宿主按名找清单不再失败
 
@@ -97,3 +98,17 @@ npm run live-smoke           # 对着运行中的 App 复核；输出里 verdict
 
 - **页面自己上报一次之后** `boot` 字段才有值：这次改动把记录搬到 `globalThis`，但页面只在文档启动时 POST 一次，当前这份页面是在改动之前起的，所以 `/state` 里还是 `boot: null`。等下一次页面重建或重开窗口后应出现 `rev`，再用下一次按压核对。
 - **Windows 自托管机器的真实安装→插件图→按钮** 还没跑：`dsh-unlag` 仓库在这台 Windows 上还没注册 runner（`gh api repos/regrevia/dsh-unlag/actions/runners` 是 0 个），Linux 三档由 GitHub 托管跑，Windows 那档要等注册后用 `workflow_dispatch` 的 `windows: true` 触发。
+
+## 桌面验收能跑到哪一步
+
+真实 App 的验收分两层：一层是「真运行时 + 真浏览器」，一层是「Electron 壳里的真按钮」。仓库把两层都做成了可重跑的命令，但第二层目前谁也自动化不了。
+
+| 说法 | 证据 | 怎么重跑 |
+| --- | --- | --- |
+| 任何机器都能先问清「这台能不能跑真 App」 | `scripts/desktop-e2e.mjs` 按平台列出 App、App 内的 `dsh`、可用的 Chromium，缺什么报 `missing`，不判失败 | `node scripts/desktop-e2e.mjs` |
+| 自托管 Windows 机器上有浏览器、没有 App | 自托管 Windows 上的探针：`app: missing`、`cli: missing`、`browser: C:\Program Files\Google\Chrome\Application\chrome.exe` | 派发 `desktop` 作业：`gh workflow run ci -f desktop=true` |
+| npm 公开包装不出能跑的运行时 | `npm i @deepseek-ai/dsh@next` 在 macOS 上失败：`@deepseek-ai/dsh-desktop-host@0.2.1-rc.3` 在公开 registry 404（私有包），所以 npm 包只是个壳，真运行时只在桌面端安装目录里 | `npm i @deepseek-ai/dsh@next` |
+| 真运行时合同测试在 macOS 上照旧成立 | 路径发现改造后本机 `node scripts/loader-contract.mjs`：25/25 passed | 同上 |
+| 壳里那一层按不了 | 打包的 Electron 启动器拒绝 `--remote-debugging-port`（`bad option`），没有可用的 CDP 入口；`scripts/loader-contract.mjs` 的注释里写明了它不跑在 CI、也不跑壳 | `"/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness" --remote-debugging-port=9333` |
+
+要把第二层也变成机器可核对的，只差两件事：那台 Windows 机器装上官方的桌面端（探针会自己认出来，合同测试那一步随之变绿），以及壳提供一个受支持的调试入口（上游没有的话，只能保留人手按一次）。
