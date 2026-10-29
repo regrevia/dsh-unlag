@@ -58,12 +58,28 @@ check('a frozen startup script is read at the revision that holds it', atCurrent
 // the frozen address first and the current revision second: the last read is the one the page runs.
 check('the read ends at the revision that holds the set', current.asked.at(-1).includes('&rev=new'), current.asked.join(' '))
 
-// A plugin the table no longer has is answered by the stand-in script the route serves in its
-// place, so the boot comes up without it and the check says so instead of refusing the rebuild.
+// A plugin the table no longer has is answered by the stand-in module the route serves in its
+// place: it registers the row's id and applies nothing, so the loader takes the answer, the entry
+// activates with no behaviour and the boot comes up without the plugin. The check reads the same
+// bytes the page will run, so it approves the rebuild and reports the plugin the page loses instead
+// of refusing the press the page can carry out.
 const absent = table({ liveGraph: { rev: 'new', entries: [], batches: [] } })
 const gone = await verifyStartup(absent, [frozenRow])
-check('a startup row for a plugin the set no longer has refuses the press', gone.status === 'blocked', JSON.stringify(gone))
-check('and the refusal says which entry the frozen list still names', gone.reason === 'entries' && gone.leftOut?.includes('@local/a') === true, JSON.stringify(gone))
+check('a startup row for a plugin the set no longer has does not refuse the press', gone.status === 'ok', JSON.stringify(gone))
+check('and the answer names the plugin the page comes up without', gone.shimmed?.includes('@local/a') === true, JSON.stringify(gone))
+check('and no entry is reported as lost', gone.leftOut === undefined, JSON.stringify(gone))
+
+// A stand-in only helps when it registers: an answer that is 200 but registers nothing is still the
+// boot failure this refusal exists for, so it must keep refusing instead of trusting the status.
+{
+  const silent = {
+    graph: () => ({ rev: 'new', entries: [], batches: [] }),
+    fetchBundle: async () => new Response('/* nothing here */', { status: 200 }),
+  }
+  const answer = await verifyStartup(silent, [frozenRow])
+  check('an answer that registers nothing still refuses the press', answer.status === 'blocked' && answer.reason === 'entries', JSON.stringify(answer))
+  check('and that refusal names the entry the script did not register', answer.leftOut?.includes('@local/a') === true, JSON.stringify(answer))
+}
 
 
 
@@ -253,7 +269,6 @@ check('an empty address refuses instead of throwing', junk.status === 'blocked' 
 // happen.
 check('a row the set still serves names no stand-in', atCurrent.standInRows === undefined, JSON.stringify(atCurrent))
 check('the lost-plugin row is counted as a stand-in', gone.standInRows === 1, JSON.stringify(gone))
-
 // The list is the running app's own object, re-composed while a swap runs: a row whose fields
 // cannot be read is a list this check cannot read, and it says so rather than throwing out of the
 // route that carries the press.

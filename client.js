@@ -34,8 +34,8 @@ window.__ModuleLoader__.load({
     const BOOT_GAP_NOTICE = zh ? '缺插件，重启应用后恢复' : 'a plugin is missing, so reopen the app';
 
     const REASONS = zh
-      ? { list: '读不到启动信息', slow: '启动信息读得太慢', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', size: '启动脚本太大', verify: '插件后端没有应答', screen: '页面状态读不到', busy: '另一次刷新还在进行', dependencies: '插件依赖还没有运行', missing: '启动清单里有插件已经不见了', network: '读取插件时出错', register: '插件没有登记自己', entries: '启动清单里的插件已卸载，重启应用后再刷新', generation: '插件刚被换过，再按一次刷新', boot: '重启应用后用上新代码', url: '启动信息太长，读不全', mixed: '新页面会混用新旧插件代码，先重新打开应用' }
-      : { list: 'startup info is unavailable', slow: 'the startup list answered too slowly', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete', size: 'a startup script is too large', verify: 'the plugin is not answering', screen: 'the page state cannot be read', busy: 'another rebuild is already running', dependencies: 'a plugin dependency is not running', missing: 'a plugin in the startup list is gone', network: 'the plugins could not be read', register: 'a plugin did not register itself', entries: 'a plugin in the startup list was uninstalled, so restart the app before rebuilding', generation: 'the plugins were replaced a moment ago, press again', boot: 'reopen the app to use the new code', url: 'the startup info is too long to keep', mixed: 'the next page would mix old and new plugin code, so reopen the app first' };
+      ? { list: '读不到启动信息', slow: '启动信息读得太慢', row: '启动信息不完整', src: '启动脚本没有地址', graph: '已装插件清单读不到', plugin: '有插件已不在运行', script: '启动脚本读不到', empty: '启动脚本是空的', covers: '启动脚本缺插件', parse: '启动脚本内容不完整', size: '启动脚本太大', verify: '插件后端没有应答', screen: '页面状态读不到', busy: '另一次刷新还在进行', dependencies: '插件依赖还没有运行', missing: '启动清单里有插件已经不见了', network: '读取插件时出错', register: '插件没有登记自己', entries: '这样刷新会打不开页面，先重启应用', generation: '插件刚被换过，再按一次刷新', boot: '重启应用后用上新代码', url: '启动信息太长，读不全', mixed: '新页面会混用新旧插件代码，先重新打开应用' }
+      : { list: 'startup info is unavailable', slow: 'the startup list answered too slowly', row: 'startup info is incomplete', src: 'a startup script has no address', graph: 'the plugin list cannot be read', plugin: 'a plugin is no longer running', script: 'a startup script cannot be read', empty: 'a startup script is empty', covers: 'a startup script misses a plugin', parse: 'a startup script is incomplete', size: 'a startup script is too large', verify: 'the plugin is not answering', screen: 'the page state cannot be read', busy: 'another rebuild is already running', dependencies: 'a plugin dependency is not running', missing: 'a plugin in the startup list is gone', network: 'the plugins could not be read', register: 'a plugin did not register itself', entries: 'a refresh would open a page that cannot load, so restart the app first', generation: 'the plugins were replaced a moment ago, press again', boot: 'reopen the app to use the new code', url: 'the startup info is too long to keep', mixed: 'the next page would mix old and new plugin code, so reopen the app first' };
 
     /** The last reason a readiness check refused for, or null after a check that passed. */
     let holdReason = null;
@@ -699,8 +699,9 @@ window.__ModuleLoader__.load({
           if (typeof id === 'string' && id !== '' && !liveIds.has(id)) vanished = true;
         }
         // A plugin switched off since this page booted is only fatal if nothing stands in for its
-        // script. Such a row is answered with an empty body and the check below reads it back the
-        // same way, so the press may ask instead of being refused here for good.
+        // script. Such a row is answered with a stand-in module that registers the id and applies
+        // nothing, and the check below reads those same bytes, so the press may ask instead of being
+        // refused here for good.
         if (vanished && (await hostShimAnswersGone())) return held('plugin');
       }
       const verdict = await hostVerifyStartup(scripts);

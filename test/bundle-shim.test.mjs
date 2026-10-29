@@ -245,9 +245,10 @@ check('a post is left to the table', post.body === 'original', post.body)
 // --- everything the wrapper cannot place is answered exactly as before ------------------------
 const unknownId = await call(first.route.handler, { method: 'GET', url: '/plugins/??@local/gone/client.js&rev=old' })
 // A document made before that plugin was removed still lists it. The table's 404 for the one
-// script ends the app, so an empty script stands in its place and the boot comes up without it.
+// script ends the app, so a stand-in module that registers the id takes its place and the boot comes
+// up without it.
 check(
-  'a stale request for a plugin the set no longer has is answered with an empty script',
+  'a stale request for a plugin the set no longer has is answered with a stand-in that registers it',
   unknownId.status === 200 && unknownId.body.includes('is not part of the plugin set served now'),
   `${unknownId.status} ${unknownId.body}`,
 )
@@ -268,7 +269,8 @@ check('a body missing a listed plugin falls through', missing.status === 404 && 
 const dispose = first.handled[0]?.dispose
 // --- a page booting a list that names a plugin the app dropped still boots ---------------------
 // This is the whole point of the stand-in answer, and only running the bytes proves it: the row for
-// the dropped plugin must register nothing, and every plugin still served must register.
+// the dropped plugin must be answered with a module that registers its id and applies nothing — a
+// body that registers nothing fails the boot — and every plugin still served must register.
 const dropped = mount({
   graph: {
     rev: 'newrev',
@@ -284,7 +286,7 @@ const dropped = mount({
 const droppedAnswer = await call(dropped.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js,@local/b/client.js&rev=abrev', headers: {} })
 const boots = droppedAnswer.status === 200 ? registeredBy(droppedAnswer.body) : []
 check('a list naming a dropped plugin boots instead of failing', droppedAnswer.status === 200, String(droppedAnswer.status))
-check('a dropped plugin registers nothing', !boots.includes('@local/b'), boots.join(','))
+check('a dropped plugin is answered with a stand-in that registers it', boots.includes('@local/b'), boots.join(','))
 check('every plugin still served still registers', boots.includes('@local/a'), boots.join(','))
 
 check('an apply leaves a dispose hook', typeof dispose === 'function')

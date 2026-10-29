@@ -2053,12 +2053,32 @@ async function regroupedBundleAnswer(clientModules, graph, request, deadline = D
 }
 
 /**
+ * The body a document gets in a removed plugin's place: a module that registers the row's id and
+ * applies nothing.
+ *
+ * A comment would not do. The loader imports every row the startup list names and fails the whole
+ * boot when one of them loads without registering (`could not load "<id>"`, then "entries did not
+ * activate"), so a body that registers nothing is exactly what ends the page. A module whose entry
+ * activates with no behaviour keeps the row's promise in the only way that still holds: the plugin
+ * is gone, its script answers, and the page boots without it.
+ */
+export function standInModuleBody(id) {
+  const safe = String(id).replace(/[^a-z0-9@/._-]/giu, '')
+  if (safe === '') return Buffer.from('/* dsh-unlag: this row named no readable plugin id */\n')
+  const name = JSON.stringify(safe)
+  return Buffer.from(
+    `/* dsh-unlag: ${safe} is not part of the plugin set served now; this row registers and applies nothing so the page boots without it */\n` +
+      `window.__ModuleLoader__.load({ id: ${name}, factory: function () { return { name: ${name}, apply: function () {} } } });\n`,
+  )
+}
+
+/**
  * A stale request can name a plugin the profile no longer has at all: it was turned off or removed
  * after the document that asks was made. Every plugin in the request is still served on its own, so
- * the ones that remain are answered and the ones that are gone take a comment's place, which a
- * script can hold without registering anything. The app's own answer here is 404, and a document
- * booting from an old startup list that meets one ends the whole app: a boot that comes up without
- * a plugin it no longer has beats that.
+ * the ones that remain are answered and the ones that are gone take a stand-in's place: a module
+ * that registers the row's id and applies nothing, so the boot finishes without the plugin instead
+ * of failing on it. The app's own answer here is 404, and a document booting from an old startup
+ * list that meets one ends the whole app.
  */
 async function survivingBundleAnswer(clientModules, graph, request, deadline = Date.now() + answerBudgetMs()) {
   if (request.sourceMap) return null
@@ -2075,7 +2095,7 @@ async function survivingBundleAnswer(clientModules, graph, request, deadline = D
       parts.push(body)
       continue
     }
-    parts.push(Buffer.from(`/* ${id.replace(/[^a-z0-9@/._-]/giu, '')} is not part of the plugin set served now */`))
+    parts.push(standInModuleBody(id))
   }
   if (parts.length === 0) return null
   const body = Buffer.concat(parts.flatMap((part, index) => (index === parts.length - 1 ? [part] : [part, Buffer.from('\n;\n')])))
@@ -2132,9 +2152,10 @@ async function currentBundleAnswer(clientModules, method, url, deadline = Date.n
   }
   const regrouped = await regroupedBundleAnswer(clientModules, graph, request, deadline)
   if (regrouped !== null) return regrouped
-  // What is left is the last resort: the set itself is gone and the body is a stand-in that
-  // registers nothing. The check passes, and the answer says so, because a page booting that row
-  // comes up without the plugin rather than failing.
+  // What is left is the last resort: the request names plugins the set no longer has, so each of
+  // those rows is answered with a stand-in module that registers the id and applies nothing. The
+  // answer says so (`standIn`), because the page really does come up without those plugins and the
+  // check reads the same bytes the page will run.
   const surviving = await survivingBundleAnswer(clientModules, graph, request, deadline)
   return surviving === null ? null : { ...surviving, standIn: true }
 }
@@ -2280,7 +2301,7 @@ async function serveCurrentBundle(clientModules, req, res) {
       const kept = answer.ids.filter((id) => !answer.gone.includes(id))
       log(
         kept.length === 0
-          ? `answered an older set with an empty script in place of ${answer.gone.join(', ')}: the app would have ended on the table's 404`
+          ? `answered an older set with a stand-in module in place of ${answer.gone.join(', ')}: the app would have ended on the table's 404`
           : `served ${kept.join(', ')} (${revMigration(answer)}) and left out ${answer.gone.join(', ')}: a page asked for an older set`,
       )
     } else {
@@ -2452,7 +2473,7 @@ async function serveCurrentBundleResource(clientModules, request) {
       const kept = answer.ids.filter((id) => !answer.gone.includes(id))
       log(
         kept.length === 0
-          ? `answered an older set with an empty script in place of ${answer.gone.join(', ')}: the app would have ended on the table's 404`
+          ? `answered an older set with a stand-in module in place of ${answer.gone.join(', ')}: the app would have ended on the table's 404`
           : `served ${kept.join(', ')} (${revMigration(answer)}) and left out ${answer.gone.join(', ')}: a page asked for an older set`,
       )
     } else {
@@ -3033,9 +3054,9 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
   if (wanted.length === 0) return { status: 'blocked', reason: 'list', detail: 'the startup list names no script' }
   /**
    * A row can name a plugin the profile no longer has: the document that made it was composed
-   * before that plugin was turned off. The route answers such a row with a stand-in that registers
-   * nothing, so the boot comes up without the plugin; the check reads the same way and does not
-   * demand a registration the set cannot give.
+   * before that plugin was turned off. The route answers such a row with a stand-in module that
+   * registers the id and applies nothing, so the boot comes up without the plugin; the check reads
+   * the same answer and does not demand a registration the set cannot give.
    */
   // The set a check reads is the one the next document boots, so the revision that set was at when
   // the first body left must still be the revision when the last one arrives: a recomposition in
@@ -3051,6 +3072,7 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
   const began = Date.now()
   let totalBytes = 0
   let standInRows = 0
+  const shimmed = new Set()
   for (const item of wanted) {
     if (Date.now() - began > budgetMs) {
       return { status: 'blocked', reason: 'slow', detail: 'the startup list took longer than this check waits' }
@@ -3111,6 +3133,17 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
     const missing = required.filter((id) => !registered.has(id))
     if (required.length > 0 && missing.length > 0) {
       return { status: 'blocked', reason: 'register', detail: `${item.url} does not register ${missing.join(', ')}` }
+    }
+    /**
+     * A row the set no longer has is answered with a stand-in module (see `standInModuleBody`): it
+     * registers the row's id and applies nothing, so the loader takes the answer and the entry
+     * activates with no behaviour. That row is not one the boot loses, and leaving it in `leftOut`
+     * after the bytes prove they register it would refuse a press the page can carry out. Only a row
+     * whose answer registers nothing at all is still left out — that one really does end the boot.
+     */
+    for (const id of item.ids) {
+      if (served.has(id) || !registered.has(id)) continue
+      if (leftOut.delete(id)) shimmed.add(id)
     }
     // Only what the cross-checks below need from this body is kept; the text itself is let go here,
     // so a list of large scripts costs one script of memory rather than the whole list.
@@ -3251,10 +3284,8 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
     }
   }
   /**
-   * A row whose plugin is gone cannot boot the next page, whatever the route answers for it: the
-   * shell still holds a frozen list naming that entry and the app's loader still imports it, so a
-   * stand-in body that registers nothing fails the boot after the press was allowed. Refusing here
-   * costs one press; the page that would come up costs the running turns.
+   * The set a check reads is the one the next document boots, so a set replaced while the scripts
+   * were read would make the answer describe two generations at once: say so instead of approving.
    */
   if (revisionAtStart !== null) {
     let revisionNow = revisionAtStart
@@ -3267,18 +3298,29 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
     }
   }
   if (leftOut.size > 0) {
+    /**
+     * A row the set no longer has is normally answered with a stand-in module that registers the
+     * id, so it does not reach this refusal. What does reach it is an answer that registers nothing
+     * for a row the startup list still names: the loader imports every row and fails the whole boot
+     * when one loads without registering, so allowing the press would replace a running page with
+     * one that does not come up. Refusing costs one press and names the row it could not answer.
+     */
     return {
       status: 'blocked', // ui-copy-ignore
       reason: 'entries', // ui-copy-ignore
       leftOut: [...leftOut],
       ...(standInRows > 0 ? { standInRows } : {}),
-      detail: `the startup list names plugins this app no longer serves: ${[...leftOut].slice(0, 4).join(', ')}`,
+      detail: `the startup list still names ${[...leftOut].slice(0, 4).join(', ')}, and the script it asks for registers none of them`,
     }
   }
   return {
     status: 'ok', // ui-copy-ignore
     reason: 'ok', // ui-copy-ignore
     revision: typeof graph?.rev === 'string' ? graph.rev : null,
+    // Rows answered by a stand-in module: the page comes up without those plugins, and saying so
+    // lets the press report a real loss instead of a boot that quietly has less in it.
+    ...(shimmed.size > 0 ? { shimmed: [...shimmed] } : {}),
+    ...(standInRows > 0 ? { standInRows } : {}),
     scripts: bodies.map((body) => ({ url: body.url, digest: body.digest, ids: body.ids, lazy: body.lazy })),
   }
 }
@@ -3916,8 +3958,11 @@ function serveButton(ctx, controller, config) {
           if (verdict?.status !== 'ok') {
             log(`a startup check refused the page: ${String(verdict?.reason ?? 'list')} (${String(verdict?.detail ?? 'no detail')})`)
           }
+          if (Array.isArray(verdict?.shimmed) && verdict.shimmed.length > 0) {
+            log(`startup rows answered with a stand-in module: ${verdict.shimmed.join(', ')}; the next page comes up without those plugins`)
+          }
           if (Array.isArray(verdict?.leftOut) && verdict.leftOut.length > 0) {
-            log(`a startup row names a plugin this app no longer serves: ${verdict.leftOut.join(', ')}; a stand-in body registers nothing, so the boot would fail and this press is held`)
+            log(`a startup row the script answered registers none of its plugins: ${verdict.leftOut.join(', ')}; the boot would fail and this press is held`)
           }
           sendJson(res, 200, verdict)
           } finally {

@@ -685,13 +685,16 @@ check('a press addressed from outside this machine is refused', fromOutside.stat
 
 // --- a startup row that names a plugin the set no longer has ----------------------------------
 // The press asks the table before it rebuilds. The row is answered by the stand-in the route serves
-// for a plugin the profile no longer has, so the verdict is a boot that comes up without it, said
-// out loud in the log rather than refused.
+// for a plugin the profile no longer has, so the verdict approves a boot that comes up without it
+// and the log says which plugin is missing instead of holding the press.
+// The graph is one object per set: the check refuses a set replaced while its scripts were read, and
+// a fixture that builds a new object per call would trip that instead of testing the stand-in.
+const goneGraph = { rev: 'new', entries: [], batches: [] }
 const goneRows = mount(
   {},
   {
     clientModules: {
-      graph: () => ({ rev: 'new', entries: [], batches: [] }),
+      graph: () => goneGraph,
       fetchBundle: async (request) => {
         const url = String(request?.url ?? request)
         if (!url.includes('&rev=new')) return new Response('', { status: 404 })
@@ -714,9 +717,10 @@ setImmediate(() => {
   for (const fn of listeners.end ?? []) fn()
 })
 await goneRows.routes.get('/dsh-unlag/verify')(goneReq, goneRes)
-check('verify refuses a startup row for a plugin the set lost', verdict(goneRes.body) === 'blocked', goneRes.body)
-check('verify names the plugin the page comes up without', String(goneRes.body).includes('@local/a'), goneRes.body)
-check('the log says the app no longer serves it', readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('no longer serves: @local/a'))
+const goneBody = JSON.parse(goneRes.body)
+check('verify approves a startup row for a plugin the set lost', verdict(goneRes.body) === 'ok', goneRes.body)
+check('verify names the plugin the page comes up without', goneBody.shimmed?.includes('@local/a') === true, goneRes.body)
+check('the log says that row was answered with a stand-in', readFileSync(process.env.DSH_UNLAG_LOG, 'utf8').includes('answered with a stand-in module: @local/a'))
 
 // A refused startup check is written down, so a press that stopped can be explained later.
 const blockedRows = mount(

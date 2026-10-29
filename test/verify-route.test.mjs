@@ -104,11 +104,11 @@ check('a body that is not JSON stays a refused list', broken.body.status === 'bl
     await lostRoutes.get('/dsh-unlag/verify')(request(JSON.stringify({ rows: ['/plugins/??@local/a/client.js&rev=old'] })), res)
     return { status: res.status, body: JSON.parse(res.body), writeHeads: res.writeHeads, ends: res.ends }
   })()
-  oncePerAnswer('a refused list is answered once', answer)
-  check('a list whose plugin is gone refuses instead of passing on a stand-in', answer.body.status === 'blocked', JSON.stringify(answer.body).slice(0, 160))
-  check('and the refusal names the entry the frozen list still holds', answer.body.reason === 'entries' && answer.body.leftOut?.includes('@local/a') === true, JSON.stringify(answer.body))
+  oncePerAnswer('a checked list is answered once', answer)
+  check('a list whose plugin is gone comes back approved', answer.body.status === 'ok', JSON.stringify(answer.body).slice(0, 160))
+  check('and the answer names the plugin the page comes up without', answer.body.shimmed?.includes('@local/a') === true && answer.body.standInRows >= 1, JSON.stringify(answer.body))
   const logText = readFileSync(process.env.DSH_UNLAG_LOG, 'utf8')
-  check('and the log says the boot would fail on that row', /a stand-in body registers nothing/u.test(logText), logText.split('\n').slice(-3).join(' | '))
+  check('and the log says which row was answered with a stand-in', /answered with a stand-in module: @local\/a/u.test(logText), logText.split('\n').slice(-3).join(' | '))
 }
 
 // A table that answers nothing is a network refusal, and it too must be one answer with one end:
