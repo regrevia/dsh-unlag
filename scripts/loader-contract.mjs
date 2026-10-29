@@ -37,9 +37,9 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { isWin, resolveBrowser, resolveCli } from './lib/desktop-paths.mjs'
+import { isWin, resolveBrowser, resolveRuntime } from './lib/desktop-paths.mjs'
 
-const CLI = resolveCli()
+const runtime = resolveRuntime()
 const ORIGIN = 'http://127.0.0.1'
 
 const checks = []
@@ -63,14 +63,13 @@ let chrome = null
 let cdp = null
 
 async function startApp() {
-  if (CLI === '') {
+  if (runtime.command === '') {
     throw new Error('no dsh CLI found: install the desktop app, or set DSH_CONTRACT_CLI to a global dsh')
   }
-  // A global npm install on Windows is a `.cmd` shim, and Node refuses to execute one without a
-  // shell; the desktop install is a native binary and is spawned directly on every platform.
-  const args = ['--profile', 'web', '--no-open', '--port', '0']
-  const child = spawn(CLI, args, {
-    ...(isWin && /\.(cmd|bat)$/iu.test(CLI) ? { shell: true } : {}),
+  // The desktop install is a native binary spawned directly; an npm global install on Windows is a
+  // `.cmd` shim, so its own JS entry is started through this Node instead of through a shell.
+  const args = [...runtime.prefix, '--profile', 'web', '--no-open', '--port', '0']
+  const child = spawn(runtime.command, args, {
     // A throwaway home on every platform: Node reads HOME on macOS/Linux and USERPROFILE on Windows,
     // and the app takes its state directory from DSH_HOME alone.
     env: { ...process.env, HOME: home, USERPROFILE: home, DSH_HOME: join(home, '.dsh') },

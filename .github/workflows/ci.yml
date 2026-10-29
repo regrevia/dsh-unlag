@@ -159,11 +159,7 @@ jobs:
         run: |
           where.exe dsh
           node -e "console.log('node sees', process.version)"
-          $cli = (node scripts/desktop-e2e.mjs --json | ConvertFrom-Json).cli
-          "cli = $cli"
-          $entry = Join-Path (Split-Path (Split-Path $cli)) 'node_modules\@deepseek-ai\dsh\lib\bin.js'
-          "entry = $entry $(Test-Path $entry)"
-          if (Test-Path $entry) { node $entry --version; "version exit = $LASTEXITCODE" }
+          node -e "import('./scripts/lib/desktop-paths.mjs').then(m => console.log(JSON.stringify(m.resolveRuntime())))"
 
       - name: real-app loader contract
         shell: powershell

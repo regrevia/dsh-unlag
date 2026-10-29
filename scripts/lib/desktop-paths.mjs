@@ -40,6 +40,20 @@ export function resolveCli() {
   ])
 }
 
+/**
+ * How to start the runtime: a native binary directly, or the npm shim's own JS entry through the
+ * Node running this script. A `.cmd` shim cannot be spawned without a shell on Windows, and a shell
+ * turns the arguments into a command string; the entry file has neither problem.
+ */
+export function resolveRuntime() {
+  const cli = resolveCli()
+  if (isWin && process.platform === 'win32' && /\.(cmd|bat)$/iu.test(cli)) {
+    const entry = join(cli.slice(0, cli.lastIndexOf('\\')), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+    if (existsSync(entry)) return { command: process.execPath, prefix: [entry], cli }
+  }
+  return { command: cli, prefix: [], cli }
+}
+
 export function resolveApp() {
   return firstExisting([
     process.env.DSH_DESKTOP_APP ?? '',
