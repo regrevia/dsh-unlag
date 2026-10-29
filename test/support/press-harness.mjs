@@ -61,7 +61,7 @@ function show(tree) {
 
 // `documentAnswers` stands for the page the press is about to enter: a rebuild walks into that
 // address, so a fake app has to say whether a page really comes up there.
-function harnessWith(sourceText, { settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], lateOperation = null, revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, draftImages = 0, draftFiles = 0, conversation = null, sessions = null, language = 'en-US', href, switchAnswer = 'done', stampInStore = false, verifyAnswer = { status: 'ok' }, documentAnswers = true, rebuiltMark = null, pageHtml = null } = {}) {
+function harnessWith(sourceText, { settings = { plugins: true, page: true }, reload = { status: 'done' }, scripts = {}, openWindow = false, brokenSelector = false, stamp = '0', hold, answers = null, reportAnswers = [], lateOperation = null, revAfterReload, codeAfterReload, bootRows = rows, storageThrows = false, dispatchThrows = false, activeThrows = false, draftImages = 0, draftFiles = 0, conversation = null, sessions = null, language = 'en-US', href, switchAnswer = 'done', stampInStore = false, verifyAnswer = { status: 'ok' }, documentAnswers = true, documentLang = null, browserLanguages = null, rebuiltMark = null, pageHtml = null } = {}) {
   const requests = []
   const navigations = []
   const current = { rev: graph.rev, code: 'c1' }
@@ -146,6 +146,7 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
     return new Response(body, { status: 200, headers: { 'content-type': 'text/javascript' } })
   }
   const document = {
+    documentElement: { lang: documentLang ?? '' },
     get activeElement() {
       if (activeThrows) throw new Error('the focused field cannot be read')
       return null
@@ -222,7 +223,7 @@ function harnessWith(sourceText, { settings = { plugins: true, page: true }, rel
   }
   const sandbox = {
     window,
-    navigator: { language, userAgent: 'Mozilla/5.0 (Macintosh) Electron/44.7.0' },
+    navigator: { language, languages: browserLanguages ?? [language], userAgent: 'Mozilla/5.0 (Macintosh) Electron/44.7.0' },
     location,
     document,
     fetch,

@@ -845,5 +845,28 @@ for (const [label, options] of [
   check('the Chinese menu names the agent switch in Chinese', labels(zhView) === '换掉插件代码|重建页面|Agent 可以自己刷新', labels(zhView))
 }
 
+// --- the shell ships `lang="en"` and syncs it late: the menu still speaks the interface's language
+// (#3: a Chinese interface whose document still says `en` was answered in English) --------------
+{
+  const labels = (view) => {
+    const found = []
+    ;(function walk(node) {
+      if (node === null || typeof node !== 'object') return
+      if (node.type === 'label') found.push(String([].concat(node.children).filter((child) => typeof child === 'string').join('')))
+      for (const child of Array.isArray(node.children) ? node.children : []) walk(child)
+    })(view.tree)
+    return found.join('|')
+  }
+  const chineseShell = harness({ language: 'zh-CN', documentLang: 'en' })
+  const view = await chineseShell.openMenu()
+  check('a shell that has not synced lang falls back to the browser language', labels(view) === '换掉插件代码|重建页面|Agent 可以自己刷新', labels(view))
+  const syncedChinese = harness({ language: 'en-US', documentLang: 'zh-CN' })
+  check('a synced document language beats the browser language', labels(await syncedChinese.openMenu()) === '换掉插件代码|重建页面|Agent 可以自己刷新')
+  const otherShell = harness({ language: 'de-DE', documentLang: 'en', browserLanguages: ['de-DE', 'zh-CN'] })
+  check('a browser whose first language is not Chinese stays in English', labels(await otherShell.openMenu()) === 'Replace plugin code|Rebuild page|Agents may refresh on their own', labels(await otherShell.openMenu()))
+  const japaneseShell = harness({ language: 'en-US', documentLang: 'ja-JP' })
+  check('a document in another language is not turned into Chinese', labels(await japaneseShell.openMenu()) === 'Replace plugin code|Rebuild page|Agents may refresh on their own', labels(await japaneseShell.openMenu()))
+}
+
 console.log(out.join('\n'))
 console.log(out.every((line) => line.startsWith('PASS')) ? 'ok' : 'failed')

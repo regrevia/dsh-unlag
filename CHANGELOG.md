@@ -1,3 +1,9 @@
+## 1.14.10
+
+- 界面语言不再按宿主的默认值判：桌面壳的 `index.html` 写死 `lang="en"`，真正的语言要等 locale 运行时起来才同步到 `<html lang>`；插件在加载时读到的就是这个默认值，于是中文界面里右键菜单和提示全是英文（#3）。现在先看文档语言：是中文就中文、是别的语言就按那个语言；文档仍停在默认的 `en` 时，按浏览器自己的语言顺序（`navigator.languages`，退到 `navigator.language`）判 —— 顺序和宿主「同步前用浏览器语言」的约定一致。
+- 判据抽成 `detectZh(documentLanguage, browserLanguage)` 纯函数，测试在真实按钮沙箱里跑：文档停在 `en`、浏览器 `zh-CN` → 中文菜单；文档 `zh-CN`、浏览器 `en-US` → 仍是中文（文档为准）；浏览器首选 `de-DE`、文档 `ja-JP` → 英文。只改语言判定，不改刷新行为、不新增开关。
+- 证据：`node scripts/test.mjs` 61 个文件、1401 项全绿；`node test/press.test.mjs` 新增 4 条语言用例通过；`zh-lint`、`ui-copy-lint`（0 error）、`style-lint`、`node --check client.js` 通过。
+
 ## 1.14.9
 
 - 老宿主按包名找 `dsh-unlag/package.json` 时不再失败：`exports` 补上 `"./package.json"`。0.2.1-rc.2 的 fallback 只走 `createRequire(baseUrl).resolve('dsh-unlag/package.json')` 这一条路，没有被 `exports` 覆盖时抛 `ERR_PACKAGE_PATH_NOT_EXPORTED`；宿主拿到 `null` 后**不写日志**、把这一行从插件图里直接丢掉，页面于是只拿到 56 字节的替身脚本，按钮不出现。这是 1.14.8 及以前所有版本在 rc.2 上的真实形态，报告者的机器就是它。

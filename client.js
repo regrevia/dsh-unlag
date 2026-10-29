@@ -4,10 +4,19 @@ window.__ModuleLoader__.load({
     const React = require('react');
     const h = React.createElement;
 
-    // The app's own document language wins: it is what the surrounding interface speaks. A page
-    // that cannot say falls back to the browser locale.
-    const lang = (typeof document !== 'undefined' && document?.documentElement?.lang) || navigator.language || '';
-    const zh = /^zh/i.test(lang);
+    // The app's own document language wins: it is what the surrounding interface speaks. A shell
+    // still serving its default `lang="en"` has not synced it yet, and reading only the document
+    // would leave a Chinese interface in English, so the browser's own order decides then.
+    const detectZh = (documentLanguage, browserLanguage) => {
+      const tag = typeof documentLanguage === 'string' ? documentLanguage : '';
+      if (/^zh(-|$)/i.test(tag)) return true;
+      if (tag !== '' && !/^en(-|$)/i.test(tag)) return false;
+      const first = Array.isArray(browserLanguage) ? browserLanguage[0] : browserLanguage;
+      return typeof first === 'string' && /^zh(-|$)/i.test(first);
+    };
+    const documentLanguage = typeof document !== 'undefined' ? document?.documentElement?.lang : '';
+    const browserLanguage = typeof navigator !== 'undefined' ? navigator.languages || navigator.language : '';
+    const zh = detectZh(documentLanguage, browserLanguage);
     const COPY = zh
       ? { label: '解除卡顿', hint: '卡顿时用：换掉插件代码并重建界面；运行中的任务、排队的消息保留', blocked: '暂时无法重建界面，稍后再试', unsaved: '有未保存的改动，先保存再重试', dialog: '先关闭打开的窗口再重载', queued: '更新已排队，稍后再按一次', applying: '还在应用这次更新，稍后再按一次', off: '两个开关都关着，先在设置里打开一个', replaced: '插件代码已更新，页面保持不动', stalled: '这次刷新没有回应，页面没有变，稍后再按一次', cannotLoad: '新页面没有准备好，页面保持不动，稍后再按一次', stayedReplaced: '插件代码已更新，页面没有重建；稍后再按一次', stayed: '页面没有重建；稍后再按一次', done: '插件代码已是最新', restart: '这次改动要重新打开应用才会生效', failed: '插件更新没完成，稍后再按一次', unconfirmed: '没读到插件状态，先不重建；稍后再按一次', attachments: '还有没发出去的附件，先发出去再按；再按一次会丢掉这些附件', unchecked: '这次没能确认新页面可用，再按一次仍会重建', quiet: '刚重建过，页面已经是新的，稍等再按', unsent: '有一条发送失败的消息还没回到输入框，先把这条重发再按', sending: '消息正在发送，请稍候' , mixed: '这次刷新会混用新旧插件代码，先重新打开应用', menu: '按下按钮时', switchPlugins: '换掉插件代码', switchPage: '重建页面', switchAgent: 'Agent 可以自己刷新', switchesFailed: '设置没改成，稍后再试', switchesUnsaved: '设置只在这次运行里有效', rawShow: '详情', rawHide: '收起'} // ui-copy-ignore
       : { label: 'Unlag', hint: 'For a sluggish interface: replaces plugin code and rebuilds the page; running turns and queued messages are kept', blocked: 'Cannot rebuild the page right now; try again', unsaved: 'Unsaved changes; save them, then retry', dialog: 'Close the open window first', queued: 'Update queued; press again shortly', applying: 'Still applying this update; press again shortly', off: 'Both switches are off; turn one on in settings', replaced: 'Plugin code updated; the page stayed as it is', stalled: 'No answer in time; the page stayed as it is; press again later', cannotLoad: 'The new page did not come up; this page stayed; press again later', stayedReplaced: 'Plugin code updated; the page did not rebuild; press again shortly', stayed: 'The page did not rebuild; press again shortly', done: 'Plugin code is already up to date', restart: 'This change needs the app reopened before it can apply', failed: 'The plugin update did not finish; press again later', unconfirmed: 'Plugin state could not be read, so the page stays; press again shortly', attachments: 'Files are attached but not sent; send them first, or press again to discard them', unchecked: 'The new page could not be confirmed this time; press again to rebuild anyway', quiet: 'Just rebuilt; the page is already the new one, give it a moment', unsent: 'A failed message is not back in the input yet; resend it first', sending: 'A message is being sent; wait for it to finish' , mixed: 'This rebuild would mix old and new plugin code; reopen the app first', menu: 'On press', switchPlugins: 'Replace plugin code', switchPage: 'Rebuild page', switchAgent: 'Agents may refresh on their own', switchesFailed: 'Settings not changed; try again later', switchesUnsaved: 'Settings apply to this run only', rawShow: 'Details', rawHide: 'Hide'};
