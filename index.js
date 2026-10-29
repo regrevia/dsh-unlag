@@ -885,18 +885,34 @@ function pluginReloader(ctx, config) {
           continue
         }
         if (!retriedOnce) {
+          retriedOnce = true
+          /**
+           * The app rejected the set after the swap had begun. A person presses again right here,
+           * and that second press is judged on the entries that run *then*, not on the ones the
+           * failed update took down: a press of 1.14.11 answered failed and the same press seconds
+           * later answered done, and the person should not have to make that second press. The
+           * Loader writes the new entry states down a moment after the rejection, so health is read
+           * after a short pause — read inside the throw it can still say "running" for an entry the
+           * update already lost, and a second ask made on that stale list repeats the failure.
+           */
+          const pause = Number(process.env.DSH_UNLAG_RETRY_MS ?? '') || 250
+          await new Promise((resolve) => {
+            const handle = setTimeout(resolve, Math.min(Math.max(pause, 0), 2000))
+            handle.unref?.()
+          })
           const settled = settleEntryHealth(requiredBefore)
           const asked = new Set(requiredBefore)
           const stopped = settled.readable ? settled.unhealthy.filter((entryId) => asked.has(entryId)) : []
           if (stopped.length > 0) {
-            retriedOnce = true
             log(`this update left an entry stopped (${stopped.slice(0, 5).join(', ')}); asked once more without it`)
             // The stopped entries are named as not required, so the second ask is judged on the set
             // that can run instead of on the one this update already took down.
             const skip = new Set([...settled.unhealthy, ...settled.carried])
             requiredBefore = activeEntryIds(ctx).filter((entryId) => entryId !== SELF_ENTRY_ID && !skip.has(entryId))
-            continue
+          } else {
+            log('the update was rejected; asked once more on the set that runs now')
           }
+          continue
         }
         throw error
       }

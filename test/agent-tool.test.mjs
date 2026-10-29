@@ -153,7 +153,9 @@ function mount(config = {}, options = {}) {
   const retry = await tools[0].execute({ requestId: 'joined-fail' })
   check('a retry of a press that joined a failed update reads failed', retry.status === 'failed', JSON.stringify(retry))
   check('and it reports the joined update as failed to rebuild on', retry.rebuild === 'unsafe', JSON.stringify(retry))
-  check('and the retry composed nothing', applies() === 1, String(applies()))
+  // The failed update is asked once more before the press tells the person, so the set is
+  // composed twice and never a third time: the extra ask is the one a person would make.
+  check('and the retry composed nothing beyond the one more ask', applies() === 2, String(applies()))
 }
 
 rmSync(HOME, { recursive: true, force: true })

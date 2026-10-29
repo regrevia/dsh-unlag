@@ -453,7 +453,9 @@ const wordRoutes = (() => {
 })()
 const wordRes = fakeRes()
 await wordRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, wordRes)
-check('a failure that only mentions the word is not retried', verdict(wordRes.body) === 'failed' && wordTries === 1, `tries=${wordTries} status=${verdict(wordRes.body)}`)
+// The word is not what retries it: every rejected update is asked once more, and this one keeps
+// failing, so it is asked twice and then answered failed — never a loop.
+check('a failure that only mentions the word is asked once more, not retried in a loop', verdict(wordRes.body) === 'failed' && wordTries === 2, `tries=${wordTries} status=${verdict(wordRes.body)}`)
 // --- an update the app did not finish applying ------------------------------------------------
 // The press must not rebuild the page over a plugin set the app has not finished starting: the
 // fresh document would boot plugins that are not ready, and the app ends the document over it.

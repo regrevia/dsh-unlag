@@ -12,6 +12,7 @@ process.env.DSH_UNLAG_LOG = LOG
 // The answer the page waits for is shortened so the test does not sit out the real bound; the
 // update itself is made to outlast it on purpose.
 process.env.DSH_UNLAG_ANSWER_MS = '40'
+process.env.DSH_UNLAG_RETRY_MS = '1'
 
 const { apply } = await import('../index.js')
 

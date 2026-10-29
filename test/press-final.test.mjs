@@ -11,6 +11,9 @@ const LOG = join(HOME, 'final.log')
 process.env.HOME = HOME
 process.env.DSH_UNLAG_LOG = LOG
 process.env.DSH_UNLAG_ANSWER_MS = '40'
+// The one more ask a rejected update makes waits a moment in the app; shortened here so a test
+// does not sit it out.
+process.env.DSH_UNLAG_RETRY_MS = '40'
 
 const { apply, startupPath } = await import('../index.js')
 

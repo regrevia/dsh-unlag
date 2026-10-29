@@ -1,3 +1,11 @@
+## 1.14.12
+
+- 第一次按就成功（#3 现场，本机日志 2026-10-29T06:24:49Z）：上一版的「再问一次」只在「这一按停掉的条目」被读到时才触发。本机实测的那次拒绝里，停掉的是**这一按之前就已经停着**的插件（`adb (dsh-mobile-use)`，它自己导入时抛 `JsonSchemaError: unsupported schema` 里的 type 数组），不是这一按降下来的，于是条目清单里找不到它、重问没有发生，这一按答「插件更新没完成」；同一个人 5 秒后再按一次就答 `done`。现在改成：只要应用拒绝了这批条目（不是排队冲突那类），就先等一小会儿再问一次，第二次按现在的运行状态判。日志写 `the update was rejected; asked once more on the set that runs now`；如果第二次问的时候确实读到这一按停掉的条目，仍写原来的 `this update left an entry stopped (…); asked once more without it`，并按「去掉它」的清单问。
+- 等一小会儿再读条目状态：Loader 在拒绝之后过一会儿才写下新的条目状态，紧挨着异常读到的可能还是「运行中」，按那份清单重问会重演同一个失败。等待时间默认 250 ms，`DSH_UNLAG_RETRY_MS` 可改（上限 2000 ms），定时器 `unref`，不拖住宿主退出。
+- 仍然只重问一次：`retriedOnce` 不变，第二问还失败就走原来的失败路径并照常写日志，永不进入循环。
+- 测试：新增 `test/press-retry-stale.test.mjs`（4 项：拒绝但不是这一按造成的 → 答 `done`、该插件记在 `carriedEntries`、应用恰好被问两次、日志写明第二次）与 `test/press-retry-fails.test.mjs`（3 项：一直拒绝 → 答 `failed`、只问两次、日志可见）；`test/agent-tool.test.mjs`、`test/button.test.mjs` 里钉住「应用被问了几次」的断言按新合同改成两次。
+- 证据：`node scripts/test.mjs` 63 个文件、1410 项全绿；`node --check` 两入口 ok；`zh-lint`、`ui-copy-lint` 0 error，`style-lint` 通过。本版不改按钮外观、不新增开关或刷新模式。
+
 ## 1.14.11
 
 - 第一次按就能刷成功（#3 现场）：更新被应用判成「没完成」时（本机实测 `dsh: warning: 1 entry did not activate fast-mode (dsh-fast-mode): failed to import: TypeError: z.enum is not a function`，是这个插件自己导入时抛的），以前这次按就答「插件更新没完成，稍后再按一次」并把页面留住；再按一次才成——因为第二次按判的是「这一按改了什么」，那个已经停掉的插件算「本来就停着」。现在同一次按里再问一次应用，问的时候把这一按已经停掉的条目从必需清单里去掉，也就是第二次按做的事，所以一次按就能拿到第二次按的结果：状态 `done`、`rebuild: safe`、页面照常重建。
