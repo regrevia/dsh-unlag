@@ -1,3 +1,9 @@
+## 1.14.16
+
+- 反射式拒绝 `mixed` 的根因（本机日志 2026-10-30T16:37:26–27：三连「插件已更新，页面未重开」+「新页面会混用新旧插件代码」，而那一刻新代码已经应用）：按窗口冻结的启动清单会一直把一个**旧**的整套地址交给页面，插件更新后模块表仍能用 200 + 上一代字节回答它（探针实测 `servedRev=null`、`graphRev=null`），而这一代里的后续脚本按当前 revision 回答。旧逻辑把这份旧字节原样交给页面，检查读到的却是另一份，于是两份都是**当前**、只是命名空间不同，却判成混代。
+- 现在旧的整套地址在当前一代里被回答（handler / resource 两种路由形态都在调用表之前先答，带 `x-dsh-unlag-served-rev` / `x-dsh-unlag-graph-rev`、`cache-control: no-store`），启动检查也先读这同一份回答（`servedFromAsked: false`），页面与检查看到的字节一致，`mixed` 不再误报。真正的混代仍会拒绝：没有任何当前分组能给出同一批 id 时，检查照旧答 `blocked`/`mixed`；已发货的 404 替换路径与依赖放行不变。
+- 证据：`test/bundle-shim.test.mjs` 的「表里还留着上一代」用例从「原样交给页面」改成「按当前集合回答」（91 项，含「保留的地址从不被花掉」「答案写明服务它的 revision」）；`test/host-verify.test.mjs` 新增两项钉住检查读同一份回答（65 项）；`node scripts/test.mjs` 67 个文件、0 FAIL（EXIT 0）；`node --check index.js client.js` ok；`ui-copy-lint` 0 error（8 warn 与基线同）、`zh-lint` 0 error（16 warn 与基线同）、`style-lint` 通过。本版不改按钮外观、不新增开关或刷新模式。
+
 ## 1.14.15
 
 - 插件被卸掉之后，旧的启动清单不再一律拒绝（本机日志 2026-10-29T14:42:57–14:43:10 连续五次答「插件已更新，页面未重开」）：桌面按窗口冻结的启动清单会一直命名一个已经卸载的插件（本机是 10:42:25 卸掉的 `dsh-crash-lore`），过去这一行只能被一条「只留注释、不登记自己」的脚本顶替，而那样的脚本会让整页启动失败，于是检查只能拒绝这次刷新。现在顶替脚本会**登记那一行的 id 并什么也不做**——Loader 收下这条回答、条目正常激活、页面照常起来，只是少了那个插件；检查读到同一份字节，答 `ok` 并带 `shimmed: [id]` 和 `standInRows`，日志写「startup rows answered with a stand-in module: …」。真正的坏情况仍会拒绝：脚本 200 但一个 id 都没登记，仍答 `blocked`/`entries` 并在 `leftOut` 里点名。

@@ -83,9 +83,10 @@ check('and no entry is reported as lost', gone.leftOut === undefined, JSON.strin
 
 
 
-// The app's own route is what the next document asks, so its answer is what the check must read.
-// Here the route still knows the frozen address and serves it, while the mapping would have handed
-// over the newer bytes: approving the mapping's copy would vouch for a script the page never runs.
+// An address the set still serves at its own revision is read from the table's own answer, not
+// from a substituted body: what the next document asks for is what the check must read. A frozen
+// address is the other case — the route answers it at the revision that holds the set, and the
+// check reads that same answer (the case below the mix section measures it).
 const bothPaths = (() => {
   const asked = []
   const fetchBundle = async (request) => {
@@ -97,11 +98,11 @@ const bothPaths = (() => {
   }
   // A real table hands back the same object for one generation; a graph rebuilt per call would
   // look like a replacement to a check that looks twice.
-  const stable = { rev: 'new', entries: [{ id: '@local/a', rev: 'new', url: '/plugins/??@local/a/client.js&rev=new' }], batches: [] }
+  const stable = { rev: 'old', entries: [{ id: '@local/a', rev: 'old', url: '/plugins/??@local/a/client.js&rev=old' }], batches: [] }
   return { graph: () => stable, fetchBundle, asked }
 })()
 const servedFirst = await verifyStartup(bothPaths, [frozenRow])
-check('a row the app route still serves is read from that route', servedFirst.status === 'ok' && bothPaths.asked[0].includes('&rev=old'), bothPaths.asked.join(' '))
+check("a row the set still serves is read from the table's own answer", servedFirst.status === 'ok' && bothPaths.asked[0].includes('&rev=old'), bothPaths.asked.join(' '))
 
 // A recomposition between the first body and the last leaves the check with bytes from two
 // generations: no single answer describes that set, so the press is held instead of approved.
@@ -438,6 +439,33 @@ check('a startup list the size of this app\'s own profile verifies', measuredBig
     async () => ({ status: 200, servedRev: 'entry-new', arrayBuffer: async () => 'export function legacyFunction() {}' }),
   )
   check('a body whose source the check cannot prove is not refused as mixed', staleWithoutProof.status === 'ok', JSON.stringify(staleWithoutProof).slice(0, 240))
+
+  /**
+   * The table keeps the generation a page booted from, so a frozen address still answers 200 with
+   * the old bytes. The route answers that address at the revision that holds the set now (the bundle
+   * shim does exactly that), so the check must read the same answer: the next page runs one
+   * generation, and a batch revision next to an entry revision is not a reason to hold the press.
+   */
+  const retainedGraph = { rev: 'new', entries: [{ id: '@local/a', rev: 'new', url: '/plugins/??@local/a/client.js&rev=new' }], batches: [] }
+  const retained = (() => {
+    const asked = []
+    const fetchBundle = async (request) => {
+      const url = String(request?.url ?? request)
+      const path = url.replace(/^https?:\/\/[^/]+/u, '')
+      asked.push(path)
+      if (path.includes('&rev=old')) return new Response(mainBody, { status: 200 })
+      if (path.includes('&rev=new')) return new Response(registered('@local/a'), { status: 200 })
+      return new Response('', { status: 404 })
+    }
+    return {
+      graph: () => retainedGraph,
+      fetchBundle,
+      asked,
+    }
+  })()
+  const readNow = await verifyStartup(retained, ['/plugins/??@local/a/client.js&rev=old'])
+  check('a frozen address the table still answers is read at the set served now', readNow.status === 'ok', JSON.stringify(readNow).slice(0, 240))
+  check('and the read never spends the retained generation', retained.asked.includes('/plugins/??@local/a/client.js&rev=old') === false, retained.asked.join(' '))
 }
 
 // Every check above counts: the summary is printed last, so a refused pair or a false refusal

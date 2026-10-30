@@ -2280,6 +2280,25 @@ function replacedResource(answer, servedRev, graphRev, method) {
   }
 }
 
+/**
+ * The bytes a document gets for an address its startup list froze: the ones the set served now has.
+ *
+ * The table still answers the generation the page booted from, and those bytes next to the chunks
+ * the page loads at the current revision make one document out of two interfaces. The route decides
+ * which bytes a document runs, so an address the table no longer serves as its own is answered at
+ * the revision that does hold the set.
+ */
+async function currentAnswerForStaleAddress(clientModules, method, url) {
+  let graph = null
+  try {
+    graph = clientModules.graph()
+  } catch {
+    return null
+  }
+  if (staleBundleAddress(graph, url) !== true) return null
+  return await currentBundleAnswer(clientModules, method, url)
+}
+
 /** Answer one stale request over the plain request/response route an app registers. */
 async function serveCurrentBundle(clientModules, req, res) {
   try {
@@ -2532,6 +2551,20 @@ function serveBundlesAtCurrentRevision(ctx) {
         log(`cannot read the plugin table for a bundle request: ${error?.message ?? error}`)
       }
       const method = String(request?.method ?? 'GET').toUpperCase()
+      // A frozen address names the generation the page booted from; the table still answers it, and
+      // those bytes next to the chunks loaded after make one document out of two interfaces.
+      if (method === 'GET' || method === 'HEAD') {
+        let current = null
+        try {
+          current = await currentAnswerForStaleAddress(clientModules, method, url)
+        } catch (error) {
+          log(`cannot answer a frozen bundle address at the revision that holds it: ${error?.message ?? error}`)
+        }
+        if (current !== null) {
+          log(`served ${(current.ids ?? []).length} plugins at ${current.servedRev}: a page asked for an older set`)
+          return new Response(method === 'HEAD' ? null : current.body, { status: 200, headers: replacedHeaders(current) })
+        }
+      }
       let answer = null
       try {
         answer = await original(request)
@@ -2607,6 +2640,31 @@ function serveBundlesAtCurrentRevision(ctx) {
       realWriteRef = res.write
     } catch {
       canHold = false
+    }
+    // Same rule on the handler route: a frozen address is answered at the revision that holds the
+    // set now, so the rebuilt page runs one generation instead of the one it booted from.
+    if (typeof realWriteHead === 'function' && typeof realEnd === 'function') {
+      const method = String(req?.method ?? 'GET').toUpperCase()
+      if (method === 'GET' || method === 'HEAD') {
+        let current = null
+        try {
+          current = await currentAnswerForStaleAddress(clientModules, method, originalUrl)
+        } catch (error) {
+          log(`cannot answer a frozen bundle address at the revision that holds it: ${error?.message ?? error}`)
+        }
+        if (current !== null) {
+          try {
+            if (res.writableEnded !== true && res.destroyed !== true) {
+              realWriteHead.call(res, 200, replacedHeaders(current))
+              realEnd.call(res, method === 'HEAD' ? undefined : current.body)
+            }
+          } catch (error) {
+            log(`cannot answer a frozen bundle address: ${error?.message ?? error}`)
+          }
+          log(`served ${(current.ids ?? []).length} plugins at ${current.servedRev}: a page asked for an older set`)
+          return undefined
+        }
+      }
     }
     const ask = async (url) => {
       let held = null
@@ -3339,6 +3397,22 @@ export async function readStartupScript(clientModules, url) {
     // The document asks the app's own route first and the mapping only answers a request that route
     // no longer knows, so the check reads in that same order: bytes taken from the mapping while the
     // route had an answer were bytes the next page would never run.
+    // A frozen address is answered at the revision that holds the set now; the route says so above,
+    // and the check must read the bytes the next page would run. Reading the table's retained answer
+    // instead would compare two revision namespaces of one generation and hold a rebuild that
+    // carries the page forward unchanged.
+    let stale = false
+    try {
+      stale = staleBundleAddress(clientModules.graph(), url) === true
+    } catch {
+      stale = false
+    }
+    if (stale) {
+      const answer = await currentBundleAnswer(clientModules, 'GET', url)
+      if (answer !== null) {
+        return { status: 200, standIn: answer.standIn === true, servedRev: answer.servedRev, servedFromAsked: false, arrayBuffer: async () => answer.body }
+      }
+    }
     const served = await fetchBundleAt(clientModules, url, 'GET')
     // `servedFromAsked` is what the mix check reads: bytes from the address the list named are only
     // current if that address is one the list running now still answers, while bytes from the

@@ -381,17 +381,18 @@ check('the state names the route shape in use', shapeBody.shim?.kind === 'resour
 
 // --- the log tells a reader what happened -----------------------------------------------------
 const log = readFileSync(process.env.DSH_UNLAG_LOG, 'utf8')
-check('the log names the served plugin set', log.includes('served @local/a, @local/b'), log.split('\n').filter((line) => line.includes('served @local/a, @local/b')).join(' | '))
+check('the log names the served plugin set', /served 2 plugins at [^:\s]+: a page asked for an older set/u.test(log), log.split('\n').filter((line) => line.includes('a page asked for an older set')).slice(-1).join(' | '))
 check('and the log says which revision was asked for and which answered', /rev [^)\s]+ → [^)\s]+/u.test(log), log.split('\n').filter((line) => line.includes('an older one')).join(' | '))
 check('the log names the wrap', log.includes('older revision are answered at the current one'))
 
-// --- the table's own old generation, when it still has one, is used untouched ----------------
-// Replacing an answer the table still holds with current code would hand the page a document
-// whose later chunks belong to another generation; the table's own answer is kept instead.
+// --- a table that still holds the older generation answers it at the set served now -----------
+// The table keeps the generation a document booted from and answers its address with bytes, not a
+// 404. Using them untouched is what mixes one document out of two generations: its later chunks
+// come from the set served now. The answer is the same set at the current revision instead.
 const kept = mount({ keep: (path) => (path.includes('rev=old') && path.includes('@local/b') ? '/* old generation */ @local/a @local/b' : undefined) })
 const keptAnswer = await call(kept.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js,@local/b/client.js&rev=old' })
-check('an old-generation answer is used as it is', keptAnswer.status === 200 && keptAnswer.body.includes('old generation'), `${keptAnswer.status} ${keptAnswer.body}`)
-check('an old-generation answer is not replaced', kept.seen.length === 0, String(kept.seen.length))
+check('a retained generation is not what a page runs', keptAnswer.status === 200 && keptAnswer.body === '/* application */ @local/a @local/b', `${keptAnswer.status} ${keptAnswer.body}`)
+check('and the document and its later chunks come from one set', kept.seen.every((asked) => asPath(asked.url).includes('&rev=old') === false), kept.seen.map((asked) => asPath(asked.url)).join(' '))
 
 
 // --- a later file is answered where its own plugin answers ------------------------------------
@@ -532,6 +533,8 @@ delete process.env.DSH_UNLAG_FETCH_TIMEOUT_MS
 // --- a response that refuses to be held --------------------------------------------------------
 // Installing the hold writes to the response object. A response that refuses must leave the table's
 // own answer standing rather than reject out of an async route handler, where nobody would catch it.
+// A later file is the case that still needs the hold: it names no whole set, so it is answered
+// through the table rather than substituted here.
 const frozen = mount()
 const frozenRes = fakeRes()
 for (const name of ['writeHead', 'end', 'write']) {
@@ -539,7 +542,7 @@ for (const name of ['writeHead', 'end', 'write']) {
 }
 let rejected = null
 try {
-  await frozen.route.handler({ method: 'GET', url: '/plugins/??@local/a/client.js&rev=old' }, frozenRes)
+  await frozen.route.handler({ method: 'GET', url: '/plugins/@local/a/client.lazy.js?rev=a-old' }, frozenRes)
 } catch (error) {
   rejected = error
 }
