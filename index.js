@@ -2174,7 +2174,11 @@ function staleBundleAddress(graph, rawUrl) {
     const now = servedRevisionOf(graph)
     if (now === '' || request.rev === now) return false
     const urls = currentBundleUrls(graph, request)
-    if (urls.length === 0) return false
+    // No row of the list running now composes this set: the request was made from a frozen list
+    // whose grouping or plugins the profile has since changed. The table may still answer it from
+    // the generation that composed it, byte for byte; those bytes next to current ones are a page
+    // running two generations, so the address is stale whatever revision it prints.
+    if (urls.length === 0) return true
     return !urls.some((target) => target.endsWith(`&rev=${request.rev}`))
   } catch {
     return false
@@ -2288,7 +2292,7 @@ function replacedResource(answer, servedRev, graphRev, method) {
  * which bytes a document runs, so an address the table no longer serves as its own is answered at
  * the revision that does hold the set.
  */
-async function currentAnswerForStaleAddress(clientModules, method, url) {
+async function currentAnswerForStaleAddress(clientModules, method, url, notes = null) {
   let graph = null
   try {
     graph = clientModules.graph()
@@ -2296,7 +2300,18 @@ async function currentAnswerForStaleAddress(clientModules, method, url) {
     return null
   }
   if (staleBundleAddress(graph, url) !== true) return null
-  return await currentBundleAnswer(clientModules, method, url)
+  // The caller may need to know the address was frozen even when no answer could be assembled:
+  // asking the same rows a second time would read them again and still answer the same, and the
+  // whole-answer bound exists so one stale request cannot hold a connection for the sum of its rows.
+  if (notes !== null && typeof notes === 'object') notes.frozen = true
+  try {
+    return await currentBundleAnswer(clientModules, method, url)
+  } catch (error) {
+    // The table was asked and did not answer. This address is not asked again, so the failure is
+    // named here: the log still has to say the table was silent.
+    log(`cannot answer a frozen bundle address at the revision that holds it: ${error?.message ?? error}`)
+    return null
+  }
 }
 
 /** Answer one stale request over the plain request/response route an app registers. */
@@ -2643,12 +2658,14 @@ function serveBundlesAtCurrentRevision(ctx) {
     }
     // Same rule on the handler route: a frozen address is answered at the revision that holds the
     // set now, so the rebuilt page runs one generation instead of the one it booted from.
+    let frozenAddress = false
     if (typeof realWriteHead === 'function' && typeof realEnd === 'function') {
       const method = String(req?.method ?? 'GET').toUpperCase()
       if (method === 'GET' || method === 'HEAD') {
         let current = null
+        const notes = { frozen: false }
         try {
-          current = await currentAnswerForStaleAddress(clientModules, method, originalUrl)
+          current = await currentAnswerForStaleAddress(clientModules, method, originalUrl, notes)
         } catch (error) {
           log(`cannot answer a frozen bundle address at the revision that holds it: ${error?.message ?? error}`)
         }
@@ -2664,6 +2681,7 @@ function serveBundlesAtCurrentRevision(ctx) {
           log(`served ${(current.ids ?? []).length} plugins at ${current.servedRev}: a page asked for an older set`)
           return undefined
         }
+        frozenAddress = notes.frozen === true
       }
     }
     const ask = async (url) => {
@@ -2839,7 +2857,9 @@ function serveBundlesAtCurrentRevision(ctx) {
     }
     let served = false
     try {
-      served = await serveCurrentBundle(clientModules, req, res)
+      // A frozen address was already read for the whole-answer bound above. Reading its rows again
+      // here would double the work that bound exists to cap, so the table's own answer stands.
+      served = frozenAddress ? false : await serveCurrentBundle(clientModules, req, res)
     } catch (error) {
       log(`cannot answer a bundle request: ${error?.message ?? error}`)
     }
@@ -2944,11 +2964,43 @@ function bodyNamesId(body, id) {
   return false
 }
 
+/**
+ * The `__ModuleLoader__.load` calls a classic-script body makes, in body order, with the id each
+ * registers. A plugin that ships its own prebuilt bundle may hand the loader a name instead of an
+ * inline string: the loader reads the value at run time, so the id is the literal the same body has
+ * already given that name. A name the body never gives a value before the call is left out — it is
+ * `undefined`, or still in its temporal dead zone — because the loader would register nothing there
+ * either.
+ */
+function loadCalls(body) {
+  const declared = new Map()
+  for (const match of body.matchAll(/\b(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*(["'`])([^"'`]+)\2/gu)) {
+    const list = declared.get(match[1])
+    if (list === undefined) declared.set(match[1], [{ at: match.index, id: match[3] }])
+    else list.push({ at: match.index, id: match[3] })
+  }
+  const calls = []
+  for (const match of body.matchAll(/__ModuleLoader__\s*\.\s*load\s*\(\s*\{[\s\S]{0,8192}?\bid\s*:\s*([A-Za-z_$][\w$]*|(["'`])([^"'`]+)\2)/gu)) {
+    let id = match[3]
+    if (id === undefined) {
+      for (const found of declared.get(match[1]) ?? []) {
+        if (found.at > match.index) break
+        id = found.id
+      }
+    }
+    if (id !== undefined) calls.push({ at: match.index, id })
+  }
+  return calls
+}
+
+/** Whether a body calls the loader but in a shape whose id name nothing in it gives a value. */
+function registrationsUnread(body) {
+  return /__ModuleLoader__\s*\.\s*load\s*\(\s*\{/u.test(body) && loadCalls(body).length === 0
+}
+
 /** Ids a classic-script body registers through the module loader's public entry point. */
 function registeredIds(body) {
-  const ids = new Set()
-  for (const match of body.matchAll(/__ModuleLoader__\s*\.\s*load\s*\(\s*\{[\s\S]{0,8192}?\bid\s*:\s*(["'`])([^"'`]+)\1/gu)) ids.add(match[2])
-  return ids
+  return new Set(loadCalls(body).map((call) => call.id))
 }
 
 /**
@@ -2971,10 +3023,7 @@ function entryIdOf(id) {
  * come up is held. The measured app's own startup bundle carries four such chunks this way.
  */
 function lazyChunksByOwner(body) {
-  const markers = []
-  for (const match of body.matchAll(/__ModuleLoader__\s*\.\s*load\s*\(\s*\{[\s\S]{0,8192}?\bid\s*:\s*(["'`])([^"'`]+)\1/gu)) {
-    markers.push({ at: match.index, id: entryIdOf(match[2]) })
-  }
+  const markers = loadCalls(body).map((call) => ({ at: call.at, id: entryIdOf(call.id) }))
   const filesIn = (segment) => {
     const files = []
     for (const match of segment.matchAll(/\brequire\s*\.\s*async\s*\(\s*(["'])([^"']+)\1\s*\)/gu)) {
@@ -3131,6 +3180,12 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
   let totalBytes = 0
   let standInRows = 0
   const shimmed = new Set()
+  /**
+   * Ids a stand-in module registered: the row is still answered, but the plugin behind it is gone.
+   * They belong in `shimmed` (the page boots without that plugin) and never in the set that answers
+   * whether a dependency is provided.
+   */
+  const synthetic = new Set()
   for (const item of wanted) {
     if (Date.now() - began > budgetMs) {
       return { status: 'blocked', reason: 'slow', detail: 'the startup list took longer than this check waits' }
@@ -3190,7 +3245,8 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
     const required = item.ids.filter((id) => served.has(id))
     const missing = required.filter((id) => !registered.has(id))
     if (required.length > 0 && missing.length > 0) {
-      return { status: 'blocked', reason: 'register', detail: `${item.url} does not register ${missing.join(', ')}` }
+      const unread = registrationsUnread(text) ? '（登记名由变量提供，读不出值）' : ''
+      return { status: 'blocked', reason: 'register', detail: `${item.url} does not register ${missing.join(', ')}${unread}` }
     }
     /**
      * A row the set no longer has is answered with a stand-in module (see `standInModuleBody`): it
@@ -3201,6 +3257,10 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
      */
     for (const id of item.ids) {
       if (served.has(id) || !registered.has(id)) continue
+      // This registration came from a stand-in module, not from the plugin: the id is registered and
+      // nothing behind it exists. Keep the two apart, because "the loader has the id" and "the plugin
+      // is there" answer different questions one line below.
+      synthetic.add(id)
       if (leftOut.delete(id)) shimmed.add(id)
     }
     // Only what the cross-checks below need from this body is kept; the text itself is let go here,
@@ -3326,7 +3386,28 @@ export async function verifyStartupRows(graph, fetchBody, rows, budgetMs = MAX_V
    * itself is that case, so the press is held rather than booting a page that dies half way.
    */
   const available = new Set(listed)
-  for (const body of bodies) for (const id of body.registered) available.add(id)
+  for (const body of bodies) for (const id of body.registered) {
+    if (synthetic.has(id)) continue
+    available.add(id)
+  }
+  /**
+   * A script that reads an id a stand-in registered is reading a plugin the set no longer has: the
+   * module table answers it, the loader takes the answer, and the call fails the first time it
+   * touches the plugin's exports. Registering an id is not providing it, so this is a hold.
+   */
+  const readFromStandIn = new Set()
+  for (const body of bodies) {
+    for (const id of body.required) {
+      if (synthetic.has(id)) readFromStandIn.add(id)
+    }
+  }
+  if (readFromStandIn.size > 0) {
+    return {
+      status: 'blocked', // ui-copy-ignore
+      reason: 'dependencies', // ui-copy-ignore
+      detail: `read by a listed script, and only a stand-in registers it: ${[...readFromStandIn].slice(0, 4).join(', ')}`,
+    }
+  }
   const absent = new Set()
   for (const body of bodies) {
     for (const id of body.required) {

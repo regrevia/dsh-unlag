@@ -259,6 +259,75 @@ check('a package-local chunk is left alone', chunk.body === 'original', chunk.bo
 const notBundle = await call(first.route.handler, { method: 'GET', url: '/plugins/index.js' })
 check('a plain path under the route is left alone', notBundle.body === 'original', notBundle.body)
 
+
+// --- a frozen row the table still answers, in a grouping the list no longer has -----------------
+// A desktop shell keeps its startup list from launch. After the profile changes grouping or drops a
+// plugin, that row's address matches nothing the list composes now, yet the module table can still
+// answer it from the generation it was frozen at -- 200, old bytes, no marker that they are old.
+// Letting those bytes through next to current rows is a page running two generations at once.
+const oldBatch = '/* old */ @local/a @local/b'
+const frozenAnswer = (path) => (path.includes('&rev=old') ? oldBatch : undefined)
+const rowAB = '/plugins/??@local/a/client.js,@local/b/client.js&rev=old'
+
+// A,B -> A,B,C: the set grew, so the row's grouping is gone but every id it names is still here.
+const grew = mount({
+  graph: {
+    rev: 'newrev',
+    entries: [
+      { id: '@local/a', url: 'plugins/??@local/a/client.js&rev=ar2', rev: 'ar2' },
+      { id: '@local/b', url: 'plugins/??@local/b/client.js&rev=br2', rev: 'br2' },
+      { id: '@local/c', url: 'plugins/??@local/c/client.js&rev=cr2', rev: 'cr2' },
+    ],
+    batches: [{ rev: 'abcrev', entries: ['@local/a', '@local/b', '@local/c'] }],
+  },
+  keep: (path) => frozenAnswer(path),
+  serve: (path) =>
+    path.includes('&rev=abcrev') ? '/* current */ @local/a @local/b @local/c' : path.includes('@local/a&rev=ar2') || path.endsWith('@local/a/client.js&rev=ar2') ? '/* one entry */ @local/a' : path.includes('@local/b/client.js&rev=br2') ? '/* one entry */ @local/b' : undefined,
+})
+const grewAnswer = await call(grew.route.handler, { method: 'GET', url: rowAB })
+check('a frozen row whose set grew is not answered with the old bytes', grewAnswer.body !== oldBatch, grewAnswer.body)
+check('and the answer comes from the generation running now', grewAnswer.headers?.['x-dsh-unlag-graph-rev'] === 'newrev', JSON.stringify(grewAnswer.headers))
+check('and it names the bytes it actually returned', /^[0-9a-f]{16}$/u.test(String(grewAnswer.headers?.['x-dsh-unlag-body-sha256'] ?? '')), JSON.stringify(grewAnswer.headers))
+
+// A,B,C -> A,C: B is gone. The old answer still carries B's code, and the loader would run it.
+const shrank = mount({
+  graph: {
+    rev: 'newrev',
+    entries: [
+      { id: '@local/a', url: 'plugins/??@local/a/client.js&rev=ar2', rev: 'ar2' },
+      { id: '@local/c', url: 'plugins/??@local/c/client.js&rev=cr2', rev: 'cr2' },
+    ],
+    batches: [{ rev: 'acrev', entries: ['@local/a', '@local/c'] }],
+  },
+  keep: (path) => frozenAnswer(path),
+  serve: (path) =>
+    path.includes('&rev=acrev') ? '/* current */ @local/a @local/c' : path.includes('@local/a/client.js&rev=ar2') ? '/* one entry */ @local/a' : path.includes('@local/c/client.js&rev=cr2') ? '/* one entry */ @local/c' : undefined,
+})
+const shrankAnswer = await call(shrank.route.handler, { method: 'GET', url: '/plugins/??@local/a/client.js,@local/b/client.js&rev=old' })
+check('a removed plugin\'s frozen code is not run', !shrankAnswer.body.includes('/* old */') && shrankAnswer.body.includes('is not part of the plugin set served now'), shrankAnswer.body)
+check('and the plugins still here are answered at the current generation', shrankAnswer.body.includes('/* one entry */ @local/a') && !shrankAnswer.body.includes('@local/c'), shrankAnswer.body)
+
+// A,B -> A / B: the same plugins, grouped apart. The row must be rebuilt from the current entries.
+const split = mount({
+  graph: {
+    rev: 'newrev',
+    entries: [
+      { id: '@local/a', url: 'plugins/??@local/a/client.js&rev=ar2', rev: 'ar2' },
+      { id: '@local/b', url: 'plugins/??@local/b/client.js&rev=br2', rev: 'br2' },
+    ],
+    batches: [
+      { rev: 'arev', entries: ['@local/a'] },
+      { rev: 'brev', entries: ['@local/b'] },
+    ],
+  },
+  keep: (path) => frozenAnswer(path),
+  serve: (path) =>
+    path.includes('@local/a/client.js&rev=ar2') ? '/* one entry */ @local/a' : path.includes('@local/b/client.js&rev=br2') ? '/* one entry */ @local/b' : undefined,
+})
+const splitAnswer = await call(split.route.handler, { method: 'GET', url: rowAB })
+check('a row split into two groups is assembled from the current entries', splitAnswer.status === 200 && splitAnswer.body.includes('@local/a') && splitAnswer.body.includes('@local/b'), `${splitAnswer.status} ${splitAnswer.body}`)
+check('and it is not the frozen answer', splitAnswer.body !== oldBatch, splitAnswer.body)
+
 // A table that answers the current set with a body missing the plugin it claims must not be
 // handed to a document: the boot would refuse it, and that refusal ends the desktop app.
 const lying = mount({ serve: (path) => (path.includes('@local/b') ? '/* only a */ @local/a' : undefined) })

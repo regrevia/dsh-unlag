@@ -69,16 +69,52 @@ check('a startup row for a plugin the set no longer has does not refuse the pres
 check('and the answer names the plugin the page comes up without', gone.shimmed?.includes('@local/a') === true, JSON.stringify(gone))
 check('and no entry is reported as lost', gone.leftOut === undefined, JSON.stringify(gone))
 
+// A stand-in keeps the row answerable, not the plugin usable. When another listed script reads the
+// id the stand-in registered, the page would boot, the import would resolve, and the first call into
+// the plugin would throw "is not a function". Registering an id is not providing it, so that list is
+// held instead of rebuilt.
+const withConsumer = (requires) => {
+  const liveGraph = {
+    rev: 'new',
+    entries: [{ id: '@local/b', rev: 'new', url: '/plugins/??@local/b/client.js&rev=new' }],
+    batches: [{ url: '/plugins/??@local/b/client.js&rev=new', entries: ['@local/b'], rev: 'new' }],
+  }
+  const bodyB = `${registered('@local/b')}${requires ? ';require("@local/a")' : ''}`
+  const fetchBundle = async (request) => {
+    const url = typeof request === 'string' ? request : String(request?.url ?? '')
+    const path = url.replace(/^https?:\/\/[^/]+/u, '')
+    if (path.includes('&rev=old')) return new Response('', { status: 404 })
+    if (path.includes('@local/a')) return new Response('', { status: 404 })
+    return new Response(bodyB, { status: 200, headers: { 'content-type': 'text/javascript; charset=utf-8' } })
+  }
+  return { graph: () => liveGraph, fetchBundle }
+}
+const rowAB = '/plugins/??@local/a/client.js,@local/b/client.js&rev=old'
+const read = await verifyStartup(withConsumer(true), [rowAB])
+check('a script reading a plugin only a stand-in registers is held', read.status === 'blocked' && read.reason === 'dependencies', JSON.stringify(read))
+check('and the refusal names the plugin that is not there', String(read.detail ?? '').includes('@local/a'), JSON.stringify(read))
+const noConsumer = await verifyStartup(withConsumer(false), [rowAB])
+check('the same list without that reader still rebuilds', noConsumer.status === 'ok', JSON.stringify(noConsumer))
+check('and it names the plugin the page boots without', noConsumer.shimmed?.includes('@local/a') === true, JSON.stringify(noConsumer))
+
 // A stand-in only helps when it registers: an answer that is 200 but registers nothing is still the
 // boot failure this refusal exists for, so it must keep refusing instead of trusting the status.
 {
+  // The table still serves the row, so no stand-in replaces it: the bytes are the ones the next page
+  // would run, and they register nothing. The graph object is the same one on both reads, as it is
+  // on a host that did not swap generations during the check.
+  const silentGraph = {
+    rev: 'new',
+    entries: [{ id: '@local/a', rev: 'new', url: '/plugins/??@local/a/client.js&rev=new' }],
+    batches: [{ url: '/plugins/??@local/a/client.js&rev=new', entries: ['@local/a'], rev: 'new' }],
+  }
   const silent = {
-    graph: () => ({ rev: 'new', entries: [], batches: [] }),
+    graph: () => silentGraph,
     fetchBundle: async () => new Response('/* nothing here */', { status: 200 }),
   }
   const answer = await verifyStartup(silent, [frozenRow])
-  check('an answer that registers nothing still refuses the press', answer.status === 'blocked' && answer.reason === 'entries', JSON.stringify(answer))
-  check('and that refusal names the entry the script did not register', answer.leftOut?.includes('@local/a') === true, JSON.stringify(answer))
+  check('an answer that registers nothing still refuses the press', answer.status === 'blocked' && answer.reason === 'register', JSON.stringify(answer))
+  check('and that refusal names the entry the script did not register', String(answer.detail ?? '').includes('@local/a'), JSON.stringify(answer))
 }
 
 
