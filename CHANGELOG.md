@@ -1,3 +1,8 @@
+## Unreleased
+
+- Agent 刷新在子任务运行时拒绝：换插件会把子任务插件一起换掉，它卸载时以 `{ kind: 'parent' }` 取消所有在跑的子任务，做到一半的那一轮丢失，父会话只收到「stopped before it finished」，看不出是刷新造成的。`reloading while turns are still running; they keep running` 只对顶层会话成立。现在 `unlag_refresh` 在按下前查 `agents.list()` 里不属于 `agents.roots()` 且不空闲的 agent，有就答 `blocked`，原因写明个数与 id（最多 8 个）；人自己按按钮不受影响。判定用运行时的归属（`roots()`）而不是会话头的 `parentSession`：分叉出来的会话也带 `parentSession`，但它是顶层、不会被插件卸载带走。宿主没有 `roots()` 时不拦（行为与之前相同）。
+- 证据：`test/agent-tool.test.mjs` 新增三组——子任务在跑时拒绝且不换插件、原因单行并点名；子任务结束后同一按照常 `done`；只有顶层（含分叉）在跑、子任务空闲时照常 `done`；没有 `roots()` 的宿主不拦。撤掉修复时新增断言 4 条 FAIL，打上后该文件全绿。
+
 ## 1.14.16
 
 - 反射式拒绝 `mixed` 的根因（本机日志 2026-10-30T16:37:26–27：三连「插件已更新，页面未重开」+「新页面会混用新旧插件代码」，而那一刻新代码已经应用）：按窗口冻结的启动清单会一直把一个**旧**的整套地址交给页面，插件更新后模块表仍能用 200 + 上一代字节回答它（探针实测 `servedRev=null`、`graphRev=null`），而这一代里的后续脚本按当前 revision 回答。旧逻辑把这份旧字节原样交给页面，检查读到的却是另一份，于是两份都是**当前**、只是命名空间不同，却判成混代。
