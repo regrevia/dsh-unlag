@@ -3719,15 +3719,23 @@ const AGENT_REFRESH_OFF = '在右键菜单里打开 Agent 可以自己刷新' //
  * { kind: 'parent' }: the work in flight is lost and the parent only hears "stopped before it
  * finished", with no word that a refresh did it. "Turns keep running" holds for top-level
  * sessions only. So a press from an agent is refused while any subagent turn is running; the
- * person's own button is untouched. A subagent is an agent whose session header names a parent.
+ * person's own button is untouched.
+ *
+ * A child is a live agent that is not one of `agents.roots()`: roots are the agents created with no
+ * owning agent, and only owned agents are torn down with the plugin that made them. The session
+ * header's `parentSession` is not used: a forked session carries one too and is still a root.
+ * A host without `roots()` cannot tell the two apart, so the press is not held there.
  */
 function runningSubagents(ctx) {
   try {
     const agents = ctx.get('agents')
-    const list = typeof agents?.list === 'function' ? agents.list() : []
-    if (!Array.isArray(list)) return []
+    if (typeof agents?.list !== 'function' || typeof agents?.roots !== 'function') return []
+    const list = agents.list()
+    const roots = agents.roots()
+    if (!Array.isArray(list) || !Array.isArray(roots)) return []
+    const top = new Set(roots)
     return list
-      .filter((agent) => agent?.status !== 'idle' && typeof agent?.session?.header?.parentSession === 'string')
+      .filter((agent) => agent !== null && typeof agent === 'object' && !top.has(agent) && agent.status !== 'idle')
       .map((agent) => String(agent.id ?? ''))
   } catch {
     return []
