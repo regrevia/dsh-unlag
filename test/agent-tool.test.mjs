@@ -34,6 +34,7 @@ function mount(config = {}, options = {}) {
       }
       if (key === 'loader') return { entries: () => state.map((entry) => ({ options: { id: entry.id }, fiber: { state: entry.state } })) }
       if (key === 'clientModules') return clientModules
+      if (key === 'agents' && options.agents) return { list: () => options.agents }
       if (key === 'hmr') {
         return {
           baseDir: join(HOME, 'profile'),
@@ -95,6 +96,24 @@ function mount(config = {}, options = {}) {
   const failed = await tools[0].execute({})
   check('a swap that fails is reported as failed', failed.status === 'failed', JSON.stringify(failed))
   check('and the rebuild is not called safe', failed.rebuild !== 'safe', JSON.stringify(failed))
+}
+
+// --- a running subagent would be cancelled by the swap, so an agent press waits for it ---------
+{
+  const child = { id: 'child-1', status: 'running', session: { header: { parentSession: 'session-parent' } } }
+  const parent = { id: 'session-parent', status: 'running', session: { header: {} } }
+  const { tools, applies } = mount({ agentRefresh: true }, { agents: [parent, child] })
+  const blocked = await tools[0].execute({ requestId: 'busy-child' })
+  check('with a subagent turn running the call is refused', blocked.status === 'blocked', JSON.stringify(blocked))
+  check('and nothing was reloaded', applies() === 0, String(applies()))
+  check('and the refusal names the running subagent', typeof blocked.reason === 'string' && blocked.reason.includes('child-1'), JSON.stringify(blocked))
+}
+{
+  const idleChild = { id: 'child-2', status: 'idle', session: { header: { parentSession: 'session-parent' } } }
+  const parent = { id: 'session-parent', status: 'running', session: { header: {} } }
+  const { tools, applies } = mount({ agentRefresh: true }, { agents: [parent, idleChild] })
+  const pressed = await tools[0].execute({ requestId: 'idle-child' })
+  check('top-level turns and idle subagents do not hold the press', pressed.status === 'done' && applies() === 1, JSON.stringify({ pressed, applies: applies() }))
 }
 
 // --- a stopped turn leaves the set alone ------------------------------------------------------
