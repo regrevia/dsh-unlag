@@ -3714,6 +3714,34 @@ function saveSwitches(switches) {
 /** What a tool call is told when the switch that allows it is off. */
 const AGENT_REFRESH_OFF = '在右键菜单里打开 Agent 可以自己刷新' // ui-copy-ignore
 
+/**
+ * A swap restarts the subagent plugin, and its disposal cancels every running child with
+ * { kind: 'parent' }: the work in flight is lost and the parent only hears "stopped before it
+ * finished", with no word that a refresh did it. "Turns keep running" holds for top-level
+ * sessions only. So a press from an agent is refused while any subagent turn is running; the
+ * person's own button is untouched.
+ *
+ * A child is a live agent that is not one of `agents.roots()`: roots are the agents created with no
+ * owning agent, and only owned agents are torn down with the plugin that made them. The session
+ * header's `parentSession` is not used: a forked session carries one too and is still a root.
+ * A host without `roots()` cannot tell the two apart, so the press is not held there.
+ */
+function runningSubagents(ctx) {
+  try {
+    const agents = ctx.get('agents')
+    if (typeof agents?.list !== 'function' || typeof agents?.roots !== 'function') return []
+    const list = agents.list()
+    const roots = agents.roots()
+    if (!Array.isArray(list) || !Array.isArray(roots)) return []
+    const top = new Set(roots)
+    return list
+      .filter((agent) => agent !== null && typeof agent === 'object' && !top.has(agent) && agent.status !== 'idle')
+      .map((agent) => String(agent.id ?? ''))
+  } catch {
+    return []
+  }
+}
+
 /** One answer for the tool: a status, one line a model can repeat, and what the rebuild proved. */
 function agentAnswer(outcome) {
   const status = typeof outcome?.status === 'string' ? outcome.status : 'failed'
@@ -3802,6 +3830,11 @@ function registerAgentTool(ctx, controller, config) {
           const switches = switchesFor(config ?? {})
           if (switches.agent !== true) return { status: 'blocked', reason: AGENT_REFRESH_OFF, rebuild: 'unknown' }
           if (switches.plugins !== true) return { status: 'blocked', reason: '刷新按钮里的换插件是关的，先在那里打开', rebuild: 'unknown' }
+          const busyChildren = runningSubagents(ctx)
+          if (busyChildren.length > 0) {
+            log(`agent refresh refused: ${busyChildren.length} subagent(s) still running`)
+            return { status: 'blocked', reason: `还有 ${busyChildren.length} 个子任务在跑（${busyChildren.slice(0, 8).join(', ')}），刷新会把它们全部中止；等它们结束再刷新，或请用户手动按刷新键`, rebuild: 'unknown' }
+          }
           const raw = args?.requestId
           const requestId = typeof raw === 'string' && raw !== '' && raw.length <= 120 ? raw : null
           // A turn that was stopped must not leave a plugin swap behind: the signal is passed into

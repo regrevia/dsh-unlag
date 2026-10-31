@@ -34,6 +34,11 @@ function mount(config = {}, options = {}) {
       }
       if (key === 'loader') return { entries: () => state.map((entry) => ({ options: { id: entry.id }, fiber: { state: entry.state } })) }
       if (key === 'clientModules') return clientModules
+      if (key === 'agents' && options.agents) {
+        const registry = { list: () => options.agents.map((entry) => entry.agent) }
+        if (options.noRoots !== true) registry.roots = () => options.agents.filter((entry) => entry.root).map((entry) => entry.agent)
+        return registry
+      }
       if (key === 'hmr') {
         return {
           baseDir: join(HOME, 'profile'),
@@ -95,6 +100,36 @@ function mount(config = {}, options = {}) {
   const failed = await tools[0].execute({})
   check('a swap that fails is reported as failed', failed.status === 'failed', JSON.stringify(failed))
   check('and the rebuild is not called safe', failed.rebuild !== 'safe', JSON.stringify(failed))
+}
+
+// --- a running subagent would be cancelled by the swap, so an agent press waits for it ---------
+{
+  const parent = { root: true, agent: { id: 'session-parent', status: 'running' } }
+  const child = { root: false, agent: { id: 'child-1', status: 'running' } }
+  const { tools, applies } = mount({ agentRefresh: true }, { agents: [parent, child] })
+  const blocked = await tools[0].execute({ requestId: 'busy-child' })
+  check('with a subagent turn running the call is refused', blocked.status === 'blocked', JSON.stringify(blocked))
+  check('and nothing was reloaded', applies() === 0, String(applies()))
+  check('and the refusal names the running subagent', typeof blocked.reason === 'string' && blocked.reason.includes('child-1'), JSON.stringify(blocked))
+  check('and the refusal is one line', typeof blocked.reason === 'string' && !blocked.reason.includes('\n'), JSON.stringify(blocked))
+  // Once the child is done, the same press goes through.
+  child.agent.status = 'idle'
+  const after = await tools[0].execute({ requestId: 'busy-child-after' })
+  check('a press after the subagent finishes runs', after.status === 'done' && applies() === 1, JSON.stringify({ after, applies: applies() }))
+}
+{
+  // A forked session names a parent in its header but is a root: it is not torn down with a plugin.
+  const fork = { root: true, agent: { id: 'session-fork', status: 'running', session: { header: { parentSession: 'session-origin' } } } }
+  const idleChild = { root: false, agent: { id: 'child-2', status: 'idle' } }
+  const { tools, applies } = mount({ agentRefresh: true }, { agents: [fork, idleChild] })
+  const pressed = await tools[0].execute({ requestId: 'idle-child' })
+  check('running top-level turns (forks included) and idle subagents do not hold the press', pressed.status === 'done' && applies() === 1, JSON.stringify({ pressed, applies: applies() }))
+}
+{
+  const child = { root: false, agent: { id: 'child-3', status: 'running' } }
+  const { tools, applies } = mount({ agentRefresh: true }, { agents: [child], noRoots: true })
+  const pressed = await tools[0].execute({ requestId: 'no-roots' })
+  check('a host without roots() is not held', pressed.status === 'done' && applies() === 1, JSON.stringify({ pressed, applies: applies() }))
 }
 
 // --- a stopped turn leaves the set alone ------------------------------------------------------
