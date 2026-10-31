@@ -3805,7 +3805,7 @@ const AGENT_REFRESH_OFF = '在右键菜单里打开 Agent 可以自己刷新' //
  * A child is a live agent that is not one of `agents.roots()`: roots are the agents created with no
  * owning agent, and only owned agents are torn down with the plugin that made them. The session
  * header's `parentSession` is not used: a forked session carries one too and is still a root.
- * A host without `roots()` cannot tell the two apart, so the press is not held there.
+ * A runtime without `roots()` cannot tell the two apart, so the press is not held there.
  */
 function runningSubagents(ctx) {
   try {

@@ -1,4 +1,11 @@
-## Unreleased
+## 1.15.0
+
+- 启动校验不再只认字面量 id（issue #4，DSH 桌面 0.2.1-rc.5 / `ds-harness-remote` 0.6.0）：过去 `registeredIds` 用一个正则找 `__ModuleLoader__.load({ id: "字面量" })`，插件把自己的登记名放在变量里（真实产物是 `var clientModuleId = "ds-harness-remote"` 再 `load({ id: clientModuleId })`）时读不出任何 id，检查答「register（does not register …）」，换插件成功却永远拒绝重开页面，连按无效；停用该插件才恢复。Loader 只看运行时的 `registration.id`，不要求字面量。
+- 现在按加载调用解析登记名：先收集调用之前 `var|let|const <名> = "字面量"` 的绑定，再用它解析 `id: <名>`；登记名依旧读不出时（同一作用域内提升后仍是 `undefined` 的 `var`、调用之后才声明的 `let`/`const`、运行时才赋值的变量）照旧拒绝，原因里写明「登记名由变量提供，读不出值」。`lazyChunksByOwner` 的归属标记走同一份解析，避免把某个模块的 `require.async` 分块算到前一个所有者头上。
+- 同一次请求里，冻结的整套地址只读一遍：外层包装按整份答案的时限读完行之后，服务路径不再为同一地址重读一遍（表超时仍写进日志）。这是读次数修正，判定与文案不变。
+- 证据：真实产物 `ds-harness-remote@0.6.0` 的 `dist/client.js`（317,481 B，名字与用法相隔 1,137 字符）在 `verifyStartupRows` 下从「0 个 id」变成 `{"status":"ok","ids":["ds-harness-remote"]}`；issue 现场 11,061,252 B 的被拒行 36 个 id 中旧正则只漏这一个。新增 `test/registration-shape.test.mjs`（6 项：`var`/`let`/`const` 变量、错误 id 仍拒绝、调用后才声明仍拒绝且原因带说明、反引号字面量、1,100 字符间隔）钉住解析边界；`test/host-verify.test.mjs` 的「200 但什么都不登记」改成表仍在服务该行的情形，断言 `blocked`/`register` 并点名 `@local/a`。
+- 测试：`node scripts/test.mjs` 68 个文件、0 FAIL；`node --check index.js client.js` ok；`ui-copy-lint` / `zh-lint` / `style-lint` 与基线一致。本版不新增开关、不改按钮外观与刷新模式。
+
 
 - Agent 刷新在子任务运行时拒绝：换插件会把子任务插件一起换掉，它卸载时以 `{ kind: 'parent' }` 取消所有在跑的子任务，做到一半的那一轮丢失，父会话只收到「stopped before it finished」，看不出是刷新造成的。`reloading while turns are still running; they keep running` 只对顶层会话成立。现在 `unlag_refresh` 在按下前查 `agents.list()` 里不属于 `agents.roots()` 且不空闲的 agent，有就答 `blocked`，原因写明个数与 id（最多 8 个）；人自己按按钮不受影响。判定用运行时的归属（`roots()`）而不是会话头的 `parentSession`：分叉出来的会话也带 `parentSession`，但它是顶层、不会被插件卸载带走。宿主没有 `roots()` 时不拦（行为与之前相同）。
 - 证据：`test/agent-tool.test.mjs` 新增三组——子任务在跑时拒绝且不换插件、原因单行并点名；子任务结束后同一按照常 `done`；只有顶层（含分叉）在跑、子任务空闲时照常 `done`；没有 `roots()` 的宿主不拦。撤掉修复时新增断言 4 条 FAIL，打上后该文件全绿。
