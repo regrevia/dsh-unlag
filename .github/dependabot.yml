@@ -1,0 +1,14 @@
+# 依赖只走每周一次的分组更新：这个插件本身零运行时依赖，装的都是开发期工具链。
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      dev-tooling:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: deps

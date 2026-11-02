@@ -21,6 +21,7 @@
 | 慢插件、卡住的读取、并发按下都不会拖住页面或进程 | `reload-late.test.mjs`（10）、`verify-deadline.test.mjs`（7）、`verify-route.test.mjs`（19） |
 | 卸载插件时半开的定时器、监听、路由全部关掉，且不误关别人的 | `button.test.mjs`（89）、`client-guard.test.mjs`（123） |
 | 8 个历史版本的页面（旧代码）对着新宿主按，都不抛、都只请求一次重建、都不留失败提示 | `old-page.test.mjs`（5） |
+| 浏览器标签页（`dsh web`）里按钮也在，按一次落在自己的地址、不请求旧世代 | `web-page.test.mjs`（12） |
 
 ## 别人不能替你按
 
@@ -33,13 +34,13 @@
 ## 证据怎么重跑
 
 ```sh
-npm test                     # 726 项，全绿才算数
+npm test                     # 69 个文件、1503 项，全绿才算数
 npm run audit                # 静态检查
 npm run live-smoke           # 对着运行中的 App 复核；输出里 verdict 为 true 才算数
 ./scripts/release.sh         # 发布并回查 registry 是否真的列出这个版本
 ```
 
-发布物本身也核对过：`dsh-unlag-1.9.122.tgz` 里的 `index.js` 与仓库同文件 sha256 相同（`851386c9…`），包里没有 `test/`。
+发布物本身也核对过：`dsh-unlag-1.16.0.tgz` 里的 `index.js` 与仓库同文件 sha256 相同（`f1d71710…`）、`client.js` 相同（`4be94edc…`），包里没有 `test/`。
 
 演练输出里的每一项含义见 README「改完后让运行中的 App 用上」。
 
