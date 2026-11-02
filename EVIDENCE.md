@@ -32,11 +32,12 @@
 | 域名重绑（Host 与 Origin 一致但都是公网名）不能用，公网名的页面一律 403 | `button-origin.test.mjs`（25） | 手工 curl 复核过一次：403 |
 | 只差一个「要重启才生效」的映射时照常刷新，不让人白等 | `button.test.mjs`（四条）、`client-guard.test.mjs`（三条）、`stability-client-health.test.mjs`（三行）、`chaos-core.test.mjs` | 本机日志 `~/.dsh/unlag-reload.log`：`pending=0 restart=package-moved` 后连拒 7 次 |
 | 状态读不出来时不拿「能刷」赌，仍留在当前页 | 同上一行的 `unconfirmed` 与 `chaos-core` 的「读不出状态仍不重建」 | 页面只留一行提示，不跳转 |
+| 页面对同一次按压重问时答案不变，放行不会在重问这一步被吃掉 | `button.test.mjs`（三条：同一个请求 id 重问仍 `done`、仍带 `restartOnly`、仍带名字） | `scripts/soak.mjs` 修前 6 处违规全在重问上，修后同一跑法 `ok` |
 
 ## 证据怎么重跑
 
 ```sh
-npm test                     # 69 个文件、1527 项，全绿才算数
+npm test                     # 69 个文件、1530 项，全绿才算数
 npm run audit                # 静态检查
 npm run live-smoke           # 对着运行中的 App 复核；输出里 verdict 为 true 才算数
 ./scripts/release.sh         # 发布并回查 registry 是否真的列出这个版本

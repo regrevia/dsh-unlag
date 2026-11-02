@@ -1329,6 +1329,7 @@ function pluginReloader(ctx, config) {
         warnings: (remembered.warnings ?? []).slice(),
         pending: remembered.pending.slice(), // ui-copy-ignore
         restartReason: remembered.restart,
+        restartOnly: remembered.restartOnly === true,
         failedEntries: remembered.failed.slice(),
         carriedEntries: (remembered.carried ?? []).slice(),
         newlyFailed: (remembered.newlyFailed ?? []).slice(),
@@ -1356,6 +1357,7 @@ function pluginReloader(ctx, config) {
           warnings: (update.warnings ?? []).slice(),
           pending: [],
           restartReason: update.restart,
+          restartOnly: update.restartOnly === true,
           failedEntries: (update.newlyFailed ?? []).slice(),
           carriedEntries: (update.carriedEntries ?? []).slice(),
           newlyFailed: (update.newlyFailed ?? []).slice(),
@@ -1374,6 +1376,7 @@ function pluginReloader(ctx, config) {
       warnings: (state.warnings ?? []).slice(),
       pending: [],
       restartReason: state.restart,
+      restartOnly: state.restartOnly === true,
       failedEntries: (state.newlyFailed ?? []).slice(),
       carriedEntries: (state.carriedEntries ?? []).slice(),
       newlyFailed: (state.newlyFailed ?? []).slice(),

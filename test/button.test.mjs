@@ -498,6 +498,18 @@ check('and the answer says the name was only that', mappedBody.restartOnly === t
 check('and the rebuild verdict is safe', mappedBody.rebuild === 'safe', mapped.body)
 check('and the record keeps the name for the next restart', mappedBody.restartReason === 'package-moved', mapped.body)
 
+// The page retries the press it lost the answer to with the same request id. That retry reads the
+// press's own record, so it must keep the flag too: a replay that dropped it would put the refusal
+// back in front of a page that had already been told the swap was in place.
+const replayed = fakeRes()
+const pressAgain = mappedRoutes.get('/dsh-unlag/reload')
+await pressAgain({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/reload?requestId=rr-1' }, fakeRes())
+await pressAgain({ method: 'POST', headers: { 'x-dsh-unlag': '1' }, url: '/dsh-unlag/reload?requestId=rr-1' }, replayed)
+const replayedBody = JSON.parse(replayed.body)
+check('a retried press is answered from its own record', replayedBody.status === 'done', replayed.body)
+check('and the replay keeps the flag that says the name was only that', replayedBody.restartOnly === true, replayed.body)
+check('and the replay keeps the name', replayedBody.restartReason === 'package-moved', replayed.body)
+
 // A list that cannot be read leaves the set unjudged, and an unjudged set is not one a page may be
 // rebuilt over: the same name over no reading still refuses.
 const unread = fakeRes()

@@ -1,5 +1,13 @@
 ## Unreleased
 
+## 1.17.2
+
+- 修掉重放把 1.17.0 的放行标记弄丢的问题：`done` + `restartOnly` 的那次刷新，答案被记进按请求 id 存档的记录里；页面拿同一个 id 重问一次（答案在路上丢了就会这样）时，记录回放出来的答案漏了 `restartOnly`，客户端于是又把它当「要重新打开应用」拒掉——刚放行的刷新在重问这一步被挡回去。`~/.dsh/unlag-reload.log` 里 `plugins reloaded (... pending=0 restart=package-moved)` 之后的按压里就夹着这种重问。
+- 现在三条回放路径都带上这个标记：按 id 存档的记录、并进正在跑的那次更新的按压、以及最新一次操作记录。存档记录本来就写下了 `restartOnly`，只是回放时没读它。
+- 证据：`scripts/soak.mjs` 三个种子、3229 次操作里不变量报出 6 处「`done` 带重启名却没带标记」（全在重问上），修完同一跑法 `ok`、0 违规；`test/button.test.mjs` 补三条——同一个请求 id 重问仍答 `done`、仍带 `restartOnly: true`、仍带着那个名字。
+
+## 1.17.1
+
 - 删掉页面上一处只写不读的状态（`lastSaid`）：`eslint` 10 起 `no-unused-vars` 会报出来，`npm run audit` 不再带着这一条过。按钮行为、文案、刷新判定都没有变化。
 
 ## 1.17.0
