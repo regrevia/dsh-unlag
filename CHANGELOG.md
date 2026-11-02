@@ -1,5 +1,9 @@
 ## Unreleased
 
+- 删掉页面上一处只写不读的状态（`lastSaid`）：`eslint` 10 起 `no-unused-vars` 会报出来，`npm run audit` 不再带着这一条过。按钮行为、文案、刷新判定都没有变化。
+
+## 1.17.0
+
 - 「这次改动要重新打开应用才会生效」不再挡在本来能刷的新代码前面（本机日志 `~/.dsh/unlag-reload.log`：`plugins reloaded (... pending=0 restart=package-moved)` 之后 8 秒内 7 次按压全部答 `plugin-held (restart)`，而页面一直停在旧代码上）。根因：宿主的 `reconcileProfile` 在 `hmr.runExclusive` 里先换掉模块、再发布解析结果；发布时若这次解析来自启动清单（`bootstrapIncludes`），运行中无法重发，`recomposeProfile` 抛 `ResolutionRestartRequired` 并返回 `restartReason: "package-moved"`。这个标记在进程内是黏的，于是「有名字但什么都没剩」的答案被当成「必须重启」，此后每一次按压都拒绝——可那一刻新模块早就换好了，当前进程发给页面的就是新代码。
 - 现在只有在这种情形放行：`restartReason` 有值、`pending` 为空、没有坏掉的条目、插件状态读得出来。答案照旧是一行结论，标 `restartOnly: true`，客户端据此重建页面；下一次页面启动跑的就是已换上的代码。不肯定的情况仍然拒绝：有坏条目、有没换上的模块、状态读不出来（`healthReadable: false` 答 `unconfirmed`，顺序上排在任何 `done` 之前），失败（`failed`）也不会被这个标记盖过去。真正需要新进程、且模块没换完的刷新照旧拒绝并说明原因。
 - 证据：`test/button.test.mjs` 四条——只等重启的映射答 `done`/`rebuild: safe`/`restartOnly: true`、答案里写明「只差这个映射」、重建判定为安全、记录留给下一次重启；同一份载荷但状态读不出来时仍答 `restart` 且不带该标记。`test/client-guard.test.mjs` 三条——标记 + 可读 → `done`、标记 + 读不出 → `unconfirmed`、`failed` + 标记 → `failed`。`test/stability-client-health.test.mjs` 三行——标记 + 可读照常跳转一次、读不出不跳转并留一行提示、同一载荷没有标记仍答「需要重新打开应用」。`test/chaos-core.test.mjs` 把「只等新进程」的场景按新结论改写并补一条「读不出状态仍不重建」；`scripts/soak.mjs` 的不变量收紧成「`done` 带重启名却没带标记 = 违规」「带标记必须 `done`、有名字、无待办、状态可读」。`node scripts/test.mjs` 69 个文件、1527 项全绿（EXIT 0）；`ui-copy-lint` 0 error（9 warn 与基线同）、`zh-lint` 0 error（23 warn 与基线同）、`style-lint` 通过。本版不改按钮外观、不新增开关或刷新模式。

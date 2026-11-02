@@ -120,9 +120,6 @@ window.__ModuleLoader__.load({
     /** Until this moment the page itself was just rebuilt, so another press has nothing to do. */
     let quietUntil = 0;
 
-    /** The last line this page put up, so a press tells its own progress from a joined press's. */
-    let lastSaid = null;
-
     /**
      * Session storage is denied in some profiles and full in others. A press must not be lost to
      * that: the stamp only paces repeated presses, so an unreadable stamp reads as "no press yet".
@@ -1591,7 +1588,6 @@ window.__ModuleLoader__.load({
 
       /** One line about the press: the words, and the refusal that produced them if any. */
       const say = (text, words = null) => {
-        lastSaid = text;
         setSticky(false);
         setRaw(words);
         setShowRaw(false);
@@ -1778,7 +1774,6 @@ window.__ModuleLoader__.load({
         holdRaw = null;
         // Nothing is drawn while the press runs: the button dims, and the page either
         // changes or it does not. An outcome from an earlier press must not answer this one.
-        lastSaid = null;
         setSticky(false);
         setNotice(null);
         setRaw(null);
