@@ -1,5 +1,8 @@
 ## Unreleased
 
+- 网页端支持（issue #6）：`dsh web` 打开的浏览器页面现在也有这个按钮。过去 `apply` 在非桌面壳里直接返回，网页端连按钮都不挂。现在按页面自己交出的证据分两侧：桌面壳会把 `dshDesktopBoot` 桥交出来（`ready()` 可调即桌面），网页没有这座桥；用户代理里的 `Electron/` 只作第二道信号，处理桥还没回答的桌面壳。
+- 网页端的刷新是网页端能做的那份：先让宿主换掉插件代码并校验新页面启动，再把页面重开在**它自己的地址**上（去掉任何 `?interface=` 旧世代参数），新文档按当前一代代码启动。桌面端那套「按冻结启动清单重开整套旧页面 + 替身路由」的兜底完全不参与网页端，桌面路径的判定、地址形状与拒绝理由都没变。
+- 测试：新增 `test/web-page.test.mjs`（12 项）用同一份按钮代码跑两侧环境——浏览器标签页挂出按钮、按一次换插件并校验、只跳一次且落在不带 `interface=` 的自身地址、旧世代参数被去掉、结果照旧写进日志；桌面壳仍进冻结地址；桥未回答的 Electron 页面仍走桌面路径。夹具 `test/support/press-harness.mjs` 新增 `userAgent` / `desktopBridge` 两个可选项，桌面默认值不变。
 - 仓库安全自查补齐：新增 `SECURITY.md`（支持版本、GitHub 私密报告入口、责任范围与已知边界），开启 Dependabot security updates；`npm audit --omit=dev` 为 0，dev-only 的 eslint/minimatch 告警按「不随包发布」dismiss 并在告警里写明依据。功能与刷新判定不变。
 
 ## 1.15.0

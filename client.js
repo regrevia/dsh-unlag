@@ -70,9 +70,10 @@ window.__ModuleLoader__.load({
       return zh ? `暂时无法重建：${why}。` : `Cannot rebuild yet: ${why}.`;
     }
 
-    // Desktop shell only: the macOS and Windows desktop build owns the page and the running
-    // app, so this is where the button belongs. A browser tab can reload freely on its own.
-    const desktop = /Electron\//.test(navigator.userAgent || '');
+    // Which page this is. The desktop build owns the window and can only come back on a fresh
+    // address; a browser tab reloads the address it already has. The shell's own bridge decides it,
+    // and the user agent is a second signal for a shell whose bridge has not answered yet.
+    const electronAgent = /Electron\//.test(navigator.userAgent || '');
 
     /**
      * Announced before the interface is rebuilt. Any plugin holding state that a rebuild would
@@ -593,6 +594,11 @@ window.__ModuleLoader__.load({
       return bridge !== undefined && bridge !== null && typeof bridge.ready === 'function';
     }
 
+    /** Whether the desktop build handed us this document, rather than a browser tab. */
+    function inDesktopShell() {
+      return desktopShellPresent() || electronAgent;
+    }
+
     /**
      * The startup list the desktop shell hands the next document, exactly as it hands it. The
      * shell reads that list once when the app starts and replays the same copy for every document
@@ -964,6 +970,21 @@ window.__ModuleLoader__.load({
       try {
         const parsed = new URL(location.href);
         parsed.searchParams.set('interface', stamp);
+        return parsed.toString();
+      } catch {
+        return null;
+      }
+    }
+
+    /**
+     * The address a browser tab comes back on: the one it already has, without the stamp an
+     * earlier press put there. A tab never asks for an older generation of the interface, so
+     * nothing about its rebuild depends on an old address still being served.
+     */
+    function sameAddress() {
+      try {
+        const parsed = new URL(location.href);
+        parsed.searchParams.delete('interface');
         return parsed.toString();
       } catch {
         return null;
@@ -1902,7 +1923,7 @@ window.__ModuleLoader__.load({
           attachmentsHold = null;
           // Before the document is replaced, the address it is replaced with has to answer. A page
           // that cannot come up is not a rebuild; it is a page the person can no longer read.
-          const target = freshAddress();
+          const target = inDesktopShell() ? freshAddress() : sameAddress();
           const address = await askAddress(target);
           if (address.refused === true) report('rebuild', `refused:${address.why}`);
           if (!address.safe) {
@@ -2084,7 +2105,6 @@ window.__ModuleLoader__.load({
         appContext = ctx;
         if (ctx === appliedCtx) return;
         appliedCtx = ctx;
-        if (!desktop) return;
         /**
          * The pacing stamp only paces presses inside one document. A document that is mounting now
          * means the press that wrote it finished and navigated, so a click here is the first press
