@@ -1,3 +1,7 @@
+## Unreleased
+
+- 仓库安全自查补齐：新增 `SECURITY.md`（支持版本、GitHub 私密报告入口、责任范围与已知边界），开启 Dependabot security updates；`npm audit --omit=dev` 为 0，dev-only 的 eslint/minimatch 告警按「不随包发布」dismiss 并在告警里写明依据。功能与刷新判定不变。
+
 ## 1.15.0
 
 - 启动校验不再只认字面量 id（issue #4，DSH 桌面 0.2.1-rc.5 / `ds-harness-remote` 0.6.0）：过去 `registeredIds` 用一个正则找 `__ModuleLoader__.load({ id: "字面量" })`，插件把自己的登记名放在变量里（真实产物是 `var clientModuleId = "ds-harness-remote"` 再 `load({ id: clientModuleId })`）时读不出任何 id，检查答「register（does not register …）」，换插件成功却永远拒绝重开页面，连按无效；停用该插件才恢复。Loader 只看运行时的 `registration.id`，不要求字面量。
