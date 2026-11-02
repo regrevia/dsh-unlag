@@ -43,7 +43,7 @@ npm run live-smoke           # 对着运行中的 App 复核；输出里 verdict
 ./scripts/release.sh         # 发布并回查 registry 是否真的列出这个版本
 ```
 
-发布物本身也核对过：`dsh-unlag-1.17.1.tgz`（116 kB）里的 `index.js` 与仓库同文件 sha256 相同（`43646d67…`）、`client.js` 相同（`202c941e…`），包里没有 `test/`。
+发布物本身也核对过：`dsh-unlag-1.17.2.tgz`（115 kB）里的 `index.js` 与仓库同文件 sha256 相同（`03ae32ea…`）、`client.js` 相同（`202c941e…`），包里没有 `test/`。
 
 演练输出里的每一项含义见 README「改完后让运行中的 App 用上」。
 
