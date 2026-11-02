@@ -120,7 +120,8 @@ check('an unreadable loader answers unknown', blind.body?.rebuild === 'unknown',
 check('an unreadable loader says so', blind.body?.healthReadable === false, String(blind.body?.healthReadable))
 
 // ------------------------------------------------------------------------------------------------
-// The swap wants a new process: restart, pending, actionable -- and the process keeps running.
+// The swap wants a new process but left nothing undone: the page is rebuilt over the code that
+// already runs, and only the process keeps the stale mapping. The answer says which of the two.
 // ------------------------------------------------------------------------------------------------
 reset()
 model.setFault({ hmr: 'restart' })
@@ -128,11 +129,21 @@ const pidBefore = process.pid
 const servicesBefore = model.counters.applies
 const restarted = await press('c-restart')
 record('c-restart', restarted)
-check('a restart press answers restart', restarted.body?.status === 'restart', String(restarted.body?.status))
-check('a restart press is pending, not safe', restarted.body?.rebuild === 'pending', String(restarted.body?.rebuild))
-check('a restart press names the reason it cannot finish', typeof restarted.body?.restartReason === 'string' && restarted.body.restartReason.length > 0, String(restarted.body?.restartReason))
+check('a swap that only needs a fresh process still answers an update', restarted.body?.status === 'done', String(restarted.body?.status))
+check('a swap that only needs a fresh process is safe to reload into', restarted.body?.rebuild === 'safe', String(restarted.body?.rebuild))
+check('and the answer says the name was only that', restarted.body?.restartOnly === true, String(restarted.body?.restartOnly))
+check('a swap that needs a fresh process names it', typeof restarted.body?.restartReason === 'string' && restarted.body.restartReason.length > 0, String(restarted.body?.restartReason))
 check('a restart press did not restart the process', process.pid === pidBefore)
 check('a restart press still ran through the swap once', model.counters.applies - servicesBefore === 1, `${model.counters.applies - servicesBefore} updates`)
+
+// The same name over a set that cannot be read: the page must not be rebuilt on a guess.
+const blindPid = process.pid
+model.setFault({ hmr: 'restart', health: 'unreadable' })
+const blindRestart = await press('c-restart-blind')
+record('c-restart-blind', blindRestart)
+check('an unreadable set keeps the page instead of rebuilding', blindRestart.body?.status === 'restart', String(blindRestart.body?.status))
+check('and that refusal never claims a safe rebuild', blindRestart.body?.rebuild !== 'safe', String(blindRestart.body?.rebuild))
+check('and it keeps the process running', process.pid === blindPid)
 
 // ------------------------------------------------------------------------------------------------
 // Half the swap landed: the answer has to keep the unfinished entry in front of the page.

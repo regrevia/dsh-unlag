@@ -25,6 +25,11 @@ const answers = [
   { name: 'a rebuild is still running', data: { status: 'applying' }, nav: 0 },
   { name: 'queued behind another', data: { status: 'queued' }, nav: 0 },
   { name: 'needs a restart', data: { status: 'done', pending: ['@local/a'], failed: 0 }, nav: 0 },
+  // The app replaced the modules and only failed to publish where a package is mapped from: the
+  // next page runs the same files, so the press is an update. Without the flag it is a refusal.
+  { name: 'applied, only a package mapping waits', data: { status: 'done', healthReadable: true, pending: [], failed: 0, restartReason: 'package-moved', restartOnly: true }, nav: 1 },
+  { name: 'a mapping waits over a set that cannot be read', data: { status: 'done', healthReadable: false, pending: [], failed: 0, restartReason: 'package-moved', restartOnly: true }, nav: 0 },
+  { name: 'a mapping waits and nothing says the set survived', data: { status: 'done', healthReadable: true, pending: [], failed: 0, restartReason: 'package-moved' }, nav: 0 },
   { name: 'the replacement failed', data: { status: 'failed' }, nav: 0 },
   { name: 'no answer at all', data: null, nav: 0 },
 ]

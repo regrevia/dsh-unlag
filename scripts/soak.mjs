@@ -114,7 +114,16 @@ export function auditAnswer(answer, where, violations) {
     if (rebuild === 'safe' && answer.healthReadable !== true) add('done without a readable health read')
     if (Array.isArray(answer.failedEntries) && answer.failedEntries.length > 0) add(`done with failed entries ${answer.failedEntries.join(',')}`)
     if (Array.isArray(answer.pending) && answer.pending.length > 0) add(`done with pending entries ${answer.pending.join(',')}`)
-    if (typeof answer.restartReason === 'string' && answer.restartReason !== '') add('done with a restart reason')
+    // A name that only waits for a restart is not unfinished work: the swap put every changed
+    // module in place and the next page runs them. The flag is what tells that apart from a press
+    // that must wait, so a name on a done answer without it is still a lie.
+    if (typeof answer.restartReason === 'string' && answer.restartReason !== '' && answer.restartOnly !== true) add('done with a restart reason')
+  }
+  if (answer.restartOnly === true) {
+    if (status !== 'done') add(`a restart-only answer on status ${status}`)
+    if (typeof answer.restartReason !== 'string' || answer.restartReason === '') add('a restart-only answer with no name')
+    if (Array.isArray(answer.pending) && answer.pending.length > 0) add('a restart-only answer with pending entries')
+    if (answer.healthReadable !== true) add('a restart-only answer without a readable health read')
   }
   if (rebuild === 'safe' && status !== 'done') add(`rebuild safe on status ${status}`)
   if (rebuild === 'pending' && status !== 'applying' && status !== 'queued' && status !== 'restart') add(`rebuild pending on status ${status}`)
@@ -151,6 +160,16 @@ export function auditOperation(operation, where, violations) {
     const waiting = Array.isArray(operation.pending) ? operation.pending.length > 0 : Number(operation.pending ?? 0) > 0
     if (reason === false && waiting === false) add('a restart operation states no reason')
     if (['unsafe', 'pending', 'unknown'].includes(operation.rebuild) === false) add(`a restart operation is marked ${String(operation.rebuild)}`)
+  }
+  // The record carries the same flag the answer does: a done row that names a restart without it
+  // would read to the next page as an unfinished press.
+  const named = [operation.restart, operation.restartReason].some((text) => typeof text === 'string' && text !== '')
+  if (operation.status === 'done' && named && operation.restartOnly !== true) add('a done operation names a restart without the flag')
+  if (operation.restartOnly === true) {
+    if (operation.status !== 'done') add(`a restart-only operation on status ${String(operation.status)}`)
+    if (named === false) add('a restart-only operation with no name')
+    if (Number(operation.pending ?? 0) > 0) add('a restart-only operation with pending work')
+    if (operation.healthReadable !== true) add('a restart-only operation without a readable health read')
   }
 }
 

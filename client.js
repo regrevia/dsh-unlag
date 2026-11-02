@@ -419,7 +419,10 @@ window.__ModuleLoader__.load({
      * What the app's answer to a plugin replacement really means for the rebuild that follows.
      * Only a set the app has finished starting can be rebuilt against: one still starting would
      * boot a document over plugins that are not ready, and one the app says cannot be applied to a
-     * running page would boot the old code behind a fresh interface.
+     * running page would boot the old code behind a fresh interface. A restart name whose answer
+     * also says the running set stayed in place is that last case's exception: the page over it
+     * loads the files that already run, so the press goes on and only the mapping waits for a
+     * restart the page does not need to ask for.
      * @returns 'done' | 'unconfirmed' | 'off' | 'queued' | 'unavailable' | 'failed' | 'lost'
      */
     function reloadVerdict(data) {
@@ -429,11 +432,15 @@ window.__ModuleLoader__.load({
       // Entries that were already not running before the press are not its result: the app rejects
       // a reload that newly breaks one, so the press stands whatever that leftover list says.
       if (Array.isArray(data.pending) && data.pending.length > 0) return 'restart';
-      if (typeof data.restartReason === 'string' && data.restartReason !== '') return 'restart';
+      if (typeof data.restartReason === 'string' && data.restartReason !== '' && data.restartOnly !== true) return 'restart';
       // A finished update whose plugin health could not be read is not a confirmed one. It is not a
       // failure either — the plugins may be fine — but starting a document over them would be a
       // guess, so the press holds the page and says what it could not check.
       if (data.healthReadable === false) return 'unconfirmed';
+      // A restart name beside `restartOnly` is a package mapping the app could not publish while the
+      // running set stayed in place. The page over that set loads the files that already run, so a
+      // finished answer is still an update; only a restart settles where the package is mapped from.
+      if (data.restartOnly === true && status === 'done') return 'done';
       return status;
     }
 
@@ -828,14 +835,16 @@ window.__ModuleLoader__.load({
      * own fields still name a module waiting for a restart is not a finished update, and the
      * restart fields win. A record that already says it did not finish stays that way, and one
      * whose health the app could not read is finished but unconfirmed, so it never counts as a
-     * set the page may be rebuilt over.
+     * set the page may be rebuilt over. A restart string beside `done` is a package mapping the
+     * app could not publish, which the record's own `restartOnly` says the running set survived:
+     * the page over it loads the files that already run, so it is a rebuild, not a refusal.
      * @returns 'done' | 'unconfirmed' | 'restart' | 'failed' | null
      */
     function verdictOfOperation(operation) {
       if (operation === null || typeof operation !== 'object') return null;
       if (operation.status === 'done') {
         if (typeof operation.pending === 'number' && operation.pending > 0) return 'restart';
-        if (typeof operation.restart === 'string' && operation.restart !== '') return 'restart';
+        if (typeof operation.restart === 'string' && operation.restart !== '' && operation.restartOnly !== true) return 'restart';
         if (operation.healthReadable === false) return 'unconfirmed';
         return 'done';
       }

@@ -459,12 +459,13 @@ check('a failure that only mentions the word is asked once more, not retried in 
 // --- an update the app did not finish applying ------------------------------------------------
 // The press must not rebuild the page over a plugin set the app has not finished starting: the
 // fresh document would boot plugins that are not ready, and the app ends the document over it.
-const outcomeRoutes = (result) => {
+const outcomeRoutes = (result, loader = undefined) => {
   const routes = new Map()
   const ctx = {
     get: (key) => {
       if (key === 'webServer') return { register: (r) => (routes.set(r.path, r.handler), () => routes.delete(r.path)) }
       if (key === 'hmr') return { baseDir: '/tmp/x', runExclusive: async (op) => op(), reconcileProfile: async () => result }
+      if (key === 'loader' && loader !== undefined) return loader
       return undefined
     },
     on: () => {},
@@ -484,6 +485,25 @@ const needsRestart = fakeRes()
 const restartRoutes = outcomeRoutes({ restartReason: 'native' })
 await restartRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, needsRestart)
 check('an update the page cannot take is not reported done', JSON.parse(needsRestart.body).status === 'restart', needsRestart.body)
+
+// The same name with a set that is running: the app already replaced the modules and only the
+// package mapping waits for a restart, so the press is an update the page may be rebuilt over.
+const runningLoader = { entries: () => [{ options: { id: '@local/a' }, fiber: { state: 2 } }] }
+const mapped = fakeRes()
+const mappedRoutes = outcomeRoutes({ restartReason: 'package-moved' }, runningLoader)
+await mappedRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, mapped)
+const mappedBody = JSON.parse(mapped.body)
+check('a package mapping that waits for a restart does not refuse the rebuild', mappedBody.status === 'done', mapped.body)
+check('and the answer says the name was only that', mappedBody.restartOnly === true, mapped.body)
+check('and the rebuild verdict is safe', mappedBody.rebuild === 'safe', mapped.body)
+check('and the record keeps the name for the next restart', mappedBody.restartReason === 'package-moved', mapped.body)
+
+// A list that cannot be read leaves the set unjudged, and an unjudged set is not one a page may be
+// rebuilt over: the same name over no reading still refuses.
+const unread = fakeRes()
+const unreadRoutes = outcomeRoutes({ restartReason: 'package-moved' })
+await unreadRoutes.get('/dsh-unlag/reload')({ method: 'POST', headers: { 'x-dsh-unlag': '1' } }, unread)
+check('the same name over an unreadable set still refuses', JSON.parse(unread.body).status === 'restart', unread.body)
 
 // --- a reload asked for from a context a previous reload left behind ---------------------------
 // A watch callback made while a reload was restarting this plugin carries that reload's context;

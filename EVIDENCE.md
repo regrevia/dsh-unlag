@@ -30,11 +30,13 @@
 | 别的源的页面按不动这个按钮 | `button-origin.test.mjs`（25）、`request-shape.test.mjs`（6） | `contract` 里三条外来源请求全部 403 |
 | 读路由只认读，写路由要那个页面才能带的头 | `report-route.test.mjs`（8）、`route-hostile.test.mjs`（30） | `contract` 里缺头、乱方法全部 403/405 |
 | 域名重绑（Host 与 Origin 一致但都是公网名）不能用，公网名的页面一律 403 | `button-origin.test.mjs`（25） | 手工 curl 复核过一次：403 |
+| 只差一个「要重启才生效」的映射时照常刷新，不让人白等 | `button.test.mjs`（四条）、`client-guard.test.mjs`（三条）、`stability-client-health.test.mjs`（三行）、`chaos-core.test.mjs` | 本机日志 `~/.dsh/unlag-reload.log`：`pending=0 restart=package-moved` 后连拒 7 次 |
+| 状态读不出来时不拿「能刷」赌，仍留在当前页 | 同上一行的 `unconfirmed` 与 `chaos-core` 的「读不出状态仍不重建」 | 页面只留一行提示，不跳转 |
 
 ## 证据怎么重跑
 
 ```sh
-npm test                     # 69 个文件、1503 项，全绿才算数
+npm test                     # 69 个文件、1527 项，全绿才算数
 npm run audit                # 静态检查
 npm run live-smoke           # 对着运行中的 App 复核；输出里 verdict 为 true 才算数
 ./scripts/release.sh         # 发布并回查 registry 是否真的列出这个版本

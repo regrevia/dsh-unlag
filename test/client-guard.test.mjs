@@ -402,6 +402,17 @@ check('an update the app put on hold is not an update', verdictOf({ status: 'que
 check('a leftover entry the app names does not fail the press', verdictOf({ status: 'done', warnings: ['@local/a: failed to import'], failedEntries: ['@local/a'] }) === 'done')
 check('an entry waiting for a restart is still not an update', verdictOf({ status: 'done', pending: [{ url: 'x' }] }) === 'restart')
 check('a replacement the running page cannot take needs a restart, not a rebuild', verdictOf({ status: 'done', restartReason: 'native' }) === 'restart')
+// A package mapping that waits for a restart is not a reason to refuse: the app already put the
+// changed modules in place, so the next page runs them. Only the mapping needs the restart.
+check(
+  'a name that only waits for a restart still lets the page be rebuilt',
+  verdictOf({ status: 'done', restartReason: 'package-moved', restartOnly: true }) === 'done',
+)
+check(
+  'an unreadable plugin list outranks a restart name that waits',
+  verdictOf({ status: 'done', restartReason: 'package-moved', restartOnly: true, healthReadable: false }) === 'unconfirmed',
+)
+check('a failed answer is not turned into an update by the restart name', verdictOf({ status: 'failed', restartReason: 'package-moved', restartOnly: true }) === 'failed')
 check('no answer at all is not an update', verdictOf(null) === 'failed')
 
 // A startup check that ran out of time is its own reason: the notice must not claim a script was

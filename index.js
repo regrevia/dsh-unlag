@@ -756,7 +756,7 @@ function pluginReloader(ctx, config) {
     // cannot be told `done` while the newest operation says `restart` for the same update.
     status:
       (Array.isArray(outcome?.pending) && outcome.pending.length > 0) ||
-      (typeof outcome?.restartReason === 'string' && outcome.restartReason !== '')
+      (typeof outcome?.restartReason === 'string' && outcome.restartReason !== '' && outcome?.restartOnly !== true)
         ? 'restart' // ui-copy-ignore
         : String(outcome?.status ?? 'failed'), // ui-copy-ignore
     pending: (Array.isArray(outcome?.pending) ? outcome.pending : []).slice(0, 16),
@@ -774,6 +774,11 @@ function pluginReloader(ctx, config) {
     completion: ['full', 'partial', 'unknown'].includes(outcome?.completion) ? outcome.completion : 'unknown', // ui-copy-ignore
     attempts: Number.isInteger(outcome?.attempts) && outcome.attempts > 0 ? outcome.attempts : 1,
     restart: typeof outcome?.restartReason === 'string' && outcome.restartReason !== '' ? outcome.restartReason : null,
+    /**
+     * Whether that restart name is only about where a package is mapped from. A page may be rebuilt
+     * over a set marked this way: the pages that load after it run the files that already run now.
+     */
+    restartOnly: outcome?.restartOnly === true,
     rebuild: rebuildOf(outcome), // ui-copy-ignore
     healthReadable:
       outcome?.healthReadable === true || outcome?.healthReadable === false ? outcome.healthReadable : null,
@@ -803,7 +808,8 @@ function pluginReloader(ctx, config) {
      * `/state`, and by a retry of the same request id. Normalizing here keeps those three in
      * agreement instead of letting each caller judge the raw shape.
      */
-    const status = pending.length > 0 || restart !== null ? 'restart' : String(outcome?.status ?? 'failed') // ui-copy-ignore
+    const restartOnly = restart !== null && outcome?.restartOnly === true
+    const status = pending.length > 0 || restart !== null && !restartOnly ? 'restart' : String(outcome?.status ?? 'failed') // ui-copy-ignore
     /**
      * The record carries the whole evidence, not only the counts: a page that lost the answer and
      * asks again is given the same warnings and the same entry lists the first answer had, and the
@@ -818,6 +824,9 @@ function pluginReloader(ctx, config) {
       pending: pending.length,
       failed: Array.isArray(outcome?.failedEntries) ? outcome.failedEntries.length : 0,
       restart,
+      // Read beside `restart`: a name that only waits for a restart must not hold a rebuild over the
+      // set that already runs.
+      restartOnly,
       // The verdict the page reads before it rebuilds, written by the same single writer as the
       // status so the two cannot disagree about the same update.
       rebuild: rebuildOf({ ...outcome, status }), // ui-copy-ignore
@@ -1050,12 +1059,22 @@ function pluginReloader(ctx, config) {
      */
     const newlyFailed = brokenNow.filter((id) => baseline.has(id))
     const preexistingInactive = stoppedEntries.filter((id) => !baseline.has(id))
-    const completion = !health.readable ? 'unknown' : stoppedEntries.length > 0 || pending.length > 0 || restartReason !== null ? 'partial' : 'full'
+    /**
+     * A restart reason on its own is a fact about the profile's package mapping, not about the code a
+     * page would load. The app replaces the running modules first and fails to publish that mapping
+     * afterwards, so the set on disk is the set now running; a document started after it runs the
+     * same files, and every address it needs is checked before it is opened. Holding the rebuild
+     * back for the mapping left the button refusing every press after any package moved — the one
+     * state where pressing again can never change the answer.
+     */
+    const restartOnly = restartReason !== null && pending.length === 0 && brokenNow.length === 0 && health.readable
+    const completion = !health.readable ? 'unknown' : stoppedEntries.length > 0 || pending.length > 0 || restartReason !== null && !restartOnly ? 'partial' : 'full'
     const inactiveEntries = listed
     if (!health.readable) log('the plugin list could not be read after the update; the update ends without a verdict on the set')
     log(
       `plugins reloaded (already not running=${inactiveEntries.length} newly not running=${brokenNow.length} still stopped=${health.carried.length} pending=${pending.length}${restartReason === null ? '' : ` restart=${restartReason}`})`,
     )
+    if (restartOnly) log(`a package maps elsewhere now (restart=${restartReason}); the set is in place, so the next page still runs it and only a restart settles the mapping`)
     for (const entry of inactiveEntries.slice(0, 5)) log(`a plugin was already not running and still is not: ${entry.slice(0, 200)}`)
     for (const entry of brokenNow.slice(0, 5)) log(`a plugin stopped running with this update: ${entry.slice(0, 200)}`)
     /**
@@ -1065,12 +1084,13 @@ function pluginReloader(ctx, config) {
      * press that ends `done` while the list was unreadable can be explained afterwards, and the
      * page is told the rebuild is not proven either way.
      */
-    const rebuild = !health.readable ? 'unknown' : brokenNow.length > 0 || pending.length > 0 || restartReason !== null ? 'unsafe' : 'safe'
+    const rebuild = !health.readable ? 'unknown' : brokenNow.length > 0 || pending.length > 0 || restartReason !== null && !restartOnly ? 'unsafe' : 'safe'
     return {
       status: brokenNow.length > 0 ? 'failed' : 'done', // ui-copy-ignore
       warnings,
       pending,
       restartReason,
+      restartOnly,
       inactiveEntries,
       failedEntries: brokenNow,
       carriedEntries: health.carried,
@@ -1430,7 +1450,7 @@ function pluginReloader(ctx, config) {
        * `pending` means the changed modules are not loaded yet and need a restart this plugin does
        * not perform; it is not a queued update that finishes on its own.
        */
-      if (outcome.pending.length > 0 || outcome.restartReason !== null) {
+      if (outcome.pending.length > 0 || outcome.restartReason !== null && outcome.restartOnly !== true) {
         // The app accepted the update but has not finished starting the new plugin set. Rebuilding
         // the page now would start a document against a set that is still settling.
         return plainAnswer('restart', {
