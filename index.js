@@ -2994,6 +2994,13 @@ function bodyNamesId(body, id) {
  * already given that name. A name the body never gives a value before the call is left out — it is
  * `undefined`, or still in its temporal dead zone — because the loader would register nothing there
  * either.
+ *
+ * A bundler may also wrap the call itself: the body then reads the loader's
+ * `Symbol.for('@dsh-plugin/dsh-loader:load-wrap')` hook and forwards its own argument object to the
+ * loader, so the literal `__ModuleLoader__.load(` never appears. The id is still readable — it is
+ * the one that argument object names — and the wrapped shape only counts as a registration when it
+ * sits next to the hook's marker, so an ordinary `id`/`factory` object literal far from any wrapper
+ * still registers nothing.
  */
 function loadCalls(body) {
   const declared = new Map()
@@ -3012,6 +3019,11 @@ function loadCalls(body) {
       }
     }
     if (id !== undefined) calls.push({ at: match.index, id })
+  }
+  for (const match of body.matchAll(/\(\{\s*id\s*:\s*(["'`])([^"'`]+)\1\s*,\s*factory\s*:/gu)) {
+    const anchor = body.lastIndexOf('load-wrap', match.index)
+    if (anchor === -1 || match.index - anchor > 400) continue
+    calls.push({ at: match.index, id: match[2] })
   }
   return calls
 }
