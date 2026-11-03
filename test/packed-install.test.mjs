@@ -33,7 +33,10 @@ const run = (args, cwd) => {
 
 // npm pack writes the tarball under the name npm would publish; that name is what a profile installs.
 const packed = run(['pack', '--json', '--pack-destination', work], root)
-const info = JSON.parse(packed.slice(packed.indexOf('[')))
+// npm 11 and earlier answer `pack --json` with an array of pack objects; npm 12 answers with an
+// object that maps each package name to its pack object. Read either shape and work with the list.
+const answer = JSON.parse(packed.slice(packed.search(/[[{]/)))
+const info = Array.isArray(answer) ? answer : Object.values(answer)
 const tarball = join(work, info[0].filename)
 check('packing the tree produces a tarball', existsSync(tarball), tarball)
 check('the tarball ships the manifest and both halves', info[0].files.map((one) => one.path).includes('package.json') && info[0].files.map((one) => one.path).includes('client.js') && info[0].files.map((one) => one.path).includes('index.js'), info[0].files.map((one) => one.path).join(','))
