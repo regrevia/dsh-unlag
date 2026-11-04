@@ -3,7 +3,9 @@
  * ship its own prebuilt bundle and hand the loader a name instead of an inline string — DSH's
  * loader reads the value at run time, so the literal the body already gave that name is the id.
  * Reading only literal ids refused such a bundle forever (`does not register …`) and the page was
- * never rebuilt, while the very same bundle loads fine in the app.
+ * never rebuilt, while the very same bundle loads fine in the app. A bundler may also wrap the call
+ * itself, moving the argument object out of the literal call — the id is then the one that object
+ * names, next to the loader's load-wrap hook.
  */
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
@@ -58,4 +60,22 @@ const rowFor = (id) => `/plugins/??${id}/client.js&rev=test`
   const verdict = await verifyStartupRows(graphFor('ds-harness-remote'), answerWith(body), [rowFor('ds-harness-remote')])
   assert.equal(verdict.status, 'ok', JSON.stringify(verdict))
   console.log('PASS  a prebuilt bundle that names its id no longer reads as "does not register"')
+}
+{
+  // The wrapper shape a shipped bundle carries (dsh-cost-meter ≥ 1.9.49): the bundler reads the
+  // loader's load-wrap hook and forwards its own argument object, so the literal
+  // `__ModuleLoader__.load(` never appears while the very same bundle loads fine in the app.
+  const body = ';(function ($e) { const Oe = window.__ModuleLoader__, ye = Oe[Symbol.for("@dsh-plugin/dsh-loader:load-wrap")]; return ($e.id === "dsh-cost-meter" && Oe.load === ye?.ours && typeof ye.original === "function" ? ye.original : Oe.load).call(Oe, $e) })({ id: "dsh-cost-meter", factory: () => ({}) });'
+  const verdict = await verifyStartupRows(graphFor('dsh-cost-meter'), answerWith(body), [rowFor('dsh-cost-meter')])
+  assert.equal(verdict.status, 'ok', JSON.stringify(verdict))
+  console.log('PASS  a bundle whose load call is wrapped by the load-wrap hook still reads as registered')
+}
+{
+  // The wrapper shape alone must not open the door: an id/factory object literal with no load-wrap
+  // marker nearby is not a registration.
+  const body = 'const registry = ({ id: "dsh-ghost", factory: () => ({}) });'
+  const verdict = await verifyStartupRows(graphFor('dsh-ghost'), answerWith(body), [rowFor('dsh-ghost')])
+  assert.equal(verdict.status, 'blocked', JSON.stringify(verdict))
+  assert.equal(verdict.reason, 'register')
+  console.log('PASS  an id/factory literal with no load-wrap marker nearby still registers nothing')
 }
