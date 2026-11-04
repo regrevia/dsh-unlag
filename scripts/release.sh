@@ -20,10 +20,11 @@ fi
 # The package document is behind a CDN cache: it kept listing the previous version for a minute
 # after a publish that had already landed, while the version's own document answered at once. So
 # the version document decides, and the cache-busted package document only reports the tag.
-# A publish that landed took about 80 seconds before the version document answered, so the window
-# is wide enough for that instead of calling a live version a failure.
+# A publish that landed took about 80 seconds before the version document answered, and a later one
+# took about four minutes, so the window is wide enough for that instead of calling a live version a
+# failure.
 attempt=0
-while [ "$attempt" -lt 40 ]; do
+while [ "$attempt" -lt 90 ]; do
   stamp=$(date +%s)
   code=$(curl -s -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/dsh-unlag/$version?t=$stamp" || echo 000)
   if [ "$code" = 200 ]; then
