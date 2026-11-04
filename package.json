@@ -58,7 +58,7 @@
     "contract": "node scripts/loader-contract.mjs"
   },
   "devDependencies": {
-    "eslint": "10.13.0"
+    "eslint": "10.14.0"
   },
   "author": {
     "name": "regrevia",
