@@ -8,6 +8,7 @@
 | --- | --- | --- |
 | 一次按下只请求一次重建，连按只算一次 | `press.test.mjs`（99）、`reload-answer.test.mjs`（26） | `pressPath.ready` 为 `true` 表示此刻放行 |
 | 重建后新文档能起来：清单里每个脚本都能加载、每个插件都注册 | `bundle-shim.test.mjs`（76）、`host-verify.test.mjs`（45） | `verify.sound=ok`、`rehearsal.ok=true` |
+| 把 load 调用包起来的预构建产物也认得出它注册的名字，不再误判「这份产物没有注册」 | `registration-shape.test.mjs`（8） | 真包 `dsh-cost-meter@1.9.51` 的 `lib/client.js` 走 `verifyStartupRows` 答 `ok`；远离 `load-wrap` 的同类字面量仍 `blocked/register` |
 | 坏清单会被拒，不会带着坏字节去开新文档 | `host-verify.test.mjs`（45）、`verify-deadline.test.mjs`（7）、`url-fuzz.test.mjs`（5） | `verify.broken=blocked`、`verify.refuses=true` |
 | 冻结清单里的旧 revision 仍然拿得到现在的字节 | `bundle-shim.test.mjs`（76） | `shim.staleRev` 为 200 且字节数 > 0 |
 | 按钮不会装作在工作：挡住时提示写的是真实原因 | `reason-copy.test.mjs`（6）、`copy.test.mjs`（8）、`client-guard.test.mjs`（123） | 每次拦下都在日志里留一行，带原因与地址 |
@@ -37,7 +38,7 @@
 ## 证据怎么重跑
 
 ```sh
-npm test                     # 69 个文件、1530 项，全绿才算数
+npm test                     # 69 个文件、1532 项，全绿才算数
 npm run audit                # 静态检查
 npm run live-smoke           # 对着运行中的 App 复核；输出里 verdict 为 true 才算数
 ./scripts/release.sh         # 发布并回查 registry 是否真的列出这个版本

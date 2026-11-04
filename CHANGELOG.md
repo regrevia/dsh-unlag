@@ -1,5 +1,12 @@
 ## Unreleased
 
+## 1.17.3
+
+- 预构建插件把 `__ModuleLoader__.load(` 这层调用包起来时，刷新不再被「不认识这个插件」挡下（来自 @GYT-Lucas 的 PR #9）。这类产物的写法是读 loader 的 `load-wrap` 钩子、把自己的参数对象转发过去，于是 `__ModuleLoader__.load(` 这个字面量在文件里根本不存在，按字面量找注册的检查就得出「这份产物没有注册 <插件>」；而插件其实一直是好的、宿主也一直在加载它，页面却永远停在旧版本。`dsh-cost-meter` 1.9.49 起就是这个形状，35 个已装插件里只有它一个。
+- 现在多认一种形状：`({ id: "…", factory: … })` 这样的参数对象字面量，只要它紧跟在 `load-wrap` 标记之后（400 字符内），就算一次注册；远离标记的同类字面量仍然什么都不注册，误判面没有放大。
+- 证据：registry 上真实的 `dsh-cost-meter@1.9.51` 的 `lib/client.js` 喂给 `verifyStartupRows`，改动前答 `blocked / register`，改动后答 `ok`；测试补两条（包装形状读出注册、远离标记的字面量仍拒绝），`registration-shape` 8/8。
+- 顺带把 `test/packed-install.test.mjs` 改成同时读 npm 11 的数组和 npm 12 的「包名 → pack 对象」映射：npm 12 下这个文件原来在第一条 check 之前就死在 `JSON.parse` 上（同一个 PR）。
+
 ## 1.17.2
 
 - 修掉重放把 1.17.0 的放行标记弄丢的问题：`done` + `restartOnly` 的那次刷新，答案被记进按请求 id 存档的记录里；页面拿同一个 id 重问一次（答案在路上丢了就会这样）时，记录回放出来的答案漏了 `restartOnly`，客户端于是又把它当「要重新打开应用」拒掉——刚放行的刷新在重问这一步被挡回去。`~/.dsh/unlag-reload.log` 里 `plugins reloaded (... pending=0 restart=package-moved)` 之后的按压里就夹着这种重问。
