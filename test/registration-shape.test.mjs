@@ -97,3 +97,44 @@ const rowFor = (id) => `/plugins/??${id}/client.js&rev=test`
   assert.equal(verdict.reason, 'register')
   console.log('PASS  a helper-wrapped call naming another plugin registers nothing for this row')
 }
+
+{
+  // The shape a real 9.7 MB bundle carried (dsh-opencode-ip-guard): a documentation comment above the
+  // plugin writes the loader call out as prose, and the module below it registers through a local
+  // alias of the loader global with a name declared between the two. Reading the comment as a call
+  // put the name 530 bytes "after" it, so the id the real call passes never resolved and a valid
+  // plugin read as "does not register" forever. The comment is not a call, and a name is read at the
+  // offset of the id it fills rather than at the start of whatever looked like a call.
+  const body =
+    '/**\n * Registers with `window.__ModuleLoader__.load({ id, factory })` when the host boots.\n */\n' +
+    'var PLUGIN_ID = "dsh-opencode-ip-guard"\n' +
+    'var loader = window.__ModuleLoader__\n' +
+    'loader.load({ id: PLUGIN_ID, factory: () => ({}) })'
+  const verdict = await verifyStartupRows(graphFor('dsh-opencode-ip-guard'), answerWith(body), [rowFor('dsh-opencode-ip-guard')])
+  assert.equal(verdict.status, 'ok', JSON.stringify(verdict))
+  console.log('PASS  a comment that writes the load call out is not a registration')
+}
+{
+  // The same alias with no real call: a comment cannot register a plugin by itself.
+  const body = '/**\n * The host calls `window.__ModuleLoader__.load({ id, factory })` at startup.\n */\nvar PLUGIN_ID = "dsh-commented"\n'
+  const verdict = await verifyStartupRows(graphFor('dsh-commented'), answerWith(body), [rowFor('dsh-commented')])
+  assert.equal(verdict.status, 'blocked', JSON.stringify(verdict))
+  assert.equal(verdict.reason, 'register')
+  console.log('PASS  a comment alone still registers nothing')
+}
+{
+  // Text inside a string is text, however much it looks like the call.
+  const body = 'const note = "window.__ModuleLoader__.load({ id: \'dsh-in-string\', factory })"\n'
+  const verdict = await verifyStartupRows(graphFor('dsh-in-string'), answerWith(body), [rowFor('dsh-in-string')])
+  assert.equal(verdict.status, 'blocked', JSON.stringify(verdict))
+  assert.equal(verdict.reason, 'register')
+  console.log('PASS  a string that spells the call never registers the id it spells')
+}
+{
+  // A local the body assigned the loader global to is the loader: a bundle that keeps
+  // `const loader = window.__ModuleLoader__` registers through it.
+  const body = 'const loader = window.__ModuleLoader__\nloader.load({ id: "dsh-alias", factory: () => ({}) })\n'
+  const verdict = await verifyStartupRows(graphFor('dsh-alias'), answerWith(body), [rowFor('dsh-alias')])
+  assert.equal(verdict.status, 'ok', JSON.stringify(verdict))
+  console.log('PASS  a local alias of the loader global registers like the global')
+}
