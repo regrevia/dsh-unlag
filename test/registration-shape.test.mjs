@@ -79,3 +79,21 @@ const rowFor = (id) => `/plugins/??${id}/client.js&rev=test`
   assert.equal(verdict.reason, 'register')
   console.log('PASS  an id/factory literal with no load-wrap marker nearby still registers nothing')
 }
+{
+  // The shape issue #10 named: a bundle wraps the loader's argument in a function of its own, not the
+  // loader's load-wrap hook. dsh-ppt 0.20.5 carries it; the literal `__ModuleLoader__.load(` exists,
+  // but its first argument is a call, so the inline-object shape never reaches the id.
+  const body = "window.__ModuleLoader__.load(__stardustUpdatesWrap({ id: 'dsh-ppt', factory: require => ({}) }));"
+  const verdict = await verifyStartupRows(graphFor('dsh-ppt'), answerWith(body), [rowFor('dsh-ppt')])
+  assert.equal(verdict.status, 'ok', JSON.stringify(verdict))
+  console.log('PASS  a bundle that wraps the load call in its own helper still reads as registered')
+}
+{
+  // That shape must not turn any nested id/factory literal into a registration: the id has to be the
+  // one the loader is handed, so a call naming another plugin leaves this row unregistered.
+  const body = "window.__ModuleLoader__.load(__stardustUpdatesWrap({ id: 'dsh-other', factory: require => ({}) }));"
+  const verdict = await verifyStartupRows(graphFor('dsh-wrapper-ghost'), answerWith(body), [rowFor('dsh-wrapper-ghost')])
+  assert.equal(verdict.status, 'blocked', JSON.stringify(verdict))
+  assert.equal(verdict.reason, 'register')
+  console.log('PASS  a helper-wrapped call naming another plugin registers nothing for this row')
+}

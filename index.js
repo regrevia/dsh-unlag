@@ -3001,6 +3001,12 @@ function bodyNamesId(body, id) {
  * the one that argument object names — and the wrapped shape only counts as a registration when it
  * sits next to the hook's marker, so an ordinary `id`/`factory` object literal far from any wrapper
  * still registers nothing.
+ *
+ * A third shape comes from bundles that wrap the loader's argument in a function of their own —
+ * `load(__stardustUpdatesWrap({ id: 'dsh-ppt', factory: … }))` — which is not the loader's hook, only
+ * a local helper. The literal `__ModuleLoader__.load(` does appear here, but its first argument is a
+ * call, so the inline-object shape above does not reach the id. Read it the same way: a `load(` whose
+ * first argument is a call whose own first argument opens with `{ … id: … factory: … }`.
  */
 function loadCalls(body) {
   const declared = new Map()
@@ -3025,12 +3031,26 @@ function loadCalls(body) {
     if (anchor === -1 || match.index - anchor > 400) continue
     calls.push({ at: match.index, id: match[2] })
   }
+  const wrappedCall = /__ModuleLoader__\s*\.\s*load\s*\(\s*[A-Za-z_$][\w$.]*\s*\(\s*\{[\s\S]{0,200}?\bid\s*:\s*([A-Za-z_$][\w$]*|(["'`])([^"'`]+)\2)[\s\S]{0,200}?\bfactory\s*:/gu
+  for (const match of body.matchAll(wrappedCall)) {
+    let id = match[3]
+    if (id === undefined) {
+      for (const found of declared.get(match[1]) ?? []) {
+        if (found.at > match.index) break
+        id = found.id
+      }
+    }
+    if (id !== undefined) calls.push({ at: match.index, id })
+  }
   return calls
 }
 
 /** Whether a body calls the loader but in a shape whose id name nothing in it gives a value. */
 function registrationsUnread(body) {
-  return /__ModuleLoader__\s*\.\s*load\s*\(\s*\{/u.test(body) && loadCalls(body).length === 0
+  return (
+    /__ModuleLoader__\s*\.\s*load\s*\(\s*(?:\{|[A-Za-z_$][\w$.]*\s*\(\s*\{)/u.test(body) &&
+    loadCalls(body).length === 0
+  )
 }
 
 /** Ids a classic-script body registers through the module loader's public entry point. */

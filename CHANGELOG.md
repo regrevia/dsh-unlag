@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.17.4
+
+- 插件在自己的 bundle 里把 loader 的实参再包一层时，刷新不再被「不认识这个插件」挡下（#10，来自 @MOLMOORE 的报告和那条复现）。这类写法是 `window.__ModuleLoader__.load(__stardustUpdatesWrap({ id: 'dsh-ppt', factory: … }))`：`__stardustUpdatesWrap` 是同一个文件里的局部函数，不是 loader 的 `load-wrap` 钩子，所以 1.17.3 认的两种形状都不命中——字面量 `__ModuleLoader__.load(` 在，但第一层实参是函数调用，对象字面量在它的实参里。`dsh-ppt` 0.20.5 就是这样，被停用后按钮立刻恢复，说明触发条件跟着这个包走。
+- 现在再认一种形状：`load(` 的第一层实参是调用、而该调用的第一层实参以 `{ … id: … factory: … }` 开头时，取对象里的 id 当登记名。读不出名字的同类调用仍答成「登记名由变量提供」而不是放行；指向别的插件的 id 也不会算到这一行头上。
+- 证据：registry 上真实的 `dsh-ppt@0.20.5` 的 `lib/client.js`（245,804 字节）喂给 `verifyStartupRows`，改动前答 `blocked / register`，改动后答 `ok`；`dsh-cost-meter@1.9.51` 仍是 `ok`（1.17.3 的修复没被影响）。测试补两条，`registration-shape` 10/10。
+
 ## 1.17.3
 
 - 预构建插件把 `__ModuleLoader__.load(` 这层调用包起来时，刷新不再被「不认识这个插件」挡下（来自 @GYT-Lucas 的 PR #9）。这类产物的写法是读 loader 的 `load-wrap` 钩子、把自己的参数对象转发过去，于是 `__ModuleLoader__.load(` 这个字面量在文件里根本不存在，按字面量找注册的检查就得出「这份产物没有注册 <插件>」；而插件其实一直是好的、宿主也一直在加载它，页面却永远停在旧版本。`dsh-cost-meter` 1.9.49 起就是这个形状，35 个已装插件里只有它一个。
