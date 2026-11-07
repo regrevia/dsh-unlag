@@ -44,7 +44,7 @@ npm run live-smoke           # 对着运行中的 App 复核；输出里 verdict
 ./scripts/release.sh         # 发布并回查 registry 是否真的列出这个版本
 ```
 
-发布物本身也核对过：`dsh-unlag-1.17.3.tgz`（115,661 字节）里的 `index.js` 与仓库同文件 sha256 相同（`dcf74766…`）、`client.js` 相同（`202c941e…`），包里没有 `test/`；registry 版本地址 HTTP 200、`dist-tags.latest` 为 `1.17.3`。
+发布物本身也核对过：`dsh-unlag-1.17.5.tgz`（119,723 字节）里的 `index.js` 与仓库同文件 sha256 相同（`06bcdec9…`）、`client.js` 相同（`202c941e…`），包里没有 `test/`；registry 版本地址 HTTP 200、`dist-tags.latest` 为 `1.17.5`。
 
 演练输出里的每一项含义见 README「改完后让运行中的 App 用上」。
 
