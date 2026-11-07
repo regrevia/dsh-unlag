@@ -2988,69 +2988,426 @@ function bodyNamesId(body, id) {
 }
 
 /**
- * The `__ModuleLoader__.load` calls a classic-script body makes, in body order, with the id each
- * registers. A plugin that ships its own prebuilt bundle may hand the loader a name instead of an
- * inline string: the loader reads the value at run time, so the id is the literal the same body has
- * already given that name. A name the body never gives a value before the call is left out — it is
- * `undefined`, or still in its temporal dead zone — because the loader would register nothing there
- * either.
+ * What a served body does with the loader, read off the script itself rather than off the page.
  *
- * A bundler may also wrap the call itself: the body then reads the loader's
- * `Symbol.for('@dsh-plugin/dsh-loader:load-wrap')` hook and forwards its own argument object to the
- * loader, so the literal `__ModuleLoader__.load(` never appears. The id is still readable — it is
- * the one that argument object names — and the wrapped shape only counts as a registration when it
- * sits next to the hook's marker, so an ordinary `id`/`factory` object literal far from any wrapper
- * still registers nothing.
+ * The bundle a document boots is another project's build output, and every shape this check reads
+ * has to be found in it by looking. Reading those shapes out of the raw text went wrong twice, in
+ * ways no shape-specific rule could prevent. A documentation comment that wrote
+ * `__ModuleLoader__.load({ id, factory })` as an example was read as a call, and the name it
+ * appeared to hand the loader was then looked up by file position — where a declaration 530 bytes
+ * further down counts as "after the call" even though it is before the id that needs it. Both are
+ * the same mistake, made twice: the text a reader sees is not the text the parser runs.
  *
- * A third shape comes from bundles that wrap the loader's argument in a function of their own —
- * `load(__stardustUpdatesWrap({ id: 'dsh-ppt', factory: … }))` — which is not the loader's hook, only
- * a local helper. The literal `__ModuleLoader__.load(` does appear here, but its first argument is a
- * call, so the inline-object shape above does not reach the id. Read it the same way: a `load(` whose
- * first argument is a call whose own first argument opens with `{ … id: … factory: … }`.
+ * So the body is read once the way the parser reads it — every comment and the contents of every
+ * string blanked, everything else left at its own offset (`codeView`) — and every shape below is
+ * matched against that view. A comment can no longer write a call, a string can no longer hold a
+ * match open, and a name is resolved at the offset of the id it fills rather than at the start of
+ * the call that passes it. The receiver is whatever the body assigned the loader global to, so a
+ * bundler that keeps `const loader = window.__ModuleLoader__` is read like the literal it wraps.
+ */
+
+/** Marks a string's contents in the view: a literal's value is read back from the body under them. */
+const LITERAL_MARK = '\u0001'
+/** The same for a regular expression's body: a pattern is not a string and never names a plugin. */
+const PATTERN_MARK = '\u0002'
+/** The code unit behind each mark: a typed array stores numbers, and a one-character string is not one. */
+const LITERAL_UNIT = LITERAL_MARK.charCodeAt(0)
+const PATTERN_UNIT = PATTERN_MARK.charCodeAt(0)
+/** Words a `/` may follow while still opening a pattern rather than dividing. */
+const PATTERN_AFTER_WORD = new Set([
+  'return',
+  'typeof',
+  'instanceof',
+  'in',
+  'of',
+  'new',
+  'delete',
+  'void',
+  'do',
+  'else',
+  'case',
+  'yield',
+  'await',
+  'throw',
+])
+
+/** Whether a code unit can start a JavaScript name. */
+const isNameStart = (unit) => (unit >= 65 && unit <= 90) || (unit >= 97 && unit <= 122) || unit === 95 || unit === 36
+/** Whether a code unit can continue one. */
+const isNameUnit = (unit) => isNameStart(unit) || (unit >= 48 && unit <= 57)
+
+/**
+ * The body as the parser reads it: comments and the contents of every string blanked in place, at
+ * the body's own length and line breaks, so an offset into this view is an offset into the body.
+ * @param body the script bytes as text.
+ */
+function codeView(body) {
+  const length = body.length
+  const units = new Uint16Array(length)
+  for (let at = 0; at < length; at += 1) units[at] = body.charCodeAt(at)
+  /** Blank a span in place, keeping the line breaks a reader counts lines by. */
+  const blank = (from, to, filler) => {
+    const stop = to < length ? to : length
+    for (let at = from < 0 ? 0 : from; at < stop; at += 1) {
+      const unit = units[at]
+      if (unit !== 10 && unit !== 13) units[at] = filler
+    }
+  }
+  /** Blank a quoted string after its opening quote; answers where reading resumes. */
+  const blankString = (from, quote) => {
+    let at = from + 1
+    while (at < length) {
+      const unit = units[at]
+      if (unit === 92) {
+        at += 2
+        continue
+      }
+      if (unit === quote || unit === 10) break
+      at += 1
+    }
+    const closed = at < length && units[at] === quote
+    blank(from + 1, at, LITERAL_UNIT)
+    return closed ? at + 1 : at
+  }
+  /** Blank a pattern after its opening slash; answers where reading resumes. */
+  const blankPattern = (from) => {
+    let at = from + 1
+    let inClass = false
+    while (at < length) {
+      const unit = units[at]
+      if (unit === 92) {
+        at += 2
+        continue
+      }
+      if (unit === 91) inClass = true
+      else if (unit === 93) inClass = false
+      else if (unit === 47 && inClass === false) break
+      else if (unit === 10) break
+      at += 1
+    }
+    const closed = at < length && units[at] === 47
+    blank(from + 1, at, PATTERN_UNIT)
+    let after = closed ? at + 1 : at
+    // A pattern's flags are code-shaped but belong to the pattern; blanking them keeps a flag run
+    // from ever being read as the name of something.
+    while (after < length && isNameUnit(units[after])) {
+      units[after] = 32
+      after += 1
+    }
+    return after
+  }
+  /** Whether a `/` at this offset opens a pattern: the token before it answers. */
+  const startsPattern = (from) => {
+    let back = from - 1
+    while (back >= 0) {
+      const unit = units[back]
+      if (unit !== 32 && unit !== 9 && unit !== 10 && unit !== 13) break
+      back -= 1
+    }
+    if (back < 0) return true
+    const unit = units[back]
+    // After a value a `/` divides: a closing bracket, a digit, a name, or the mark a literal left.
+    if (unit === 41 || unit === 93 || unit === 125 || unit === 43 || unit === 45) return false
+    if (unit === 1 || unit === 2) return false
+    if (isNameUnit(unit)) {
+      let start = back
+      while (start >= 0 && isNameUnit(units[start])) start -= 1
+      let word = ''
+      for (let at = start + 1; at <= back; at += 1) word += String.fromCharCode(units[at])
+      return PATTERN_AFTER_WORD.has(word)
+    }
+    return true
+  }
+  let at = 0
+  let inTemplate = false
+  /** One frame per open interpolation: the brace depth inside it. */
+  const interpolations = []
+  while (at < length) {
+    const unit = units[at]
+    if (inTemplate) {
+      if (unit === 92) {
+        units[at] = LITERAL_UNIT
+        units[at + 1] = units[at + 1] === 10 || at + 1 >= length ? units[at + 1] : LITERAL_UNIT
+        at += 2
+        continue
+      }
+      if (unit === 96) {
+        inTemplate = false
+        at += 1
+        continue
+      }
+      if (unit === 36 && units[at + 1] === 123) {
+        interpolations.push(0)
+        inTemplate = false
+        at += 2
+        continue
+      }
+      if (unit !== 10 && unit !== 13) units[at] = LITERAL_UNIT
+      at += 1
+      continue
+    }
+    if (unit === 47) {
+      const next = units[at + 1]
+      if (next === 47) {
+        let end = at + 2
+        while (end < length && units[end] !== 10) end += 1
+        blank(at, end, 32)
+        at = end
+        continue
+      }
+      if (next === 42) {
+        let end = at + 2
+        while (end < length && !(units[end] === 42 && units[end + 1] === 47)) end += 1
+        blank(at, end + 2, 32)
+        at = end + 2
+        continue
+      }
+      if (startsPattern(at)) {
+        at = blankPattern(at)
+        continue
+      }
+      at += 1
+      continue
+    }
+    if (unit === 39 || unit === 34) {
+      at = blankString(at, unit)
+      continue
+    }
+    if (unit === 96) {
+      inTemplate = true
+      at += 1
+      continue
+    }
+    if (unit === 123 && interpolations.length > 0) {
+      interpolations[interpolations.length - 1] += 1
+      at += 1
+      continue
+    }
+    if (unit === 125 && interpolations.length > 0) {
+      const frame = interpolations.length - 1
+      if (interpolations[frame] === 0) {
+        interpolations.pop()
+        inTemplate = true
+      } else interpolations[frame] -= 1
+      at += 1
+      continue
+    }
+    at += 1
+  }
+  let view = ''
+  for (let start = 0; start < length; start += 8192) {
+    view += String.fromCharCode(...units.subarray(start, Math.min(start + 8192, length)))
+  }
+  return view
+}
+
+/** The view one body was read into, kept for the readers one check asks about the same bytes. */
+let viewedBody = null
+let viewedText = ''
+function codeViewOf(body) {
+  if (body === viewedBody) return viewedText
+  viewedBody = body
+  viewedText = codeView(body)
+  return viewedText
+}
+
+/** Where a literal's blank run ends in the view. */
+function literalEnd(view, at) {
+  let end = at
+  while (end < view.length && view[end] === LITERAL_MARK) end += 1
+  return end
+}
+
+/** The value the body gives the literal that starts here, or null when nothing is there. */
+function literalAt(view, body, at) {
+  if (view[at] !== LITERAL_MARK) return null
+  const value = body.slice(at, literalEnd(view, at))
+  return value === '' ? null : value
+}
+
+/**
+ * The names a body calls `load` on: the loader global itself, and any local the body assigned it
+ * to. A bundled plugin keeps `const loader = window.__ModuleLoader__` (or `self`, or
+ * `globalThis`) and calls through that, which is the same registration and has to read as one.
+ */
+function loaderReceivers(view) {
+  const names = ['__ModuleLoader__']
+  for (const match of view.matchAll(
+    /\b(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:(?:window|self|globalThis)\s*\.\s*)?__ModuleLoader__\b/gu,
+  )) {
+    if (!names.includes(match[1])) names.push(match[1])
+  }
+  return names
+}
+
+/** A name as a pattern that matches only that name. */
+const escapeRegExp = (text) => text.replace(/[.*+?^$()|[\]\\]/gu, '\\$&')
+/** The quotes a JavaScript literal may wear: a quoted value keeps its opening quote in the view. */
+const QUOTES = String.fromCharCode(34, 39, 96)
+
+/** Every place a body calls the loader, as a match whose end is the argument that follows. */
+function loadCallSites(view) {
+  const names = loaderReceivers(view).map(escapeRegExp).join('|')
+  const pattern = new RegExp('(?<![\\w$])(?:[A-Za-z_$][\\w$]*\\s*\\.\\s*)?(?:' + names + ')\\s*\\.\\s*load\\s*\\(', 'gu')
+  return [...view.matchAll(pattern)]
+}
+
+/** The literal a name was given, looking only at declarations that come before the use. */
+function declaredBefore(declared, name, before) {
+  const list = declared.get(name)
+  if (list === undefined) return null
+  let value = null
+  for (const one of list) {
+    if (one.at >= before) break
+    value = one.value
+  }
+  return value
+}
+
+/** The literals a body gave a name, by name, in body order. */
+function literalDeclarations(view, body) {
+  const declared = new Map()
+  // The opening quote stays in the view; only the value's own units are blanked.
+  const quotes = String.fromCharCode(34, 39, 96)
+  const pattern = new RegExp('\\b(?:var|let|const)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*[' + quotes + ']?' + LITERAL_MARK + '+', 'gu')
+  for (const match of view.matchAll(pattern)) {
+    const valueAt = match.index + match[0].indexOf(LITERAL_MARK)
+    const value = body.slice(valueAt, literalEnd(view, valueAt))
+    if (value === '') continue
+    const list = declared.get(match[1])
+    if (list === undefined) declared.set(match[1], [{ at: valueAt, value }])
+    else list.push({ at: valueAt, value })
+  }
+  return declared
+}
+
+/** An id given inline, or the literal the name at this offset was last given. */
+function idValueAt(view, body, declared, at) {
+  // A quoted literal keeps its opening quote in the view; the value is under the marks after it.
+  const opening = view.charCodeAt(at)
+  if (opening === 34 || opening === 39 || opening === 96) return literalAt(view, body, at + 1)
+  const inline = literalAt(view, body, at)
+  if (inline !== null) return inline
+  if (isNameStart(view.charCodeAt(at)) === false) return null
+  let end = at
+  while (end < view.length && isNameUnit(view.charCodeAt(end))) end += 1
+  return declaredBefore(declared, view.slice(at, end), at)
+}
+
+/**
+ * The id an argument object names, read from its own `id` property: `{ id: 'x', … }`,
+ * `{ id: PLUGIN_ID, … }`, or the shorthand `{ id, factory }`. Nesting is skipped, so an
+ * `id:` inside a callback or a nested object never answers for this one.
+ */
+function idInArgumentObject(view, body, declared, opening) {
+  const limit = Math.min(view.length, opening + 8192)
+  let depth = 0
+  let at = opening
+  while (at < limit) {
+    const unit = view.charCodeAt(at)
+    if (unit === 123 || unit === 40 || unit === 91) {
+      depth += 1
+      at += 1
+      continue
+    }
+    if (unit === 125 || unit === 41 || unit === 93) {
+      depth -= 1
+      if (depth === 0) return null
+      at += 1
+      continue
+    }
+    if (depth !== 1 || isNameStart(unit) === false) {
+      at += 1
+      continue
+    }
+    const start = at
+    while (at < limit && isNameUnit(view.charCodeAt(at))) at += 1
+    if (view.slice(start, at) !== 'id') continue
+    let next = at
+    while (next < limit && /\s/u.test(view[next])) next += 1
+    if (view[next] === ':') {
+      let value = next + 1
+      while (value < limit && /\s/u.test(view[value])) value += 1
+      return idValueAt(view, body, declared, value)
+    }
+    if (view[next] === ',' || view[next] === '}') return declaredBefore(declared, 'id', start)
+  }
+  return null
+}
+
+/** Whether the loader's own wrap hook is named within reach of this offset. */
+function loadWrapMarkerNear(view, body, at) {
+  const from = at - 400 < 0 ? 0 : at - 400
+  for (let cursor = from; cursor < at; cursor += 1) {
+    if (view[cursor] !== LITERAL_MARK) continue
+    const end = literalEnd(view, cursor)
+    if (body.slice(cursor, end).includes('load-wrap')) return true
+    cursor = end
+  }
+  return false
+}
+
+/**
+ * The `load` calls a classic-script body makes, in body order, with the id each registers. A
+ * plugin that ships its own prebuilt bundle may hand the loader a name instead of an inline string:
+ * the loader reads the value at run time, so the id is the literal the same body has already given
+ * that name, resolved at the offset of the id rather than at the start of the call. A name the body
+ * never gives a value before that offset is left out — it is `undefined`, or still in its temporal
+ * dead zone — because the loader would register nothing there either.
+ *
+ * A bundler may also move the argument object out of the call: it forwards the object to a helper
+ * (`load(wrap({ id: 'x', factory: … }))`), or reads the loader's load-wrap hook and calls the
+ * original through it. The first is read as the call's own argument; the second only counts as a
+ * registration when it sits next to the hook's own name, so an ordinary object literal far from any
+ * wrapper still registers nothing.
  */
 function loadCalls(body) {
-  const declared = new Map()
-  for (const match of body.matchAll(/\b(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*(["'`])([^"'`]+)\2/gu)) {
-    const list = declared.get(match[1])
-    if (list === undefined) declared.set(match[1], [{ at: match.index, id: match[3] }])
-    else list.push({ at: match.index, id: match[3] })
-  }
+  const view = codeViewOf(body)
+  const declared = literalDeclarations(view, body)
   const calls = []
-  for (const match of body.matchAll(/__ModuleLoader__\s*\.\s*load\s*\(\s*\{[\s\S]{0,8192}?\bid\s*:\s*([A-Za-z_$][\w$]*|(["'`])([^"'`]+)\2)/gu)) {
-    let id = match[3]
-    if (id === undefined) {
-      for (const found of declared.get(match[1]) ?? []) {
-        if (found.at > match.index) break
-        id = found.id
-      }
+  const seen = new Set()
+  const add = (at, id) => {
+    if (typeof id !== 'string' || id === '') return
+    const key = String(at) + '\u0000' + id
+    if (seen.has(key)) return
+    seen.add(key)
+    calls.push({ at, id })
+  }
+  for (const site of loadCallSites(view)) {
+    let at = site.index + site[0].length
+    while (at < view.length && /\s/u.test(view[at])) at += 1
+    if (view[at] === '{') {
+      const id = idInArgumentObject(view, body, declared, at)
+      if (id !== null) add(site.index, id)
+      continue
     }
-    if (id !== undefined) calls.push({ at: match.index, id })
+    // `load(helper({ id: … }))`: the argument is a call and the object is its first argument.
+    if (isNameStart(view.charCodeAt(at)) === false) continue
+    let end = at
+    while (end < view.length && isNameUnit(view.charCodeAt(end))) end += 1
+    let open = end
+    while (open < view.length && /\s/u.test(view[open])) open += 1
+    if (view[open] !== '(') continue
+    let inner = open + 1
+    while (inner < view.length && /\s/u.test(view[inner])) inner += 1
+    if (view[inner] !== '{') continue
+    const id = idInArgumentObject(view, body, declared, inner)
+    if (id !== null) add(site.index, id)
   }
-  for (const match of body.matchAll(/\(\{\s*id\s*:\s*(["'`])([^"'`]+)\1\s*,\s*factory\s*:/gu)) {
-    const anchor = body.lastIndexOf('load-wrap', match.index)
-    if (anchor === -1 || match.index - anchor > 400) continue
-    calls.push({ at: match.index, id: match[2] })
+  // The wrapped shape keeps the argument object in the call that builds it, not in a `load(` call.
+  const wrapped = new RegExp('\\(\\s*\\{\\s*id\\s*:\\s*([' + QUOTES + '])' + LITERAL_MARK + '+\\1\\s*,\\s*factory\\s*:', 'gu')
+  for (const match of view.matchAll(wrapped)) {
+    if (!loadWrapMarkerNear(view, body, match.index)) continue
+    const valueAt = match.index + match[0].indexOf(LITERAL_MARK)
+    add(match.index, body.slice(valueAt, literalEnd(view, valueAt)))
   }
-  const wrappedCall = /__ModuleLoader__\s*\.\s*load\s*\(\s*[A-Za-z_$][\w$.]*\s*\(\s*\{[\s\S]{0,200}?\bid\s*:\s*([A-Za-z_$][\w$]*|(["'`])([^"'`]+)\2)[\s\S]{0,200}?\bfactory\s*:/gu
-  for (const match of body.matchAll(wrappedCall)) {
-    let id = match[3]
-    if (id === undefined) {
-      for (const found of declared.get(match[1]) ?? []) {
-        if (found.at > match.index) break
-        id = found.id
-      }
-    }
-    if (id !== undefined) calls.push({ at: match.index, id })
-  }
+  calls.sort((left, right) => left.at - right.at)
   return calls
 }
 
 /** Whether a body calls the loader but in a shape whose id name nothing in it gives a value. */
 function registrationsUnread(body) {
-  return (
-    /__ModuleLoader__\s*\.\s*load\s*\(\s*(?:\{|[A-Za-z_$][\w$.]*\s*\(\s*\{)/u.test(body) &&
-    loadCalls(body).length === 0
-  )
+  return loadCallSites(codeViewOf(body)).length > 0 && loadCalls(body).length === 0
 }
 
 /** Ids a classic-script body registers through the module loader's public entry point. */
