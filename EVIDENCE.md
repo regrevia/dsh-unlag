@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 一次按下只请求一次重建，连按只算一次 | `press.test.mjs`（99）、`reload-answer.test.mjs`（26） | `pressPath.ready` 为 `true` 表示此刻放行 |
 | 重建后新文档能起来：清单里每个脚本都能加载、每个插件都注册 | `bundle-shim.test.mjs`（76）、`host-verify.test.mjs`（45） | `verify.sound=ok`、`rehearsal.ok=true` |
-| 把 load 调用包起来的预构建产物也认得出它注册的名字，不再误判「这份产物没有注册」 | `registration-shape.test.mjs`（10） | 真包 `dsh-cost-meter@1.9.51`（读 `load-wrap` 钩子）与 `dsh-ppt@0.20.5`（用自家 `__stardustUpdatesWrap` 包实参）的 `lib/client.js` 走 `verifyStartupRows` 都答 `ok`，改动前都是 `blocked/register`；远离标记的字面量、指向别的插件的 id 仍 `blocked/register` |
+| 预构建产物把 load 调用包起来、写在注释里、或把 loader 存进局部别名时，都读得出它注册的名字，不再误判「这份产物没有注册」 | `registration-shape.test.mjs`（14） | 真包走 `verifyStartupRows`：`dsh-cost-meter@1.9.51`（读 `load-wrap` 钩子）、`dsh-ppt@0.20.5`（自家 `__stardustUpdatesWrap` 包实参）、`dsh-opencode-ip-guard@0.2.0`（注释里写出调用、真调用在 4.7KB 之后）都答 `ok`；最后这个在 1.17.4 上答 `blocked/register`。注释里的写法、只有注释、字符串拼出的调用、远离标记的字面量、指向别的插件的 id，都仍 `blocked/register` |
 | 坏清单会被拒，不会带着坏字节去开新文档 | `host-verify.test.mjs`（45）、`verify-deadline.test.mjs`（7）、`url-fuzz.test.mjs`（5） | `verify.broken=blocked`、`verify.refuses=true` |
 | 冻结清单里的旧 revision 仍然拿得到现在的字节 | `bundle-shim.test.mjs`（76） | `shim.staleRev` 为 200 且字节数 > 0 |
 | 按钮不会装作在工作：挡住时提示写的是真实原因 | `reason-copy.test.mjs`（6）、`copy.test.mjs`（8）、`client-guard.test.mjs`（123） | 每次拦下都在日志里留一行，带原因与地址 |

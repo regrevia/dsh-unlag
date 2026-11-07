@@ -1,5 +1,11 @@
 ## Unreleased
 
+## 1.17.5
+
+- 预构建插件把 `__ModuleLoader__.load(` 写在注释里当示例时，刷新不再被「这份产物没有注册」挡下（#11，来自 @TLEWA 的 PR 和运行中的 9.7MB 产物）。原来的读法直接看原文：注释里写出来的调用被当成真的，字符串里的文字还能让匹配跨过段落；同一份 body 里 `var PLUGIN_ID = '…'` 在注释之后、真正的调用之前，却因为比较位置用的是调用起点而被判成「在匹配之后」，id 读成 `undefined`。两条叠在一起，`dsh-opencode-ip-guard` 才被拒。
+- 现在先把 body 按解析器的读法过一遍：注释与字符串内容抹平，引号与偏移都保留，所有形状只在抹平后的视图上匹配；id 在它自己的记号位置解析，而不是调用起点；`const loader = window.__ModuleLoader__` 这类局部别名也跟。`load-wrap` 与「自家 helper 包一层」两种形状都保留。
+- 证据：registry 上真实的 `dsh-opencode-ip-guard@0.2.0` 的 `src/client.js` 走 `verifyStartupRows`，1.17.4 答 `blocked / register（登记名由变量提供，读不出值）`，本次合并后答 `ok`；`dsh-ppt@0.20.5` 合并前后都 `ok`（#10 的修复没被影响）。`registration-shape` 由 10 条增到 14 条，全量 69 文件 / 1536 项全绿。
+
 ## 1.17.4
 
 - 插件在自己的 bundle 里把 loader 的实参再包一层时，刷新不再被「不认识这个插件」挡下（#10，来自 @MOLMOORE 的报告和那条复现）。这类写法是 `window.__ModuleLoader__.load(__stardustUpdatesWrap({ id: 'dsh-ppt', factory: … }))`：`__stardustUpdatesWrap` 是同一个文件里的局部函数，不是 loader 的 `load-wrap` 钩子，所以 1.17.3 认的两种形状都不命中——字面量 `__ModuleLoader__.load(` 在，但第一层实参是函数调用，对象字面量在它的实参里。`dsh-ppt` 0.20.5 就是这样，被停用后按钮立刻恢复，说明触发条件跟着这个包走。

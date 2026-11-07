@@ -3096,7 +3096,7 @@ function codeView(body) {
     }
     return after
   }
-  /** Whether a `/` at this offset opens a pattern: the token before it answers. */
+  /** Whether a `/` at this offset opens a pattern: the character before it answers. */
   const startsPattern = (from) => {
     let back = from - 1
     while (back >= 0) {
