@@ -4235,13 +4235,21 @@ function runningSubagents(ctx) {
   }
 }
 
-/** One answer for the tool: a status, one line a model can repeat, and what the rebuild proved. */
+/**
+ * One answer for the tool: a status, one line a model can repeat, and what the rebuild proved.
+ * This press runs in the app, not in a page: the plugins served now are new, the document the
+ * person is looking at is not. The answer says both apart, because a model reading only `done`
+ * takes it for a whole refresh and tells the person the page is running the new code.
+ */
 function agentAnswer(outcome) {
   const status = typeof outcome?.status === 'string' ? outcome.status : 'failed'
   const rebuild = typeof outcome?.rebuild === 'string' ? outcome.rebuild : 'unknown'
-  const answer = { status, rebuild, reason: '更新没有完成，当前插件状态需要核对' }
+  const answer = { status, rebuild, page: 'unknown', reason: '更新没有完成，当前插件状态需要核对' }
   if (typeof outcome?.healthReadable === 'boolean') answer.healthReadable = outcome.healthReadable
-  if (status === 'done') answer.reason = '插件已换成新代码'
+  if (status === 'done') {
+    answer.page = 'not-reloaded'
+    answer.reason = '插件已换好；界面还没重开，要按一次刷新'
+  }
   else if (status === 'applying' || status === 'queued') answer.reason = '还在刷新，稍后再按一次'
   else if (status === 'restart') answer.reason = '有新插件要重启后才能生效'
   else if (status === 'unavailable') answer.reason = '这里没有可以换插件的服务'
@@ -4295,7 +4303,7 @@ function registerAgentTool(ctx, controller, config) {
   try {
     effect.call(ctx, () => tools.register({
       name: 'unlag_refresh', // ui-copy-ignore
-      description: '按一下刷新按钮；关闭时说明原因',
+      description: '换掉插件代码；界面不重开，要按一次刷新',
       parameters: {
         type: 'object', // ui-copy-ignore
         properties: {
@@ -4311,6 +4319,7 @@ function registerAgentTool(ctx, controller, config) {
             status: { type: 'string', enum: ['done', 'failed', 'blocked', 'applying', 'queued', 'restart', 'unavailable', 'cancelled'] },
             reason: { type: 'string' }, // ui-copy-ignore
             rebuild: { type: 'string', enum: ['safe', 'unsafe', 'unknown', 'pending'] },
+            page: { type: 'string', enum: ['reloaded', 'not-reloaded', 'unknown'] }, // ui-copy-ignore
             healthReadable: { type: 'boolean' },
           },
           required: ['status'], // ui-copy-ignore

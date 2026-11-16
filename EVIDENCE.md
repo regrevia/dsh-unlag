@@ -55,6 +55,7 @@ npm run live-smoke           # 对着运行中的 App 复核；输出里 verdict
 | --- | --- | --- |
 | 读未声明的服务会打断启动，1.12.0 之后不会 | `test/stability-host-agent-tool.test.mjs`：假 ctx 对 inject/effect/reflect 与所有未声明服务一律抛错，仍能挂路由、记实例、注册 dispose | `node test/stability-host-agent-tool.test.mjs` |
 | Agent 工具确实注册了，且只注册一份 | 同文件的六种上下文（无服务、服务在、服务晚到、属性读抛错、routes 抛错、inject 拒绝）；关闭开关时 execute 答 `blocked` | 同上 |
+| Agent 拿到的答案分得清「插件换了」和「界面重开了」 | `test/agent-tool.test.mjs`：开关打开那次答 `status=done` 且 `page=not-reloaded`、那句提示里写的是要按一次刷新；工具说明不含换行且写明界面不重开；关闭开关、子任务在跑、取消、并进正在跑的更新各自答自己的状态 | `node test/agent-tool.test.mjs` |
 | 按压不额外等 1.5 秒 | `scripts/soak.mjs` 在 `DSH_UNLAG_ANSWER_MS=20`、`minIntervalMs=0` 下单种子 792 步：p99 23.3 ms、max 26.0 ms（修复前同场景第二次更新要等约 1.47 s） | `DSH_UNLAG_SOAK_MS=6000 DSH_UNLAG_SOAK_SEEDS=1 DSH_UNLAG_ANSWER_MS=20 node scripts/soak.mjs` |
 | 计时器不残留 | `test/stability-host-timers.test.mjs`：每次按压后无残留 timeout，dispose 清空；soak 里 `timers 0→23→0` | `node test/stability-host-timers.test.mjs` |
 | 一次按压只落一个结果 | `test/stability-host-concurrency.test.mjs`、`test/chaos-core.test.mjs` | 两个文件都可单跑 |

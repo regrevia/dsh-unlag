@@ -68,6 +68,7 @@ function mount(config = {}, options = {}) {
   check('one refresh tool is offered to the model', tools.length === 1 && tools[0].name === 'unlag_refresh', JSON.stringify(tools.map((tool) => tool.name)))
   const description = String(tools[0]?.description ?? '')
   check('its description is one line', description !== '' && !description.includes('\n'), description)
+  check('and it does not read as a whole refresh', description.includes('不重开') && description.includes('刷新'), description)
   const blocked = await tools[0].execute({})
   check('with the switch off the call is refused', blocked.status === 'blocked', JSON.stringify(blocked))
   check('and the refusal names where to turn it on', typeof blocked.reason === 'string' && blocked.reason.includes('右键菜单'), JSON.stringify(blocked))
@@ -84,6 +85,8 @@ function mount(config = {}, options = {}) {
   check('and the plugin set was composed once', applies() === 1, String(applies()))
   check('and the rebuild is called safe', pressed.rebuild === 'safe', JSON.stringify(pressed))
   check('and the reason is one sentence', typeof pressed.reason === 'string' && !pressed.reason.includes('\n'), JSON.stringify(pressed))
+  check('and the answer says the page was not reopened', pressed.page === 'not-reloaded', JSON.stringify(pressed))
+  check('and the reason names the press the page still needs', String(pressed.reason).includes('刷新'), JSON.stringify(pressed))
   const again = await tools[0].execute({ requestId: 'agent-1' })
   check('the same request id is answered from its own record', again.status === 'done' && applies() === 1, JSON.stringify({ again, applies: applies() }))
 }
