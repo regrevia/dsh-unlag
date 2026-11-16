@@ -1,6 +1,6 @@
 {
   "name": "dsh-unlag",
-  "version": "1.17.6",
+  "version": "1.17.7",
   "type": "module",
   "description": "DSH 桌面端自己的刷新按钮：改插件不用重启、开久了卡了也点一下，正在进行的会话不受影响。",
   "license": "MIT",
@@ -58,7 +58,7 @@
     "contract": "node scripts/loader-contract.mjs"
   },
   "devDependencies": {
-    "eslint": "10.14.0"
+    "eslint": "10.15.0"
   },
   "author": {
     "name": "regrevia",

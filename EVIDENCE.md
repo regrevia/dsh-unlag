@@ -38,13 +38,13 @@
 ## 证据怎么重跑
 
 ```sh
-npm test                     # 69 个文件、1536 项，全绿才算数
+npm test                     # 69 个文件、1541 项，全绿才算数
 npm run audit                # 静态检查
 npm run live-smoke           # 对着运行中的 App 复核；输出里 verdict 为 true 才算数
 ./scripts/release.sh         # 发布并回查 registry 是否真的列出这个版本
 ```
 
-发布物本身也核对过：`dsh-unlag-1.17.5.tgz`（119,723 字节）里的 `index.js` 与仓库同文件 sha256 相同（`06bcdec9…`）、`client.js` 相同（`202c941e…`），包里没有 `test/`；registry 版本地址 HTTP 200、`dist-tags.latest` 为 `1.17.5`。
+发布物本身也核对过：`dsh-unlag-1.17.6.tgz`（120,024 字节）里的 `index.js` 与仓库同文件 sha256 相同（`f4d2ffd2…`）、`client.js` 相同（`202c941e…`），包里没有 `test/`；registry 版本地址 HTTP 200、`dist-tags.latest` 为 `1.17.6`。
 
 演练输出里的每一项含义见 README「改完后让运行中的 App 用上」。
 
