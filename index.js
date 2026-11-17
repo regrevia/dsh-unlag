@@ -1693,9 +1693,124 @@ function sendJson(res, status, payload) {
 const LOCAL_ADDRESS = /^(127\.\d+\.\d+\.\d+|localhost|\[::1\]|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|169\.254\.\d+\.\d+|[a-z0-9-]+\.local)(:\d+)?$/u
 
 /**
+ * A name the person added to the list themselves, because they reach this app through one — a
+ * reverse proxy under `dsh.lan`, a tailnet name, a router's own DNS. The list is a file in the
+ * app's home and nothing but that file widens the gate: a public name that resolves here is still
+ * the rebinding case, so the default stays loopback, private network and `.local`.
+ */
+/** The list, resolved on every read so a run can point it somewhere else (`DSH_UNLAG_TRUSTED_HOSTS`). */
+const trustedHostsPath = () => process.env.DSH_UNLAG_TRUSTED_HOSTS ?? join(stateHome(), '.dsh', 'unlag-trusted-hosts') // ui-copy-ignore
+/** How many names the list may hold. A press is not the place to read a million lines. */
+const MAX_TRUSTED_HOSTS = 512
+/** What a listed line names: an address, or `*.name` for that suffix and deeper. */
+const TRUSTED_HOST_BODY = /^(?:\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)$/u
+
+/**
+ * An address split into its name and the number that may follow a colon. A name keeps the brackets
+ * IPv6 needs; a value that is not an address answers null instead of being compared as a string that
+ * can never match.
+ */
+function splitSite(value) {
+  const text = String(value ?? '').trim().toLowerCase()
+  if (text === '') return null
+  if (text.startsWith('[')) {
+    const end = text.indexOf(']')
+    if (end === -1) return null
+    const name = text.slice(0, end + 1)
+    const rest = text.slice(end + 1)
+    if (rest === '') return { name, port: null } // ui-copy-ignore
+    if (rest.startsWith(':') && /^\d+$/u.test(rest.slice(1)) === true) return { name, port: rest.slice(1) } // ui-copy-ignore
+    return null
+  }
+  const colon = text.lastIndexOf(':')
+  if (colon !== -1 && /^\d+$/u.test(text.slice(colon + 1)) === true) return { name: text.slice(0, colon), port: text.slice(colon + 1) } // ui-copy-ignore
+  return { name: text, port: null } // ui-copy-ignore
+}
+
+/** One line of the list, or null when the line is a comment, blank, or something this cannot read. */
+function trustedHostEntry(line) {
+  const text = String(line ?? '').trim().toLowerCase()
+  if (text === '' || text.startsWith('#')) return null
+  const wildcard = text.startsWith('*.')
+  const parts = splitSite(wildcard ? text.slice(2) : text)
+  // A bare `*` is the whole gate: it would accept every name, including the one that resolves here
+  // from somewhere else. It is refused rather than obeyed, and the log says so.
+  if (parts === null || parts.name === '' || parts.name === '*') return null
+  if (TRUSTED_HOST_BODY.test(parts.name) === false) return null
+  if (wildcard === true && parts.name.startsWith('[')) return null
+  return { wildcard, name: parts.name, port: parts.port } // ui-copy-ignore
+}
+
+/** The parsed list, re-read when the file changes and not once per poll of the page's state. */
+const trustedHostsCache = { key: '', hosts: [] }
+
+/**
+ * The names the person listed. The file is read here, at the gate, rather than at startup: a press
+ * is rare, the page's state poll is not, and a list edited while the app runs has to work without a
+ * restart. An unreadable or absent file is an empty list, which is exactly today's gate.
+ */
+function trustedHosts() {
+  const path = trustedHostsPath()
+  let key = `${path}\u0000none`
+  try {
+    const info = statSync(path)
+    key = info.isFile() === true ? `${path}\u0000${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}` : `${path}\u0000not-a-file`
+  } catch {
+    key = `${path}\u0000none`
+  }
+  if (key === trustedHostsCache.key) return trustedHostsCache.hosts
+  const hosts = []
+  const text = key.endsWith('\u0000none') || key.endsWith('\u0000not-a-file') ? null : readSmallText(path)
+  if (text !== null) {
+    const ignored = []
+    for (const line of text.split(/\r?\n/gu)) {
+      if (hosts.length >= MAX_TRUSTED_HOSTS) {
+        ignored.push('the list is longer than this reader takes')
+        break
+      }
+      const entry = trustedHostEntry(line)
+      if (entry !== null) hosts.push(entry)
+      else if (line.trim() !== '' && line.trim().startsWith('#') === false) ignored.push(line.trim())
+    }
+    if (ignored.length > 0) {
+      log(`ignored ${ignored.length} line(s) in ${path}: ${oneLine(ignored.slice(0, 4).join(' '), 300)}`)
+    }
+  }
+  trustedHostsCache.key = key
+  trustedHostsCache.hosts = hosts
+  return hosts
+}
+/** Hosts already reported as listed, so a listed page's poll writes one line, not one per press. */
+const TRUSTED_HOSTS_SEEN = new Set()
+
+/** Whether the person listed this address. A listed name covers any port unless it named one. */ // ui-copy-ignore
+function trustedHostCovers(site) {
+  const hosts = trustedHosts()
+  if (hosts.length === 0) return false
+  const parts = splitSite(site)
+  if (parts === null || parts.name === '') return false
+  for (const entry of hosts) {
+    if (entry.port !== null && entry.port !== parts.port) continue // ui-copy-ignore
+    const matched = entry.wildcard === true
+      ? parts.name.length > entry.name.length && parts.name.endsWith(`.${entry.name}`)
+      : parts.name === entry.name
+    if (matched === false) continue
+    if (TRUSTED_HOSTS_SEEN.size < 32 && TRUSTED_HOSTS_SEEN.has(parts.name) === false) {
+      TRUSTED_HOSTS_SEEN.add(parts.name)
+      log(`a press from ${parts.name} is allowed by ${trustedHostsPath()}`)
+    }
+    return true
+  }
+  return false
+}
+
+/**
  * Whether one request may act for the button. The page sets a header a cross-site form cannot set,
  * a browser sends it only after a preflight this server never allows, and the address check covers
- * the case that bypasses preflight: a page on a public name that resolves to this machine.
+ * the case that bypasses preflight: a page on a public name that resolves to this machine. A name
+ * the person listed in the trusted-hosts file passes that address check and nothing else: the
+ * origin still has to name the same address, so a listing widens which names count as this machine
+ * and never which page may act.
  */
 function buttonAllowed(req) {
   try {
@@ -1704,7 +1819,7 @@ function buttonAllowed(req) {
     const site = typeof req?.headers?.host === 'string' ? req.headers.host.trim().toLowerCase() : '' // ui-copy-ignore
     // No address at all is not a browser request; nothing about it can be checked, so the header is
     // the whole gate, exactly as it was for earlier versions.
-    if (site !== '' && LOCAL_ADDRESS.test(site) === false) {
+    if (site !== '' && LOCAL_ADDRESS.test(site) === false && trustedHostCovers(site) === false) {
       log(`refused a press from ${site}`)
       return false
     }
