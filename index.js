@@ -3109,7 +3109,7 @@ function bodyNamesId(body, id) {
  * has to be found in it by looking. Reading those shapes out of the raw text went wrong twice, in
  * ways no shape-specific rule could prevent. A documentation comment that wrote
  * `__ModuleLoader__.load({ id, factory })` as an example was read as a call, and the name it
- * appeared to hand the loader was then looked up by file position — where a declaration 530 bytes
+ * appeared to hand the lo lor was then looked up by file position — where a declaration 530 bytes
  * further down counts as "after the call" even though it is before the id that needs it. Both are
  * the same mistake, made twice: the text a reader sees is not the text the parser runs.
  *
@@ -3396,6 +3396,31 @@ function literalDeclarations(view, body) {
   return declared
 }
 
+/** The places a body opened an object literal with a name: `const NAME = {`, in body order. */
+function objectDeclarations(view) {
+  const objects = new Map()
+  const pattern = /\b(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*\{/gu
+  for (const match of view.matchAll(pattern)) {
+    const at = match.index + match[0].length - 1
+    const list = objects.get(match[1])
+    if (list === undefined) objects.set(match[1], [at])
+    else list.push(at)
+  }
+  return objects
+}
+
+/** The opening brace of the object a name was given, looking only at declarations before the use. */
+function objectBefore(objects, name, before) {
+  const list = objects.get(name)
+  if (list === undefined) return null
+  let at = null
+  for (const one of list) {
+    if (one >= before) break
+    at = one
+  }
+  return at
+}
+
 /** An id given inline, or the literal the name at this offset was last given. */
 function idValueAt(view, body, declared, at) {
   // A quoted literal keeps its opening quote in the view; the value is under the marks after it.
@@ -3479,6 +3504,7 @@ function loadWrapMarkerNear(view, body, at) {
 function loadCalls(body) {
   const view = codeViewOf(body)
   const declared = literalDeclarations(view, body)
+  const objects = objectDeclarations(view)
   const calls = []
   const seen = new Set()
   const add = (at, id) => {
@@ -3497,12 +3523,20 @@ function loadCalls(body) {
       continue
     }
     // `load(helper({ id: … }))`: the argument is a call and the object is its first argument.
+    // `load(REGISTRATION)`: the argument is a name the body gave an object literal, so the object
+    // itself is the argument and the id is read from it.
     if (isNameStart(view.charCodeAt(at)) === false) continue
     let end = at
     while (end < view.length && isNameUnit(view.charCodeAt(end))) end += 1
     let open = end
     while (open < view.length && /\s/u.test(view[open])) open += 1
-    if (view[open] !== '(') continue
+    if (view[open] !== '(') {
+      const opened = objectBefore(objects, view.slice(at, end), site.index)
+      if (opened === null) continue
+      const named = idInArgumentObject(view, body, declared, opened)
+      if (named !== null) add(site.index, named)
+      continue
+    }
     let inner = open + 1
     while (inner < view.length && /\s/u.test(view[inner])) inner += 1
     if (view[inner] !== '{') continue

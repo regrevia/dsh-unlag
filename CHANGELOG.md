@@ -1,5 +1,10 @@
 ## Unreleased
 
+## 1.17.9
+
+- 插件把注册对象放进变量再交给加载器时（`const REGISTRATION = { id: PACKAGE_ID, factory(){} }; load(REGISTRATION)`），启动预检读不出 id，刷新被永久拦下，详情只有 `does not register dsh-plugin-update-entry`（#18，来自 @lakejason0 的报告）。识别只覆盖了「字面量、字符串常量名、helper 包一层、load-wrap 旁边的对象字面量」，参数是裸变量名时直接跳过；和别的插件拼在同一个 classic script 里时，连「登记名由变量提供」那句提示都不会出现。
+- 现在会回头找这个变量在调用点之前被赋过的对象字面量，交给读 `id` 的同一段逻辑。读不出仍然是拒绝：变量在调用之后才赋、对象里没有 `id`、对象里的 id 是别的插件，三种情况都照旧拦下，没有放宽。
+
 ## 1.17.8
 
 - 用内网域名或反向代理访问时刷新按钮一律被拒，日志只有一行 `refused a press from dsh.lan`（#17，来自 @surfishs 的报告）。地址闸门的白名单是写死的回环、私网段和 `.local`，`dsh.lan` 不在里面，于是每个按下都被判成外来页面；页面那边只收到 403，按下去就是没反应，屏幕上没有任何解释。

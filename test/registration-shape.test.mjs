@@ -138,3 +138,50 @@ const rowFor = (id) => `/plugins/??${id}/client.js&rev=test`
   assert.equal(verdict.status, 'ok', JSON.stringify(verdict))
   console.log('PASS  a local alias of the loader global registers like the global')
 }
+{
+  // dsh-plugin-update-entry 1.0.3 hands the loader a name bound to the object, not an inline one:
+  // `const REGISTRATION = { id: PACKAGE_ID, factory }` then `load(REGISTRATION)`.
+  const body = "const PACKAGE_ID = 'dsh-via-object';\nconst REGISTRATION = { id: PACKAGE_ID, factory () { return {} } };\nwindow.__ModuleLoader__.load(REGISTRATION);"
+  const verdict = await verifyStartupRows(graphFor('dsh-via-object'), answerWith(body), [rowFor('dsh-via-object')])
+  assert.equal(verdict.status, 'ok', JSON.stringify(verdict))
+  console.log('PASS  a name bound to an argument object is registered with the id that object names')
+}
+{
+  const body = "const REGISTRATION = { id: 'dsh-via-object-literal', factory: () => ({}) };\nwindow.__ModuleLoader__.load(REGISTRATION);"
+  const verdict = await verifyStartupRows(graphFor('dsh-via-object-literal'), answerWith(body), [rowFor('dsh-via-object-literal')])
+  assert.equal(verdict.status, 'ok', JSON.stringify(verdict))
+  console.log('PASS  a name bound to a literal-id object is registered too')
+}
+{
+  // The object the name holds names another id: nothing is registered for this row.
+  const body = "const REGISTRATION = { id: 'dsh-other', factory: () => ({}) };\nwindow.__ModuleLoader__.load(REGISTRATION);"
+  const verdict = await verifyStartupRows(graphFor('dsh-via-object-miss'), answerWith(body), [rowFor('dsh-via-object-miss')])
+  assert.equal(verdict.status, 'blocked', JSON.stringify(verdict))
+  assert.equal(verdict.reason, 'register')
+  console.log('PASS  a name bound to another id does not register the row')
+}
+{
+  // An object with no id is still no registration: reading a variable must not become a yes.
+  const body = "const REGISTRATION = { factory: () => ({}) };\nwindow.__ModuleLoader__.load(REGISTRATION);"
+  const verdict = await verifyStartupRows(graphFor('dsh-via-object-noid'), answerWith(body), [rowFor('dsh-via-object-noid')])
+  assert.equal(verdict.status, 'blocked', JSON.stringify(verdict))
+  assert.equal(verdict.reason, 'register')
+  console.log('PASS  a name bound to an object with no id still registers nothing')
+}
+{
+  // A name bound to an object literal only after the call is not a value yet.
+  const body = "window.__ModuleLoader__.load(REGISTRATION);\nconst REGISTRATION = { id: 'dsh-object-late', factory: () => ({}) };"
+  const verdict = await verifyStartupRows(graphFor('dsh-object-late'), answerWith(body), [rowFor('dsh-object-late')])
+  assert.equal(verdict.status, 'blocked', JSON.stringify(verdict))
+  assert.equal(verdict.reason, 'register')
+  console.log('PASS  an object given to the name after the call registers nothing')
+}
+{
+  // The real batch shape: the registration uses a name, other plugins in the same script use
+  // literals, so the refusal has to be the plain one and there is no such refusal now.
+  const body = "const REGISTRATION = { id: 'dsh-batch-a', factory: () => ({}) };\nwindow.__ModuleLoader__.load(REGISTRATION);\nwindow.__ModuleLoader__.load({ id: 'dsh-batch-b', factory: () => ({}) });"
+  const graph = { rev: 'test', entries: [{ id: 'dsh-batch-a', rev: 'test' }, { id: 'dsh-batch-b', rev: 'test' }], batches: [] }
+  const verdict = await verifyStartupRows(graph, answerWith(body), [rowFor('dsh-batch-a'), rowFor('dsh-batch-b')])
+  assert.equal(verdict.status, 'ok', JSON.stringify(verdict))
+  console.log('PASS  a batch mixing a named object and a literal reads both ids')
+}
