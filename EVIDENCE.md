@@ -1,6 +1,6 @@
 # 凭什么信这个插件
 
-每一类说法都跟着能自己重跑的证据：先看哪条测试、再看运行中的 App 上哪个输出。运行中的证据用 `npm run live-smoke` 拿，它不按按钮，也从不换代码。
+每一类说法都跟着能自己重跑的证据：先看哪条测试、再看运行中的 App 上哪个输出。运行中的证据用 `npm run smoke` 拿，它不按按钮，也从不换代码。
 
 ## 按下去真的会生效
 
@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 一次按下只请求一次重建，连按只算一次 | `press.test.mjs`（99）、`reload-answer.test.mjs`（26） | `pressPath.ready` 为 `true` 表示此刻放行 |
 | 重建后新文档能起来：清单里每个脚本都能加载、每个插件都注册 | `bundle-shim.test.mjs`（76）、`host-verify.test.mjs`（45） | `verify.sound=ok`、`rehearsal.ok=true` |
-| 预构建产物把 load 调用包起来、写在注释里、或把 loader 存进局部别名时，都读得出它注册的名字，不再误判「这份产物没有注册」 | `registration-shape.test.mjs`（14） | 真包走 `verifyStartupRows`：`dsh-cost-meter@1.9.51`（读 `load-wrap` 钩子）、`dsh-ppt@0.20.5`（自家 `__stardustUpdatesWrap` 包实参）、`dsh-opencode-ip-guard@0.2.0`（注释里写出调用、真调用在 4.7KB 之后）都答 `ok`；最后这个在 1.17.4 上答 `blocked/register`。注释里的写法、只有注释、字符串拼出的调用、远离标记的字面量、指向别的插件的 id，都仍 `blocked/register` |
+| 预构建产物把 load 调用包起来、写在注释里、把 loader 存进局部别名、或把注册对象放进变量再交给加载器时，都读得出它注册的名字，不再误判「这份产物没有注册」 | `registration-shape.test.mjs`（20） | 真包走 `verifyStartupRows`：`dsh-cost-meter@1.9.51`（读 `load-wrap` 钩子）、`dsh-ppt@0.20.5`（自家 `__stardustUpdatesWrap` 包实参）、`dsh-opencode-ip-guard@0.2.0`（注释里写出调用、真调用在 4.7KB 之后）都答 `ok`；最后这个在 1.17.4 上答 `blocked/register`。注释里的写法、只有注释、字符串拼出的调用、远离标记的字面量、指向别的插件的 id、变量在调用之后才拿到对象、对象里没有 id，都仍 `blocked/register` |
 | 坏清单会被拒，不会带着坏字节去开新文档 | `host-verify.test.mjs`（45）、`verify-deadline.test.mjs`（7）、`url-fuzz.test.mjs`（5） | `verify.broken=blocked`、`verify.refuses=true` |
 | 冻结清单里的旧 revision 仍然拿得到现在的字节 | `bundle-shim.test.mjs`（76） | `shim.staleRev` 为 200 且字节数 > 0 |
 | 按钮不会装作在工作：挡住时提示写的是真实原因 | `reason-copy.test.mjs`（6）、`copy.test.mjs`（8）、`client-guard.test.mjs`（123） | 每次拦下都在日志里留一行，带原因与地址 |
@@ -38,13 +38,15 @@
 ## 证据怎么重跑
 
 ```sh
-npm test                     # 69 个文件、1554 项，全绿才算数
+npm test                     # 69 个文件、1560 项，全绿才算数
 npm run audit                # 静态检查
-npm run live-smoke           # 对着运行中的 App 复核；输出里 verdict 为 true 才算数
+npm run smoke           # 对着运行中的 App 复核；输出里 verdict 为 true 才算数
 ./scripts/release.sh         # 发布并回查 registry 是否真的列出这个版本
 ```
 
-发布物本身也核对过：`dsh-unlag-1.17.8.tgz`（122,352 字节）里的 `index.js` 与仓库同文件 sha256 相同（`ed681485…`）、`client.js` 相同（`202c941e…`），包里没有 `test/`；registry 版本地址 HTTP 200、`dist-tags.latest` 为 `1.17.8`，`gitHead` 为 `4b76f52d`。
+发布物本身也核对过：`dsh-unlag-1.17.10.tgz`（122,649 字节）里的 `index.js` 与仓库同文件 sha256 相同（`ac950fcc…`）、`client.js` 相同（`202c941e…`），解开后 `node --check` 通过，包里没有 `test/`；registry 版本地址 HTTP 200、`dist-tags.latest` 为 `1.17.10`，`gitHead` 为 `bab04ef6`。
+
+发布物不再只凭 `npm pack` 的清单：`scripts/release.sh` 打包后解开、逐文件 `cmp` 与 `node --check`，对不上就在发布前停下。这条是 1.17.9 教的——那个包里的 `index.js` 有一行被写坏（`units[at] = LITERAL_UNIT` 成了 `unit== 47) {LITERAL_UNIT`），装上就报语法错，所以 1.17.9 已在 registry 上标为弃用，由 1.17.10 顶替。
 
 演练输出里的每一项含义见 README「改完后让运行中的 App 用上」。
 
