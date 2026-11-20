@@ -1,5 +1,9 @@
 ## Unreleased
 
+## 1.17.10
+
+- 1.17.9 的发布物里有一行被写坏（`units[at] = LITERAL_UNIT` 变成 `unit== 47) {LITERAL_UNIT`），`node --check` 直接报语法错，装上去加载不了。内容和 1.17.9 相同，重新打一次包发布；1.17.9 已在 registry 上标记为不可用。发版脚本现在会先解开刚打好的包再跑一次语法检查，包里的文件和仓库不一致就停在这一步。
+
 ## 1.17.9
 
 - 插件把注册对象放进变量再交给加载器时（`const REGISTRATION = { id: PACKAGE_ID, factory(){} }; load(REGISTRATION)`），启动预检读不出 id，刷新被永久拦下，详情只有 `does not register dsh-plugin-update-entry`（#18，来自 @lakejason0 的报告）。识别只覆盖了「字面量、字符串常量名、helper 包一层、load-wrap 旁边的对象字面量」，参数是裸变量名时直接跳过；和别的插件拼在同一个 classic script 里时，连「登记名由变量提供」那句提示都不会出现。

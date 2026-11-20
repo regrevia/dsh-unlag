@@ -10,6 +10,19 @@ config=$(mktemp)
 trap 'rm -f "$config"' EXIT
 printf '//registry.npmjs.org/:_authToken=%s\n' "$token" > "$config"
 chmod 600 "$config"
+# What npm builds is what ships, so build it once here and read it back: a tarball whose content
+# does not match the tree, or a file that does not even parse, is a publish that has to stop now.
+packdir=$(mktemp -d)
+trap 'rm -rf "$packdir"; rm -f "$config"' EXIT
+npm pack --pack-destination "$packdir" > /dev/null || { echo "npm pack failed" >&2; exit 1; }
+tar -xzf "$packdir"/*.tgz -C "$packdir" || { echo "the packed tarball does not open" >&2; exit 1; }
+for file in index.js client.js scripts/live-smoke.mjs; do
+  [ -f "$file" ] || continue
+  cmp -s "$file" "$packdir/package/$file" || { echo "the packed $file differs from the tree" >&2; exit 1; }
+  case "$file" in
+    *.js|*.mjs) node --check "$packdir/package/$file" || { echo "the packed $file does not parse" >&2; exit 1; } ;;
+  esac
+done
 if ! npm publish --userconfig "$config" --access public > /tmp/dsh-unlag-publish.log 2>&1; then
   # A publish that was interrupted mid-flight leaves the version staged: npm then refuses the same
   # number twice, while the version document may already answer. Both cases mean "go and look",
