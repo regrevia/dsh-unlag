@@ -1,4 +1,4 @@
-import { verifyStartup } from '../index.js'
+import { startupCheckLimits, verifyStartup } from '../index.js'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -172,6 +172,47 @@ const huge = table({ body: registered('@local/a') + '\n/*' + 'x'.repeat(25 * 102
 const tooBig = await verifyStartup(huge, [frozenRow])
 check('an oversized startup script refuses instead of being compiled', tooBig.status === 'blocked' && tooBig.reason === 'size', JSON.stringify(tooBig))
 check('the refusal says how much it read', /bytes/.test(String(tooBig.detail)), String(tooBig.detail))
+
+// A web profile serves its whole plugin set as one bundle per boot batch, so one address carries
+// every plugin installed: one such bundle measured 36.8 MB against the 24 MB bound and the check
+// refused it as if it were an attack, which left that page unrebuildable however often the button
+// was pressed. The bound is read from the addresses the list names, so the page gets its press while
+// an address naming one plugin is still bound by the size a desktop profile serves.
+const webIds = Array.from({ length: 5 }, (_, at) => `@local/web-${String(at)}`)
+const webUrl = (rev) => `/plugins/??${webIds.map((id) => `${id}/client.js`).join(',')}&rev=${rev}`
+const webLive = {
+  rev: 'new',
+  entries: webIds.map((id) => ({ id, rev: 'new', url: webUrl('new') })),
+  batches: [{ url: webUrl('new'), entries: webIds, rev: 'new' }],
+}
+const profileSized = webIds.map((id) => registered(id)).join('\n') + '\n/*' + 'x'.repeat(37 * 1024 * 1024) + '*/'
+const web = table({ body: profileSized, liveGraph: webLive })
+const webAnswer = await verifyStartup(web, [webUrl('old')])
+check('a bundle carrying a whole web profile verifies', webAnswer.status === 'ok', JSON.stringify(webAnswer).slice(0, 200))
+
+// The same bytes under an address that names one plugin are still refused: widening is read from what
+// the list says it carries, not granted to every request.
+const oneSized = table({ body: registered('@local/a') + '\n/*' + 'x'.repeat(37 * 1024 * 1024) + '*/' })
+const singleSized = await verifyStartup(oneSized, [frozenRow])
+check('an address naming one plugin is still bound by the shipped size', singleSized.status === 'blocked' && singleSized.reason === 'size', JSON.stringify(singleSized).slice(0, 200))
+
+// What the bound is for one list is answered without reading anything: a shipped floor for ordinary
+// rows, the same floor plus room for each extra plugin a bundle carries.
+check('the shipped floor is kept for an address naming one plugin', startupCheckLimits([frozenRow]).maxScriptBytes === 24 * 1024 * 1024, String(startupCheckLimits([frozenRow]).maxScriptBytes))
+check('an address naming five plugins is allowed the bytes those five carry', startupCheckLimits([webUrl('old')]).maxScriptBytes === 24 * 1024 * 1024 + 4 * 8 * 1024 * 1024, String(startupCheckLimits([webUrl('old')]).maxScriptBytes))
+check('a list of ordinary rows keeps the shipped floor too', startupCheckLimits([frozenRow, '/plugins/??@local/b/client.js&rev=old']).maxScriptBytes === 24 * 1024 * 1024, String(startupCheckLimits([frozenRow, '/plugins/??@local/b/client.js&rev=old']).maxScriptBytes))
+
+// A profile that still serves more than the ceiling allows can say so, and a setting that makes no
+// sense is ignored rather than trusted: the refusal is the same either way.
+process.env.DSH_UNLAG_MAX_SCRIPT_MB = '1'
+check('a profile setting may lower the ceiling', startupCheckLimits([webUrl('old')]).maxScriptBytes === 24 * 1024 * 1024, String(startupCheckLimits([webUrl('old')]).maxScriptBytes))
+const lowered = await verifyStartup(web, [webUrl('old')])
+check('and a body past that ceiling is refused', lowered.status === 'blocked' && lowered.reason === 'size', JSON.stringify(lowered).slice(0, 200))
+process.env.DSH_UNLAG_MAX_SCRIPT_MB = 'not-a-number'
+check('a setting that is not a size falls back to the shipped ceiling', startupCheckLimits([webUrl('old')]).maxScriptBytes === 24 * 1024 * 1024 + 4 * 8 * 1024 * 1024, String(startupCheckLimits([webUrl('old')]).maxScriptBytes))
+process.env.DSH_UNLAG_MAX_SCRIPT_MB = '0'
+check('a setting of zero falls back too', startupCheckLimits([webUrl('old')]).maxScriptBytes === 24 * 1024 * 1024 + 4 * 8 * 1024 * 1024, String(startupCheckLimits([webUrl('old')]).maxScriptBytes))
+delete process.env.DSH_UNLAG_MAX_SCRIPT_MB
 
 // The fast path can fail on its own (a table that throws while answering the mapped address); the
 // check must fall back to the app's own route rather than refuse, and the failure must be evidence.

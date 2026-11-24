@@ -195,6 +195,13 @@ window.__ModuleLoader__.load({
      * instead of holding the button until the page is reloaded by hand.
      */
     const HOST_TIMEOUT_MS = 12000; // ui-copy-ignore
+    /**
+     * How long the startup verdict may take when the list names a bundle carrying a whole profile.
+     * One such body costs a web profile about 13 seconds cold, and the bound above would end that
+     * press before the app could answer it, telling the person a script could not be read when it
+     * was only still being read. The whole press stays inside its own bound.
+     */
+    const VERIFY_BIG_MS = 26000; // ui-copy-ignore
     /** How long one switch save may take before the page stops believing it will land. */
     const SWITCH_SAVE_MS = 4000; // ui-copy-ignore
     /**
@@ -467,6 +474,10 @@ window.__ModuleLoader__.load({
      * @returns 'ok' | 'blocked'
      */
     async function hostVerifyStartup(scripts) {
+      // A list whose addresses each name one plugin is read as fast as any other; one that names a
+      // whole bundle per address is given the longer bound the app works that size under.
+      const big = Array.isArray(scripts) && scripts.some((row) => typeof row === 'string' && bundledIds(row).length > 1);
+      const wait = big ? VERIFY_BIG_MS : HOST_TIMEOUT_MS;
       let response;
       try {
         response = await withTimeout(fetch(`${HOST_BASE}/verify`, {
@@ -474,7 +485,7 @@ window.__ModuleLoader__.load({
           credentials: 'same-origin',
           headers: { 'content-type': 'application/json', 'x-dsh-unlag': '1' }, // ui-copy-ignore
           body: JSON.stringify({ rows: scripts }), // ui-copy-ignore
-        }));
+        }), wait);
       } catch {
         held('verify');
         return 'blocked';
@@ -493,7 +504,7 @@ window.__ModuleLoader__.load({
       }
       let data = null;
       try {
-        data = await withTimeout(response.json());
+        data = await withTimeout(response.json(), wait);
       } catch {
         data = null;
       }

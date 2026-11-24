@@ -137,12 +137,32 @@ const MAX_STARTUP_ROW_CHARS = 8192
  * a few bundles, and those grow with every installed plugin: one profile's largest bundle measured
  * 8.7 MB, which a smaller bound refused as if it were an attack and left the page unrebuildable.
  * Compiling a body costs several times its size in memory before it is thrown away, and up to three
- * checks may run at once, so the bound is set close to what a profile actually serves: this one
- * measured 15.7 MB across three bundles, its largest 9.2 MB. A body past 24 MB is not a profile
- * this app ships with, and reading one would let a request make the process that owns every running
- * turn hold text no page boots from.
+ * checks may run at once, so the bound is set close to what a desktop profile actually serves: this
+ * one measured 15.7 MB across three bundles, its largest 9.2 MB. It is the floor for every check and
+ * the bound for a list of ordinary rows; a web profile, which serves its whole plugin set as one
+ * script, is allowed more per bundled id — see `SCRIPT_BYTES_PER_BUNDLED_ID` and the ceiling below.
  */
 const MAX_SCRIPT_BYTES = 24 * 1024 * 1024
+/**
+ * How much larger one script may be for each plugin its address carries. A web profile serves its
+ * whole plugin set as one bundle per boot batch: one bundle then carries every installed plugin, so
+ * its size grows with the profile, not with one plugin. A profile with a hundred plugins and a large
+ * client half measured 36.8 MB in a single script and was refused here as if it were an attack,
+ * which left its page unrebuildable no matter how many times the button was pressed. The bound is
+ * therefore read from the address the check is about to load: a bundle naming several plugins may
+ * carry proportionally more, up to the ceiling below.
+ */
+const SCRIPT_BYTES_PER_BUNDLED_ID = 8 * 1024 * 1024
+/**
+ * The largest one script may ever be, whatever its address names. Widening per parsed id would let a
+ * made-up address naming `MAX_BUNDLE_IDS` ids ask for a gigabyte; this is the absolute stop, and it
+ * is a size a real web profile can reach (36.8 MB measured) without being a size a request can use to
+ * make this process hold text no page boots from. `DSH_UNLAG_MAX_SCRIPT_MB` may lower or raise it for
+ * one profile, inside the hard bound below.
+ */
+const MAX_SCRIPT_BYTES_CEILING = 64 * 1024 * 1024
+/** The same ceiling's own stop: no profile setting may let one request make this read a body this big. */
+const MAX_SCRIPT_BYTES_HARD = 256 * 1024 * 1024
 /** Chunks one check reads after their main scripts: a list's later files, not its whole tree. */
 const MAX_CHUNK_READS = 24
 /**
@@ -188,6 +208,40 @@ function answerBudgetMs() {
  * page gives up waiting, and the person would see a button that did nothing.
  */
 const MAX_VERIFY_MS = 9000
+/**
+ * How long one check may spend when it is reading a bundle the size of a whole profile. The bound
+ * above is a bound on a list of ordinary scripts; one 36.8 MB body costs a web profile about 13
+ * seconds cold, and refusing it as slow would hold a press the same way the size bound did. This is
+ * the default for a list whose addresses name more than one plugin, and `DSH_UNLAG_VERIFY_MS` may
+ * set it for one profile — never past the point where the page pressing the button has given up.
+ */
+const MAX_VERIFY_BIG_MS = 24_000
+/** The largest budget a profile setting may ask for: the page stops waiting for this answer past it. */
+const MAX_VERIFY_HARD_MS = 28_000
+
+/**
+ * The per-script bound for one check, read from what its addresses name. The shipped bound is the
+ * floor, the ceiling is the stop, and the setting exists so a profile that grew past the ceiling can
+ * say so instead of editing this file.
+ */
+function scriptBytesCeiling() {
+  const set = Number(process.env.DSH_UNLAG_MAX_SCRIPT_MB ?? '')
+  if (!Number.isFinite(set) || set <= 0) return MAX_SCRIPT_BYTES_CEILING
+  return Math.min(Math.floor(set * 1024 * 1024), MAX_SCRIPT_BYTES_HARD)
+}
+/** The same for a list of addresses: the widest address decides, because one body is read at a time. */
+function scriptBytesFor(named, base) {
+  const count = Number.isFinite(named) && named > 1 ? Math.floor(named) : 1
+  const grown = base + (count - 1) * SCRIPT_BYTES_PER_BUNDLED_ID
+  return Math.min(Math.max(base, grown), Math.max(base, scriptBytesCeiling()))
+}
+/** The time bound for a list that may carry a whole profile in one body. */
+function verifyBudgetFor(big) {
+  const set = Number(process.env.DSH_UNLAG_VERIFY_MS ?? '')
+  const shipped = big === true ? MAX_VERIFY_BIG_MS : MAX_VERIFY_MS
+  if (!Number.isFinite(set) || set <= 0) return shipped
+  return Math.min(Math.max(set, MAX_VERIFY_MS), MAX_VERIFY_HARD_MS)
+}
 const MIN_INTERVAL_MS = 1500
 /**
  * How long the page is given to say what it did with a press this side has already answered. The
@@ -4129,6 +4183,37 @@ function mixesGenerations(mainRev, chunkRev, mainStale) {
   return mainRev !== chunkRev
 }
 
+/**
+ * How many plugin ids the widest row of a startup list names. One address naming one plugin carries
+ * that plugin's bytes; the web profile serves its whole set as one address per boot batch, and that
+ * address grows with every plugin installed. The per-script bound is read from this number, so a list
+ * of ordinary rows keeps the shipped bound while a list that names a whole profile is allowed the
+ * bytes it actually has.
+ */
+function widestRowIds(rows) {
+  let widest = 0
+  for (const row of Array.isArray(rows) ? rows.slice(0, MAX_STARTUP_ROWS) : []) {
+    if (typeof row !== 'string' || row === '') continue
+    const path = row.includes('://') ? row.replace(/^[a-z]+:\/\/[^/]+/iu, '') : row
+    const url = path.startsWith('/') ? path : `/${path.replace(/^\.?\//u, '')}`
+    const request = bundleRequest(url)
+    const named = request === null ? 0 : request.ids.length
+    if (named > widest) widest = named
+  }
+  return widest
+}
+
+/**
+ * The bounds one startup check runs under. The shipped bound is the floor and the settings can only
+ * widen it: a profile whose bundle grew past it gets the press it deserves, while a list of ordinary
+ * rows is still checked exactly as before. An address naming no plugin at all is one script, not a
+ * list, so it keeps the shipped bound.
+ */
+export function startupCheckLimits(rows) {
+  const named = widestRowIds(rows)
+  return { maxScriptBytes: scriptBytesFor(named, MAX_SCRIPT_BYTES), maxTotalBytes: MAX_TOTAL_SCRIPT_BYTES }
+}
+
 /** Ask the same question of the plugin table the plugin itself talks to. */
 export async function verifyStartup(clientModules, rows) {
   let graph = null
@@ -4138,7 +4223,17 @@ export async function verifyStartup(clientModules, rows) {
     return { status: 'blocked', reason: 'list', detail: String(error?.message ?? error) }
   }
   const read = (url) => readStartupScript(clientModules, url)
-  const answer = await verifyStartupRows(graph, read, rows, MAX_VERIFY_MS, null, read)
+  /**
+   * The bounds this check runs under are read from the list it is about to read. A web profile serves
+   * its whole plugin set as one script per boot batch, so a profile with many plugins reaches a size
+   * the shipped bound refused — as if it were an attack — and left that page unrebuildable however
+   * often the button was pressed. The shipped bound stays the floor for an ordinary list, the list's
+   * own width widens it, and the time bound follows the same shape because a body that size costs
+   * more than a list of small scripts.
+   */
+  const limits = startupCheckLimits(rows)
+  const budget = verifyBudgetFor(limits.maxScriptBytes > MAX_SCRIPT_BYTES)
+  const answer = await verifyStartupRows(graph, read, rows, budget, limits, read)
   /**
    * The update installs a new graph object and never mutates the old one, so a replacement during
    * the read cannot be seen on the object the check started with; it is found by asking the table
