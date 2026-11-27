@@ -811,7 +811,7 @@ window.__ModuleLoader__.load({
      */
     async function settledOperation(id, requestId = null) {
       if (typeof id !== 'number' && typeof requestId !== 'string') return null;
-      // 29.4s of polling plus one 12s host read still fits the 45s press deadline.
+      // 29.4s of polling plus one 12s host read still fits the 45s press deadline. // ui-copy-ignore
       for (const wait of [500, 1200, 2500, ...Array(18).fill(1400)]) { // ui-copy-ignore
         await new Promise((resolve) => setTimeout(resolve, wait));
         try {
